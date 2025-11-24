@@ -109,7 +109,7 @@ const DeclassementPage = () => {
 
     try {
       const pdf = await buildPdf(pdfInput);
-      const blobUrl = pdf.doc.output('bloburl');
+      const blobUrl = String(pdf.doc.output('bloburl'));
       window.open(blobUrl, '_blank');
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     } catch (error) {
