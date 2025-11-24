@@ -1543,3 +1543,106 @@ button {
   gap: 12px;
   flex-wrap: wrap;
 }
+
+@media (max-width: 1024px) {
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+    padding: 16px 20px;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.22);
+    border-bottom-left-radius: 20px;
+    border-bottom-right-radius: 20px;
+  }
+
+  .sidebar-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .main-content {
+    padding: 24px 20px 40px;
+  }
+}
+
+@media (max-width: 768px) {
+  .sidebar-nav,
+  .sidebar-user-block,
+  .sidebar-footer {
+    display: none;
+  }
+
+  .sidebar.open .sidebar-nav,
+  .sidebar.open .sidebar-user-block,
+  .sidebar.open .sidebar-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 16px;
+  }
+
+  .sidebar.open .sidebar-nav {
+    gap: 6px;
+  }
+
+  .main-content {
+    padding: 20px 16px 36px;
+  }
+
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .page-title {
+    font-size: 1.45rem;
+  }
+
+  .page-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .page-actions .btn {
+    flex: 1;
+    min-width: 140px;
+  }
+}
+
+@media (max-width: 480px) {
+  .sidebar {
+    padding: 14px 16px;
+  }
+
+  .sidebar-brand {
+    font-size: 1rem;
+  }
+
+  .sidebar-user-block {
+    padding: 12px;
+  }
+
+  .btn {
+    font-size: 0.95rem;
+  }
+
+  .page-header p {
+    font-size: 0.9rem;
+  }
+
+  .card,
+  .destruction-card {
+    padding: 18px;
+  }
+
+  .employees-grid {
+    grid-template-columns: 1fr;
+  }
+}
