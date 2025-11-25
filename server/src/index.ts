@@ -1335,6 +1335,14 @@ type InventoryEmailPayload = {
   excelFilename?: string;
 };
 
+type ExpeditionEmailPayload = {
+  dateRange: string;
+  weekStart: string;
+  data: Record<string, Record<string, Array<{ qty: string; note: string }>>>;
+  pdfBase64: string;
+  pdfFilename: string;
+};
+
 type VacationNotificationPayload = {
   leaveIds: string[];
   canton: string;
@@ -1496,6 +1504,48 @@ app.post(
       subject: `Inventaire halle - ${dateLabel || 'Nouveau relevé'}`,
       text: textBody,
       attachments
+    });
+
+    res.json({ message: 'Email envoyé' });
+  })
+);
+
+app.post(
+  '/api/expeditions/send',
+  asyncHandler(async (req, res) => {
+    const { dateRange, pdfBase64, pdfFilename } = req.body as ExpeditionEmailPayload;
+
+    if (!pdfBase64) {
+      return res.status(400).json({ message: 'PDF manquant' });
+    }
+
+    const recipients =
+      (process.env.DECLASSEMENT_RECIPIENTS || process.env.BREVO_SENDER_EMAIL || '')
+        .split(',')
+        .map((email) => email.trim())
+        .filter(Boolean);
+    if (!recipients.length) {
+      return res.status(500).json({ message: 'Aucun destinataire configuré' });
+    }
+
+    const textBody = [
+      `Planification des expéditions générée le : ${new Date().toLocaleString('fr-CH')}`,
+      `Période : ${dateRange || '—'}`,
+      '',
+      'Le planning PDF est joint à cet e-mail.'
+    ].join('\n');
+
+    await sendBrevoEmail({
+      to: recipients,
+      subject: `Expéditions - ${dateRange || 'Nouveau planning'}`,
+      text: textBody,
+      attachments: [
+        {
+          name: pdfFilename || `expeditions_${Date.now()}.pdf`,
+          content: pdfBase64,
+          type: 'application/pdf'
+        }
+      ]
     });
 
     res.json({ message: 'Email envoyé' });

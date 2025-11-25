@@ -105,12 +105,13 @@ const EmployeesPage = () => {
     if (isAdmin) {
       return employees;
     }
-    const department = employees.find((emp) => emp.email?.toLowerCase() === user?.email?.toLowerCase())?.department;
-    if (!department) {
-      return employees;
+    // Managers see only their department
+    const managerDepartment = user?.department;
+    if (!managerDepartment) {
+      return [];
     }
-    return employees.filter((employee) => employee.department === department);
-  }, [employees, isAdmin, user?.email]);
+    return employees.filter((employee) => employee.department === managerDepartment);
+  }, [employees, isAdmin, user?.department]);
 
   const loadEmployees = async () => {
     setLoading(true);

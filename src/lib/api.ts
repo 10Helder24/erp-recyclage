@@ -271,5 +271,16 @@ export const Api = {
     request<{ message: string }>('/inventory/send', {
       method: 'POST',
       body: JSON.stringify(payload)
+    }),
+  sendExpedition: (payload: {
+    dateRange: string;
+    weekStart: string;
+    data: Record<string, Record<string, Array<{ qty: string; note: string }>>>;
+    pdfBase64: string;
+    pdfFilename: string;
+  }) =>
+    request<{ message: string }>('/expeditions/send', {
+      method: 'POST',
+      body: JSON.stringify(payload)
     })
 };

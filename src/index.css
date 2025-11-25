@@ -624,6 +624,12 @@ button {
   padding-top: 4px;
 }
 
+.expedition-label-input {
+  width: 100%;
+  font-weight: 600;
+  text-transform: none;
+}
+
 .expedition-cell {
   display: flex;
   flex-direction: column;
