@@ -145,9 +145,9 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     [employees, user?.email]
   );
   const departmentScope = useMemo(() => {
-    if (isManager) return null;
+    if (isAdmin) return null;
     return currentEmployee?.department ?? null;
-  }, [isManager, currentEmployee]);
+  }, [isAdmin, currentEmployee]);
   const scopedEmployees = useMemo(() => {
     if (!departmentScope) {
       return employees;
@@ -189,8 +189,8 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     [employees]
   );
 
-  const effectiveDepartmentFilter = isManager ? departmentFilter : departmentScope ?? 'all';
-  const effectiveManagerFilter = isManager ? managerFilter : currentEmployee?.manager_name ?? 'all';
+  const effectiveDepartmentFilter = isAdmin ? departmentFilter : departmentScope ?? 'all';
+  const effectiveManagerFilter = isAdmin ? managerFilter : currentEmployee?.manager_name ?? 'all';
 
   const matchesFilters = useCallback(
     (leave: Leave) => {
@@ -345,11 +345,11 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
   }, [currentEmployee, isManager]);
 
   useEffect(() => {
-    if (!isManager) {
+    if (!isAdmin) {
       setDepartmentFilter(departmentScope ?? 'all');
       setManagerFilter(currentEmployee?.manager_name ?? 'all');
     }
-  }, [departmentScope, currentEmployee?.manager_name, isManager]);
+  }, [departmentScope, currentEmployee?.manager_name, isAdmin]);
 
   const openSignModal = (leave: Leave) => {
     setSelectedLeave(leave);
