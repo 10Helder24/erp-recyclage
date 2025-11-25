@@ -4,6 +4,7 @@ import { Camera, Plus, Trash2, FileText, X, Pencil, Image as ImageIcon, Send, Do
 import SignatureCanvas from 'react-signature-canvas';
 import toast from 'react-hot-toast';
 import { Api } from '../lib/api';
+import { openPdfPreview } from '../utils/pdfPreview';
 
 const LOGO_URL = '/logo-retripa.png';
 const SGS_URL = '/sgs.png';
@@ -316,9 +317,7 @@ const DestructionMatieres: React.FC = () => {
 
     try {
       const pdf = await buildPDF();
-      const blobUrl = pdf.doc.output('bloburl') as unknown as string;
-      window.open(blobUrl, '_blank');
-      setTimeout(() => window.URL.revokeObjectURL(blobUrl), 60_000);
+      openPdfPreview({ doc: pdf.doc as unknown as jsPDF, filename: pdf.filename });
     } catch (error) {
       toast.error((error as Error).message || 'Impossible de générer le PDF');
     }
@@ -356,7 +355,7 @@ const DestructionMatieres: React.FC = () => {
       toast.success('✅ Email envoyé avec succès ! Le certificat PDF (incluant les photos) a été transmis aux destinataires.', {
         duration: 5000
       });
-      pdf.doc.save(pdf.filename);
+      (pdf.doc as unknown as jsPDF).save(pdf.filename);
     } catch (error) {
       toast.error((error as Error).message || 'Impossible d\'envoyer le certificat par email');
     } finally {

@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { Plus, Trash2, Upload, FileDown, Send } from 'lucide-react';
 
 import { Api } from '../lib/api';
+import { openPdfPreview } from '../utils/pdfPreview';
 
 type DeclassementEntry = {
   id: string;
@@ -109,9 +110,7 @@ const DeclassementPage = () => {
 
     try {
       const pdf = await buildPdf(pdfInput);
-      const blobUrl = String(pdf.doc.output('bloburl'));
-      window.open(blobUrl, '_blank');
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+      openPdfPreview(pdf);
     } catch (error) {
       toast.error((error as Error).message || 'Impossible de générer le PDF');
     }
