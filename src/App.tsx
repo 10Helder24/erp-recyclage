@@ -125,7 +125,7 @@ const App = () => {
       case 'destruction':
         return <DestructionPage />;
       case 'employees':
-        return <EmployeesPage />;
+        return hasRole('admin') || hasRole('manager') ? <EmployeesPage /> : <LeavePage initialTab="calendrier" />;
       case 'calendar':
         return <LeavePage initialTab="calendrier" />;
       case 'CDTSheets':

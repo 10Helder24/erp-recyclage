@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 
 import { Api } from '../lib/api';
 import type { Employee } from '../types/employees';
+import { useAuth } from '../hooks/useAuth';
 
 type EmployeeForm = {
   employee_code: string;
@@ -83,6 +84,9 @@ const EMPLOYMENT_STATUSES = ['Actif', 'En congé', 'Suspendu', 'Sorti'];
 const SITES = ['Crissier', 'Genève', 'Massongex', 'Monthey', 'Saillon', 'Vétroz', 'Féchy', 'Autre'];
 
 const EmployeesPage = () => {
+  const { user, hasRole } = useAuth();
+  const isAdmin = hasRole('admin');
+  const isManager = hasRole('manager') || isAdmin;
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -96,6 +100,17 @@ const EmployeesPage = () => {
   useEffect(() => {
     loadEmployees();
   }, []);
+
+  const scopedEmployees = useMemo(() => {
+    if (isAdmin) {
+      return employees;
+    }
+    const department = employees.find((emp) => emp.email?.toLowerCase() === user?.email?.toLowerCase())?.department;
+    if (!department) {
+      return employees;
+    }
+    return employees.filter((employee) => employee.department === department);
+  }, [employees, isAdmin, user?.email]);
 
   const loadEmployees = async () => {
     setLoading(true);
@@ -111,6 +126,7 @@ const EmployeesPage = () => {
   };
 
   const openAddModal = () => {
+    if (!isAdmin) return;
     setForm({
       ...DEFAULT_FORM,
       start_date: new Date().toISOString().split('T')[0]
@@ -120,6 +136,7 @@ const EmployeesPage = () => {
   };
 
   const openEditModal = (employee: Employee) => {
+    if (!isAdmin) return;
     setForm({
       employee_code: employee.employee_code ?? '',
       first_name: employee.first_name ?? '',
@@ -144,16 +161,16 @@ const EmployeesPage = () => {
       emergency_contact_phone: employee.emergency_contact_phone ?? '',
       notes: employee.notes ?? '',
       start_date: employee.start_date ?? '',
-    birth_date: employee.birth_date ?? '',
-    birth_location: employee.birth_location ?? '',
-    personal_email: employee.personal_email ?? '',
-    personal_phone: employee.personal_phone ?? '',
-    nationality: employee.nationality ?? '',
-    marital_status: employee.marital_status ?? '',
-    dependent_children: employee.dependent_children ?? '',
-    id_document_number: employee.id_document_number ?? '',
-    ahv_number: employee.ahv_number ?? '',
-    iban: employee.iban ?? ''
+      birth_date: employee.birth_date ?? '',
+      birth_location: employee.birth_location ?? '',
+      personal_email: employee.personal_email ?? '',
+      personal_phone: employee.personal_phone ?? '',
+      nationality: employee.nationality ?? '',
+      marital_status: employee.marital_status ?? '',
+      dependent_children: employee.dependent_children ?? '',
+      id_document_number: employee.id_document_number ?? '',
+      ahv_number: employee.ahv_number ?? '',
+      iban: employee.iban ?? ''
     });
     setEditingId(employee.id);
     setModalOpen(true);
@@ -350,9 +367,11 @@ const EmployeesPage = () => {
                     {expanded ? 'Masquer les détails' : 'Voir les détails'}
                   </button>
                 )}
-                <button className="btn btn-outline" onClick={() => openEditModal(employee)}>
-                  Modifier
-                </button>
+                {isAdmin && (
+                  <button className="btn btn-outline" onClick={() => openEditModal(employee)}>
+                    Modifier
+                  </button>
+                )}
               </div>
             </article>
             );
