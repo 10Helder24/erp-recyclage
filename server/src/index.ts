@@ -182,6 +182,13 @@ const PORT = Number(process.env.PORT) || 4000;
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 
+// Augmenter le timeout pour les requêtes longues (génération PDF avec images)
+app.use((req, res, next) => {
+  req.setTimeout(120000); // 2 minutes
+  res.setTimeout(120000);
+  next();
+});
+
 const hashPassword = (password: string) => bcrypt.hash(password, 10);
 const verifyPassword = (password: string, hash: string) => bcrypt.compare(password, hash);
 const normalizeEmail = (value: string) => value.trim().toLowerCase();

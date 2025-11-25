@@ -1645,4 +1645,135 @@ button {
   .employees-grid {
     grid-template-columns: 1fr;
   }
+
+  .destruction-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .declassement-row {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .declassement-row > div {
+    width: 100%;
+  }
+
+  .destruction-section__header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .page-actions {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .page-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .main-content {
+    padding: 16px 12px 32px;
+  }
+
+  .page-title {
+    font-size: 1.25rem;
+  }
+
+  .page-subtitle {
+    font-size: 0.85rem;
+  }
+
+  .eyebrow {
+    font-size: 0.65rem;
+  }
+
+  .card,
+  .destruction-card {
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  .destruction-field {
+    font-size: 0.9rem;
+  }
+
+  .destruction-input {
+    font-size: 0.95rem;
+    padding: 10px 14px;
+  }
+
+  .btn {
+    height: 40px;
+    font-size: 0.9rem;
+    padding: 0 16px;
+  }
+
+  .tab-nav {
+    gap: 4px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tab-nav button {
+    padding: 10px 14px;
+    font-size: 0.85rem;
+    white-space: nowrap;
+  }
+
+  .employees-grid {
+    gap: 16px;
+  }
+
+  .employee-card {
+    padding: 16px;
+  }
+
+  .employee-card__header {
+    gap: 12px;
+  }
+
+  .employee-card__header h2 {
+    font-size: 1.1rem;
+  }
+
+  .employee-info {
+    gap: 8px;
+  }
+
+  .employee-info__icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  .modal-panel {
+    width: calc(100vw - 24px);
+    max-width: none;
+    margin: 12px;
+    padding: 16px;
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+  }
+
+  .destruction-section {
+    margin-bottom: 20px;
+  }
+
+  .destruction-section h2 {
+    font-size: 1.1rem;
+  }
+
+  .upload-field {
+    padding: 16px;
+    font-size: 0.9rem;
+  }
+
+  .photo-list {
+    font-size: 0.85rem;
+  }
 }
