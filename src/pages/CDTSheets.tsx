@@ -4,6 +4,7 @@ import { jsPDF } from 'jspdf';
 import toast from 'react-hot-toast';
 
 import { Api } from '../lib/api';
+import { openPdfPreview } from '../utils/pdfPreview';
 
 interface SortingSheetProps {
   user: any;
@@ -166,9 +167,7 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
   const handlePreview = (data: Record<string, string>, dateLabel: string) => {
     try {
       const pdf = buildCDTPdf(data, dateLabel);
-      const blobUrl = pdf.doc.output('bloburl') as unknown as string;
-      window.open(blobUrl, '_blank');
-      setTimeout(() => window.URL.revokeObjectURL(blobUrl), 60_000);
+      openPdfPreview({ doc: pdf.doc as unknown as jsPDF, filename: pdf.filename });
     } catch (error) {
       toast.error((error as Error).message || 'Impossible de générer le PDF');
     }

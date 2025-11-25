@@ -5,6 +5,7 @@ import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 
 import { Api } from '../lib/api';
+import { openPdfPreview } from '../utils/pdfPreview';
 
 // Types temporaires - TODO: Déplacer vers types/ si nécessaire
 interface Article {
@@ -401,9 +402,7 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
   const handlePreviewPdf = () => {
     try {
       const pdf = buildInventoryPdf(reportDateLabel, getSnapshot());
-      const blobUrl = pdf.doc.output('bloburl') as unknown as string;
-      window.open(blobUrl, '_blank');
-      setTimeout(() => window.URL.revokeObjectURL(blobUrl), 60_000);
+      openPdfPreview({ doc: pdf.doc as unknown as jsPDF, filename: pdf.filename });
     } catch (error) {
       toast.error((error as Error).message || 'Impossible de générer le PDF');
     }

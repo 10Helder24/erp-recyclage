@@ -12,7 +12,6 @@ import express from 'express';
 import cors from 'cors';
 import { randomUUID } from 'node:crypto';
 import { Pool } from '@neondatabase/serverless';
-import nodemailer from 'nodemailer';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
@@ -38,23 +37,6 @@ if (!process.env.DATABASE_URL) {
 }
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
-const transporter =
-  process.env.SMTP_HOST && process.env.SMTP_USER
-    ? nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: Number(process.env.SMTP_PORT ?? 587),
-        secure: process.env.SMTP_SECURE === 'true',
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS ?? ''
-        }
-      })
-    : null;
-
-if (!transporter) {
-  console.warn('SMTP non configuré : les emails de déclassement ne seront pas envoyés.');
-}
 
 const run = async <T = any>(text: string, params: unknown[] = []): Promise<T[]> => {
   const result = await pool.query(text, params) as unknown as { rows: T[] };
@@ -192,6 +174,52 @@ app.use((req, res, next) => {
 const hashPassword = (password: string) => bcrypt.hash(password, 10);
 const verifyPassword = (password: string, hash: string) => bcrypt.compare(password, hash);
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
+
+type EmailAttachment = { name: string; content: string; type: string };
+
+const sendBrevoEmail = async ({
+  to,
+  subject,
+  text,
+  attachments = []
+}: {
+  to: string[];
+  subject: string;
+  text: string;
+  attachments?: EmailAttachment[];
+}) => {
+  if (!process.env.BREVO_API_KEY || !process.env.BREVO_SENDER_EMAIL) {
+    throw new Error('Configuration Brevo manquante');
+  }
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'api-key': process.env.BREVO_API_KEY
+    },
+    body: JSON.stringify({
+      sender: {
+        email: process.env.BREVO_SENDER_EMAIL,
+        name: process.env.BREVO_SENDER_NAME || 'ERP Recyclage'
+      },
+      to: to.map((email) => ({ email })),
+      subject,
+      textContent: text,
+      attachment: attachments.length
+        ? attachments.map((file) => ({
+            name: file.name,
+            content: file.content,
+            type: file.type
+          }))
+        : undefined
+    })
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Envoi email impossible (${response.status}): ${detail}`);
+  }
+};
 
 const createAuthPayload = (user: UserRow): AuthPayload => ({
   id: user.id,
@@ -535,14 +563,16 @@ app.post(
     ]);
     const baseUrl = process.env.APP_BASE_URL || 'http://localhost:5173';
     const resetLink = `${baseUrl}?resetToken=${token}`;
-    if (transporter) {
-      await transporter.sendMail({
-        from: process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@retripa.ch',
-        to: user.email,
+    try {
+      await sendBrevoEmail({
+        to: [user.email],
         subject: 'Réinitialisation du mot de passe',
-        text: [`Bonjour ${user.full_name ?? ''}`.trim(), '', 'Cliquez sur le lien ci-dessous pour réinitialiser votre mot de passe :', resetLink, '', 'Le lien expire dans une heure.'].join('\n')
+        text: [`Bonjour ${user.full_name ?? ''}`.trim(), '', 'Cliquez sur le lien ci-dessous pour réinitialiser votre mot de passe :', resetLink, '', 'Le lien expire dans une heure.'].join(
+          '\n'
+        )
       });
-    } else {
+    } catch (error) {
+      console.error('Envoi email reset impossible', error);
       console.warn('[RESET PASSWORD] Lien de réinitialisation :', resetLink);
     }
     res.json({ message: 'Email de réinitialisation envoyé' });
@@ -1116,10 +1146,6 @@ app.post(
   '/api/leaves/notify',
   requireManagerAuth,
   asyncHandler(async (req, res) => {
-    if (!transporter) {
-      return res.status(500).json({ message: 'SMTP non configuré' });
-    }
-
     const { leaveIds, canton, pdfBase64, pdfFilename } = req.body as VacationNotificationPayload;
     if (!leaveIds?.length) {
       return res.status(400).json({ message: 'leaveIds requis' });
@@ -1136,16 +1162,20 @@ app.post(
       return res.status(404).json({ message: 'Demandes introuvables' });
     }
 
-    const recipients = process.env.VACANCES_RECIPIENTS || process.env.SMTP_USER;
+    const baseRecipients =
+      (process.env.VACANCES_RECIPIENTS || process.env.BREVO_SENDER_EMAIL || '')
+        .split(',')
+        .map((email) => email.trim())
+        .filter(Boolean);
     const uniqueEmployeeEmails = Array.from(
       new Set(
         rows
-          .map((leave) => leave.employee?.email)
+          .map((leave) => leave.employee?.email?.trim())
           .filter((email): email is string => Boolean(email))
       )
     );
 
-    const mailsTo = [recipients, ...uniqueEmployeeEmails].filter(Boolean).join(',');
+    const mailsTo = [...baseRecipients, ...uniqueEmployeeEmails].filter(Boolean);
 
     const textBody = rows
       .map(
@@ -1160,20 +1190,19 @@ app.post(
       )
       .join('\n');
 
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@retripa.ch',
+    await sendBrevoEmail({
       to: mailsTo,
       subject: `Congés approuvés (${rows.length}) - ${canton}`,
       text: textBody,
       attachments: pdfBase64
         ? [
             {
-              filename: pdfFilename || `conges-${Date.now()}.pdf`,
-              content: Buffer.from(pdfBase64, 'base64'),
-              contentType: 'application/pdf'
+              name: pdfFilename || `conges-${Date.now()}.pdf`,
+              content: pdfBase64,
+              type: 'application/pdf'
             }
           ]
-        : undefined
+        : []
     });
 
     res.json({ message: 'Notifications envoyées' });
@@ -1220,29 +1249,21 @@ type DeclassementEmailPayload = {
 app.post(
   '/api/declassements/send',
   asyncHandler(async (req, res) => {
-    if (!transporter) {
-      return res.status(500).json({ message: 'SMTP non configuré' });
-    }
-
-    const { dateTime, vehiclePlate, slipNumber, notes, entries, pdfBase64, pdfFilename, photos } =
+    const { dateTime, vehiclePlate, slipNumber, notes, entries, pdfBase64, pdfFilename } =
       req.body as DeclassementEmailPayload;
 
     if (!pdfBase64) {
       return res.status(400).json({ message: 'PDF manquant' });
     }
 
-    const recipients = process.env.DECLASSEMENT_RECIPIENTS || process.env.SMTP_USER;
-    if (!recipients) {
+    const recipients =
+      (process.env.DECLASSEMENT_RECIPIENTS || process.env.BREVO_SENDER_EMAIL || '')
+        .split(',')
+        .map((email) => email.trim())
+        .filter(Boolean);
+    if (!recipients.length) {
       return res.status(500).json({ message: 'Aucun destinataire configuré' });
     }
-
-    const attachments = [
-      {
-        filename: pdfFilename || `declassement-${Date.now()}.pdf`,
-        content: Buffer.from(pdfBase64, 'base64'),
-        contentType: 'application/pdf'
-      }
-    ];
 
     const entriesSummary =
       entries
@@ -1267,12 +1288,17 @@ app.post(
       'Le rapport PDF (incluant les photos) est joint à cet e-mail.'
     ].join('\n');
 
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@retripa.ch',
+    await sendBrevoEmail({
       to: recipients,
       subject: `Déclassement matières - ${vehiclePlate || slipNumber || dateTime}`,
       text: textBody,
-      attachments
+      attachments: [
+        {
+          name: pdfFilename || `declassement-${Date.now()}.pdf`,
+          content: pdfBase64,
+          type: 'application/pdf'
+        }
+      ]
     });
 
     res.json({ message: 'Email envoyé' });
@@ -1319,10 +1345,6 @@ type VacationNotificationPayload = {
 app.post(
   '/api/destructions/send',
   asyncHandler(async (req, res) => {
-    if (!transporter) {
-      return res.status(500).json({ message: 'SMTP non configuré' });
-    }
-
     const { dateDestruction, poidsTotal, client, ticket, datePesage, marchandises, nomAgent, pdfBase64, pdfFilename } =
       req.body as DestructionEmailPayload;
 
@@ -1330,18 +1352,14 @@ app.post(
       return res.status(400).json({ message: 'PDF manquant' });
     }
 
-    const recipients = process.env.DECLASSEMENT_RECIPIENTS || process.env.SMTP_USER;
-    if (!recipients) {
+    const recipients =
+      (process.env.DECLASSEMENT_RECIPIENTS || process.env.BREVO_SENDER_EMAIL || '')
+        .split(',')
+        .map((email) => email.trim())
+        .filter(Boolean);
+    if (!recipients.length) {
       return res.status(500).json({ message: 'Aucun destinataire configuré' });
     }
-
-    const attachments = [
-      {
-        filename: pdfFilename || `certificat_destruction_${Date.now()}.pdf`,
-        content: Buffer.from(pdfBase64, 'base64'),
-        contentType: 'application/pdf'
-      }
-    ];
 
     const marchandisesSummary = marchandises
       .map((m, idx) => `${idx + 1}. ${m.nom || '—'} (Réf: ${m.reference || '—'})`)
@@ -1362,12 +1380,17 @@ app.post(
       'Le certificat PDF (incluant les photos) est joint à cet e-mail.'
     ].join('\n');
 
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@retripa.ch',
+    await sendBrevoEmail({
       to: recipients,
       subject: `Certificat de destruction - ${client || dateDestruction || 'Nouveau'}`,
       text: textBody,
-      attachments
+      attachments: [
+        {
+          name: pdfFilename || `certificat_destruction_${Date.now()}.pdf`,
+          content: pdfBase64,
+          type: 'application/pdf'
+        }
+      ]
     });
 
     res.json({ message: 'Email envoyé' });
@@ -1377,28 +1400,20 @@ app.post(
 app.post(
   '/api/cdt/send',
   asyncHandler(async (req, res) => {
-    if (!transporter) {
-      return res.status(500).json({ message: 'SMTP non configuré' });
-    }
-
     const { dateLabel, formData, pdfBase64, pdfFilename } = req.body as CDTSheetEmailPayload;
 
     if (!pdfBase64) {
       return res.status(400).json({ message: 'PDF manquant' });
     }
 
-    const recipients = process.env.DECLASSEMENT_RECIPIENTS || process.env.SMTP_USER;
-    if (!recipients) {
+    const recipients =
+      (process.env.DECLASSEMENT_RECIPIENTS || process.env.BREVO_SENDER_EMAIL || '')
+        .split(',')
+        .map((email) => email.trim())
+        .filter(Boolean);
+    if (!recipients.length) {
       return res.status(500).json({ message: 'Aucun destinataire configuré' });
     }
-
-    const attachments = [
-      {
-        filename: pdfFilename || `centre-de-tri_${Date.now()}.pdf`,
-        content: Buffer.from(pdfBase64, 'base64'),
-        contentType: 'application/pdf'
-      }
-    ];
 
     const summary =
       Object.entries(formData)
@@ -1415,12 +1430,17 @@ app.post(
       'Le relevé PDF est joint à cet e-mail.'
     ].join('\n');
 
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@retripa.ch',
+    await sendBrevoEmail({
       to: recipients,
       subject: `Relevé Centre de tri - ${dateLabel}`,
       text: textBody,
-      attachments
+      attachments: [
+        {
+          name: pdfFilename || `centre-de-tri_${Date.now()}.pdf`,
+          content: pdfBase64,
+          type: 'application/pdf'
+        }
+      ]
     });
 
     res.json({ message: 'Email envoyé' });
@@ -1430,10 +1450,6 @@ app.post(
 app.post(
   '/api/inventory/send',
   asyncHandler(async (req, res) => {
-    if (!transporter) {
-      return res.status(500).json({ message: 'SMTP non configuré' });
-    }
-
     const { dateLabel, pdfBase64, pdfFilename, excelBase64, excelFilename } = req.body as InventoryEmailPayload;
 
     if (!pdfBase64) {
@@ -1445,27 +1461,29 @@ app.post(
       process.env.CDT_RECIPIENTS ||
       process.env.DESTRUCTION_RECIPIENTS ||
       process.env.DECLASSEMENT_RECIPIENTS ||
-      process.env.SMTP_USER;
-    if (!recipients) {
+      process.env.BREVO_SENDER_EMAIL;
+    const to = recipients
+      ?.split(',')
+      .map((email) => email.trim())
+      .filter(Boolean);
+    if (!to || !to.length) {
       return res.status(500).json({ message: 'Aucun destinataire configuré' });
     }
 
-    const attachments = [
+    const attachments: EmailAttachment[] = [
       {
-        filename: pdfFilename || `inventaire_${Date.now()}.pdf`,
-        content: Buffer.from(pdfBase64, 'base64'),
-        contentType: 'application/pdf'
-      },
-      ...(excelBase64
-        ? [
-            {
-              filename: excelFilename || `inventaire_${Date.now()}.xlsx`,
-              content: Buffer.from(excelBase64, 'base64'),
-              contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            }
-          ]
-        : [])
+        name: pdfFilename || `inventaire_${Date.now()}.pdf`,
+        content: pdfBase64,
+        type: 'application/pdf'
+      }
     ];
+    if (excelBase64) {
+      attachments.push({
+        name: excelFilename || `inventaire_${Date.now()}.xlsx`,
+        content: excelBase64,
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+    }
 
     const textBody = [
       `Feuille d'inventaire générée le : ${dateLabel || new Date().toLocaleString('fr-CH')}`,
@@ -1473,9 +1491,8 @@ app.post(
       'Le relevé PDF et le fichier Excel sont joints à cet e-mail.'
     ].join('\n');
 
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@retripa.ch',
-      to: recipients,
+    await sendBrevoEmail({
+      to,
       subject: `Inventaire halle - ${dateLabel || 'Nouveau relevé'}`,
       text: textBody,
       attachments
