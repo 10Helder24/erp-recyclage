@@ -108,7 +108,10 @@ const CANTON_OPTIONS: Array<{ code: CantonCode; label: string }> = [
 const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
   const { user, hasRole } = useAuth();
   const isAdmin = hasRole('admin');
-  const [activeTab, setActiveTab] = useState<LeaveTab>(initialTab);
+  const isManager = hasRole('admin') || hasRole('manager');
+  const availableTabs = useMemo<LeaveTab[]>(() => (isManager ? ['calendrier', 'demandes', 'soldes'] : ['calendrier', 'soldes']), [isManager]);
+  const initialSafeTab = availableTabs.includes(initialTab) ? initialTab : availableTabs[0];
+  const [activeTab, setActiveTab] = useState<LeaveTab>(initialSafeTab);
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [loading, setLoading] = useState(true);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -136,25 +139,43 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     return Array.from(map.values());
   }, [pendingLeaves]);
 
+
+  const currentEmployee = useMemo(
+    () => employees.find((employee) => employee.email?.toLowerCase() === user?.email?.toLowerCase()),
+    [employees, user?.email]
+  );
+  const departmentScope = useMemo(() => {
+    if (isManager) return null;
+    return currentEmployee?.department ?? null;
+  }, [isManager, currentEmployee]);
+  const scopedEmployees = useMemo(() => {
+    if (!departmentScope) {
+      return employees;
+    }
+    return employees.filter((employee) => employee.department === departmentScope);
+  }, [employees, departmentScope]);
+
   const managerOptions = useMemo(() => {
+    const source = isManager ? employees : scopedEmployees;
     const options = new Set<string>();
-    employees.forEach((employee) => {
+    source.forEach((employee) => {
       if (employee.manager_name) {
         options.add(employee.manager_name);
       }
     });
     return Array.from(options).sort((a, b) => a.localeCompare(b));
-  }, [employees]);
+  }, [employees, scopedEmployees, isManager]);
 
   const departmentOptions = useMemo(() => {
+    const source = isManager ? employees : scopedEmployees;
     const options = new Set<string>();
-    employees.forEach((employee) => {
+    source.forEach((employee) => {
       if (employee.department) {
         options.add(employee.department);
       }
     });
     return Array.from(options).sort((a, b) => a.localeCompare(b));
-  }, [employees]);
+  }, [employees, scopedEmployees, isManager]);
 
   const resolveEmployeeMeta = useCallback(
     (leave: Leave) => {
@@ -168,8 +189,8 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     [employees]
   );
 
-  const effectiveDepartmentFilter = isAdmin ? departmentFilter : user?.department ?? 'none';
-  const effectiveManagerFilter = isAdmin ? managerFilter : user?.manager_name ?? 'none';
+  const effectiveDepartmentFilter = isManager ? departmentFilter : departmentScope ?? 'all';
+  const effectiveManagerFilter = isManager ? managerFilter : currentEmployee?.manager_name ?? 'all';
 
   const matchesFilters = useCallback(
     (leave: Leave) => {
@@ -215,10 +236,14 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     [approvedCalendarLeaves]
   );
   const filteredEmployees = useMemo(
-    () => employees.filter((employee) => employeesWithApprovedLeaves.includes(employee.id)),
-    [employees, employeesWithApprovedLeaves]
+    () => scopedEmployees.filter((employee) => employeesWithApprovedLeaves.includes(employee.id)),
+    [scopedEmployees, employeesWithApprovedLeaves]
   );
   const displayEmployees = filteredEmployees;
+  const displayBalances = useMemo(
+    () => (isManager ? leaveBalances : leaveBalances.filter((balance) => balance.employee?.id === currentEmployee?.id)),
+    [leaveBalances, isManager, currentEmployee?.id]
+  );
   const showEmptyCalendarMessage = approvedCalendarLeaves.length === 0 || displayEmployees.length === 0;
 
   const loadData = useCallback(async () => {
@@ -228,9 +253,10 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
       const start = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0];
       const end = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
 
+      const pendingPromise = isManager ? Api.fetchPendingLeaves() : Promise.resolve([] as Leave[]);
       const [employeesRes, pendingRes, balancesRes, calendarRes] = await Promise.all([
         Api.fetchEmployees(),
-        Api.fetchPendingLeaves(),
+        pendingPromise,
         Api.fetchLeaveBalances(year),
         Api.fetchCalendarLeaves({ start, end })
       ]);
@@ -245,11 +271,17 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     } finally {
       setLoading(false);
     }
-  }, [currentDate]);
+  }, [currentDate, isManager]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!availableTabs.includes(activeTab)) {
+      setActiveTab(availableTabs[0]);
+    }
+  }, [availableTabs, activeTab]);
 
   const getLeaveForDay = useCallback(
     (employeeId: string, date: Date) => {
@@ -299,6 +331,25 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
       setNewLeave((prev) => ({ ...prev, employee_id: employeeId }));
     }
   };
+
+  useEffect(() => {
+    if (!isManager && currentEmployee) {
+      setNewLeave((prev) => ({
+        ...prev,
+        employee_id: currentEmployee.id,
+        first_name: currentEmployee.first_name,
+        last_name: currentEmployee.last_name,
+        email: currentEmployee.email
+      }));
+    }
+  }, [currentEmployee, isManager]);
+
+  useEffect(() => {
+    if (!isManager) {
+      setDepartmentFilter(departmentScope ?? 'all');
+      setManagerFilter(currentEmployee?.manager_name ?? 'all');
+    }
+  }, [departmentScope, currentEmployee?.manager_name, isManager]);
 
   const openSignModal = (leave: Leave) => {
     setSelectedLeave(leave);
@@ -479,7 +530,7 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
 
       <div className="card">
         <div className="tab-nav">
-          {(['calendrier', 'demandes', 'soldes'] as const).map((tab) => (
+          {availableTabs.map((tab) => (
             <button
               key={tab}
               type="button"
@@ -624,7 +675,7 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
               </div>
             )}
 
-            {activeTab === 'demandes' && (
+            {isManager && activeTab === 'demandes' && (
               <div className="requests-list">
                 {isAdmin ? (
                   <div className="request-filters">
@@ -721,7 +772,7 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
 
             {activeTab === 'soldes' && (
               <div className="balances-grid">
-                {leaveBalances.map((balance) => (
+                {displayBalances.map((balance) => (
                   <div key={balance.id} className="balance-card">
                     <div className="request-card-info">
                       <div className="avatar">
@@ -752,9 +803,13 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
           <form className="form-grid" onSubmit={handleNewLeaveSubmit}>
             <div className="input-group">
               <label>Employé existant</label>
-              <select value={newLeave.employee_id} onChange={(event) => handleEmployeeSelect(event.target.value)}>
+              <select
+                value={newLeave.employee_id}
+                onChange={(event) => handleEmployeeSelect(event.target.value)}
+                disabled={!isManager}
+              >
                 <option value="">Sélectionner</option>
-                {employees.map((employee) => (
+                {scopedEmployees.map((employee) => (
                   <option key={employee.id} value={employee.id}>
                     {employee.first_name} {employee.last_name}
                   </option>
