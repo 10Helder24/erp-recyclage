@@ -106,6 +106,17 @@ const App = () => {
     }).filter((section) => (section.type === 'group' ? section.children.length > 0 : canDisplayLink(section)));
   }, [hasRole]);
 
+  const closeSidebarOnMobile = () => {
+    if (typeof window !== 'undefined' && window.innerWidth < 769) {
+      setSidebarOpen(false);
+    }
+  };
+
+  const handleNavSelect = (navId: NavId) => {
+    setActiveNav(navId);
+    closeSidebarOnMobile();
+  };
+
   const activePage = useMemo(() => {
     if (!user) {
       return null;
@@ -181,7 +192,7 @@ const App = () => {
                   {expanded && (
                     <div className="sidebar-subnav">
                         {section.children.map((child) => (
-                          <button key={child.id} className={activeNav === child.id ? 'active' : ''} onClick={() => setActiveNav(child.id)}>
+                          <button key={child.id} className={activeNav === child.id ? 'active' : ''} onClick={() => handleNavSelect(child.id)}>
                             <span>{child.label}</span>
                             {child.pill ? <span className="pill">{child.pill}</span> : null}
                           </button>
@@ -193,7 +204,7 @@ const App = () => {
             }
 
             return (
-              <button key={section.id} className={activeNav === section.id ? 'active' : ''} onClick={() => setActiveNav(section.id)}>
+              <button key={section.id} className={activeNav === section.id ? 'active' : ''} onClick={() => handleNavSelect(section.id)}>
                 <span>{section.label}</span>
                 {section.pill && <span className="pill">{section.pill}</span>}
               </button>
@@ -214,7 +225,19 @@ const App = () => {
           Calendrier partagé · Mise à jour {new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}
         </div>
       </aside>
-
+      <div className="mobile-topbar">
+        <button className="mobile-menu-button" onClick={() => setSidebarOpen(true)} aria-label="Ouvrir le menu">
+          <Menu size={18} />
+        </button>
+        <div className="mobile-topbar__brand">
+          <p>ERP</p>
+          <strong>Recyclage</strong>
+        </div>
+        <button className="mobile-topbar__logout" onClick={logout}>
+          Déconnexion
+        </button>
+      </div>
+      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <main className="main-content">{activePage}</main>
     </div>
   );

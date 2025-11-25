@@ -45,6 +45,7 @@ button {
   min-height: 100vh;
   display: flex;
   background: linear-gradient(180deg, #f7f9fc 0%, #eef2ff 100%);
+  position: relative;
 }
 
 .sidebar {
@@ -55,6 +56,11 @@ button {
   display: flex;
   flex-direction: column;
   gap: 28px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  z-index: 30;
 }
 
 .sidebar-header {
@@ -212,6 +218,14 @@ button {
 .main-content {
   flex: 1;
   padding: 40px 48px;
+}
+
+.mobile-topbar {
+  display: none;
+}
+
+.sidebar-overlay {
+  display: none;
 }
 
 .page-header {
@@ -1087,8 +1101,24 @@ button {
   }
 
   .sidebar {
-    width: 100%;
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    right: 16px;
+    width: auto;
+    height: auto;
+    max-height: calc(100vh - 32px);
     padding: 20px;
+    border-radius: 24px;
+    box-shadow: 0 25px 60px rgba(15, 23, 42, 0.45);
+    transform: translateY(-140%);
+    transition: transform 0.3s ease;
+    overflow-y: auto;
+    background: var(--sidebar-bg);
+  }
+
+  .sidebar.open {
+    transform: translateY(0);
   }
 
   .sidebar-toggle {
@@ -1096,12 +1126,81 @@ button {
   }
 
   .sidebar-nav {
-    flex-direction: row;
-    overflow-x: auto;
+    flex-direction: column;
+    overflow: visible;
   }
 
   .sidebar-nav button {
-    min-width: 160px;
+    min-width: auto;
+  }
+
+  .main-content {
+    padding: 24px 20px 48px;
+    margin-top: 90px;
+  }
+
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 18px;
+    background: rgba(15, 23, 42, 0.9);
+    color: #fff;
+    position: sticky;
+    top: 0;
+    z-index: 15;
+    border-bottom-left-radius: 18px;
+    border-bottom-right-radius: 18px;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.35);
+  }
+
+  .mobile-menu-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    border: none;
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+  }
+
+  .mobile-topbar__brand {
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .mobile-topbar__brand p {
+    margin: 0;
+    font-size: 0.65rem;
+  }
+
+  .mobile-topbar__brand strong {
+    letter-spacing: 0.1em;
+    font-size: 1.05rem;
+  }
+
+  .mobile-topbar__logout {
+    border: none;
+    border-radius: 999px;
+    padding: 0 18px;
+    height: 38px;
+    font-weight: 600;
+    background: #fff;
+    color: #0f172a;
+  }
+
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.55);
+    z-index: 10;
   }
 }
 
@@ -1775,5 +1874,18 @@ button {
 
   .photo-list {
     font-size: 0.85rem;
+  }
+}
+
+@media (min-width: 961px) {
+  .mobile-topbar,
+  .sidebar-overlay {
+    display: none !important;
+  }
+
+  .sidebar {
+    transform: none !important;
+    position: sticky;
+    top: 0;
   }
 }
