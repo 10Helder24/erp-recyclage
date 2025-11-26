@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import { ChevronDown, Menu, Loader2 } from 'lucide-react';
 
 import DestructionPage from './pages/DestructionPage';
@@ -12,6 +12,7 @@ import UsersAdminPage from './pages/UsersAdminPage';
 import LoginPage from './pages/LoginPage';
 import MapPage from './pages/MapPage';
 import { useAuth } from './hooks/useAuth';
+import { Api } from './lib/api';
 
 const NAV_LINK_IDS = [
   'dashboard',
@@ -35,6 +36,7 @@ type NavLink = {
   label: string;
   pill?: string;
   requiresAdmin?: boolean;
+  requiresManager?: boolean;
 };
 
 type NavSection =
@@ -68,7 +70,7 @@ const NAV_SECTIONS: NavSection[] = [
           { id: 'expedition', label: 'Expéditions' }
     ]
   },
-  { type: 'link', id: 'map', label: 'Carte' },
+  { type: 'link', id: 'map', label: 'Carte', requiresManager: true },
   {
     type: 'group',
     id: 'matieres',
@@ -89,6 +91,9 @@ const App = () => {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     rhPlus: true
   });
+  const [showGeoPrompt, setShowGeoPrompt] = useState(false);
+  const [geoWatchId, setGeoWatchId] = useState<number | null>(null);
+  const [geoError, setGeoError] = useState<string | null>(null);
 
   const toggleGroup = (groupId: string) => {
     setOpenGroups((prev) => ({
@@ -97,7 +102,72 @@ const App = () => {
     }));
   };
 
-  const canDisplayLink = (link: NavLink) => (!link.requiresAdmin || hasRole('admin'));
+  useEffect(() => {
+    if (user) {
+      const storedConsent = typeof window !== 'undefined' ? window.localStorage.getItem('geoConsent') : null;
+      if (storedConsent === 'granted') {
+        handleEnableGeolocation(true);
+      } else {
+        setShowGeoPrompt(true);
+      }
+    } else {
+      setShowGeoPrompt(false);
+      if (geoWatchId !== null && typeof navigator !== 'undefined') {
+        navigator.geolocation.clearWatch(geoWatchId);
+      }
+      setGeoWatchId(null);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    return () => {
+      if (geoWatchId !== null && typeof navigator !== 'undefined') {
+        navigator.geolocation.clearWatch(geoWatchId);
+      }
+    };
+  }, [geoWatchId]);
+
+  const handleGeolocationSuccess = useCallback((position: GeolocationPosition) => {
+    const coords: [number, number] = [position.coords.latitude, position.coords.longitude];
+    Api.updateCurrentLocation({ latitude: coords[0], longitude: coords[1] }).catch((error) => console.error(error));
+  }, []);
+
+  const handleEnableGeolocation = useCallback((skipPrompt?: boolean) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setGeoError('Géolocalisation non supportée par ce navigateur.');
+      return;
+    }
+    setGeoError(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        handleGeolocationSuccess(pos);
+        const id = navigator.geolocation.watchPosition(handleGeolocationSuccess, (err) => {
+          console.warn(err);
+          setGeoError("Impossible de suivre la position : " + err.message);
+        }, { enableHighAccuracy: true });
+        setGeoWatchId(id);
+        setShowGeoPrompt(false);
+        if (!skipPrompt) {
+          window.localStorage.setItem('geoConsent', 'granted');
+        }
+      },
+      (err) => {
+        console.warn(err);
+        setGeoError("Permission refusée ou indisponible : " + err.message);
+      },
+      { enableHighAccuracy: true }
+    );
+  }, [handleGeolocationSuccess]);
+
+  const canDisplayLink = (link: NavLink) => {
+    if (link.requiresAdmin && !hasRole('admin')) {
+      return false;
+    }
+    if (link.requiresManager && !(hasRole('manager') || hasRole('admin'))) {
+      return false;
+    }
+    return true;
+  };
 
   const filteredSections = useMemo(() => {
     return NAV_SECTIONS.map((section) => {
@@ -140,7 +210,7 @@ const App = () => {
       case 'Declassement':
         return <DeclassementPage />;
       case 'map':
-        return <MapPage />;
+        return hasRole('admin') || hasRole('manager') ? <MapPage /> : <LeavePage initialTab="demandes" />;
       case 'adminUsers':
         return hasRole('admin') ? <UsersAdminPage /> : <LeavePage initialTab="demandes" />;
       case 'rh':
@@ -242,6 +312,24 @@ const App = () => {
           Déconnexion
         </button>
       </div>
+      {showGeoPrompt && (
+        <div className="geo-banner geo-banner--floating">
+          <div className="geo-banner__content">
+            <p>
+              Activer le suivi de position ?
+              {geoError ? <span className="geo-error"> {geoError}</span> : null}
+            </p>
+            <div className="geo-banner__actions">
+              <button className="btn btn-primary" onClick={() => handleEnableGeolocation()}>
+                Activer
+              </button>
+              <button className="btn btn-outline" onClick={() => setShowGeoPrompt(false)}>
+                Plus tard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <main className="main-content">{activePage}</main>
     </div>
