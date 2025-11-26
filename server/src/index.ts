@@ -93,15 +93,20 @@ type MapVehicle = {
 };
 
 type MapRouteStopRow = {
-  id: string;
+  route_id: string;
+  route_status: string | null;
+  path: any | null;
+  stop_id: string;
   order_index: number;
   estimated_time: string | null;
-  status: string | null;
+  stop_status: string | null;
   notes: string | null;
+  completed_at: string | null;
   customer_name: string | null;
   customer_address: string | null;
   latitude: number | null;
   longitude: number | null;
+  risk_level: string | null;
   vehicle_id: string | null;
   internal_number: string | null;
   plate_number: string | null;
@@ -445,6 +450,20 @@ const ensureSchema = async () => {
   `);
   await run('create index if not exists user_locations_last_update_idx on user_locations(last_update desc)');
 
+  // Table pour l'historique des positions (pour le rejeu)
+  await run(`
+    create table if not exists user_location_history (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      latitude double precision not null,
+      longitude double precision not null,
+      recorded_at timestamptz not null default now(),
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists user_location_history_employee_idx on user_location_history(employee_id, recorded_at desc)');
+  await run('create index if not exists user_location_history_recorded_at_idx on user_location_history(recorded_at desc)');
+
   await run(`
     create table if not exists vehicles (
       id uuid primary key,
@@ -461,18 +480,24 @@ const ensureSchema = async () => {
       address text,
       latitude double precision,
       longitude double precision,
+      risk_level text,
       created_at timestamptz not null default now()
     )
   `);
+  await run(`alter table customers add column if not exists risk_level text`);
 
   await run(`
     create table if not exists routes (
       id uuid primary key,
       date date not null,
       vehicle_id uuid references vehicles(id) on delete set null,
+      status text,
+      path jsonb,
       created_at timestamptz not null default now()
     )
   `);
+  await run(`alter table routes add column if not exists status text`);
+  await run(`alter table routes add column if not exists path jsonb`);
 
   await run(`
     create table if not exists route_stops (
@@ -482,10 +507,37 @@ const ensureSchema = async () => {
       order_index int not null default 0,
       estimated_time timestamptz,
       status text,
-      notes text
+      notes text,
+      completed_at timestamptz
     )
   `);
   await run('create index if not exists route_stops_route_idx on route_stops(route_id)');
+  await run(`alter table route_stops add column if not exists status text`);
+  await run(`alter table route_stops add column if not exists completed_at timestamptz`);
+
+  // Table pour les interventions/tickets
+  await run(`
+    create table if not exists interventions (
+      id uuid primary key default gen_random_uuid(),
+      customer_id uuid references customers(id) on delete set null,
+      customer_name text not null,
+      customer_address text,
+      title text not null,
+      description text,
+      status text not null default 'pending',
+      priority text not null default 'medium',
+      created_by uuid references users(id) on delete set null,
+      assigned_to uuid references employees(id) on delete set null,
+      latitude double precision,
+      longitude double precision,
+      notes text,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists interventions_customer_idx on interventions(customer_id)');
+  await run('create index if not exists interventions_status_idx on interventions(status)');
+  await run('create index if not exists interventions_created_at_idx on interventions(created_at desc)');
 
   await run(`
     create table if not exists users (
@@ -1588,7 +1640,23 @@ app.post(
 app.get(
   '/api/map/user-locations',
   requireAuth(),
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    const { department, role, manager } = req.query;
+    const conditions: string[] = [];
+    const params: string[] = [];
+    if (typeof department === 'string' && department.trim().length > 0) {
+      conditions.push(`lower(e.department) = lower($${params.length + 1})`);
+      params.push(department.trim());
+    }
+    if (typeof role === 'string' && role.trim().length > 0) {
+      conditions.push(`lower(e.role) = lower($${params.length + 1})`);
+      params.push(role.trim());
+    }
+    if (typeof manager === 'string' && manager.trim().length > 0) {
+      conditions.push(`lower(e.manager_name) = lower($${params.length + 1})`);
+      params.push(manager.trim());
+    }
+    const whereClause = conditions.length ? `where ${conditions.join(' and ')}` : '';
     const rows = await run<
       {
         employee_id: string;
@@ -1599,6 +1667,8 @@ app.get(
         last_name: string;
         email: string;
         department: string | null;
+        role: string | null;
+        manager_name: string | null;
       }
     >(
       `
@@ -1609,11 +1679,15 @@ app.get(
                e.first_name,
                e.last_name,
                e.email,
-               e.department
+               e.department,
+               e.role,
+               e.manager_name
         from user_locations ul
         join employees e on e.id = ul.employee_id
+        ${whereClause}
         order by ul.last_update desc
-      `
+      `,
+      params
     );
     res.json(
       rows.map((row) => ({
@@ -1624,7 +1698,9 @@ app.get(
         first_name: row.first_name,
         last_name: row.last_name,
         employee_email: row.email,
-        department: row.department
+        department: row.department,
+        role: row.role,
+        manager_name: row.manager_name
       }))
     );
   })
@@ -1647,17 +1723,34 @@ app.post(
     if (!employee) {
       return res.status(404).json({ message: 'Employé introuvable pour cet utilisateur' });
     }
+    const now = new Date();
+    // Mettre à jour la position actuelle
     await run(
       `
         insert into user_locations(employee_id, latitude, longitude, last_update)
-        values ($1, $2, $3, now())
+        values ($1, $2, $3, $4)
         on conflict (employee_id) do update
         set latitude = excluded.latitude,
             longitude = excluded.longitude,
-            last_update = now()
+            last_update = excluded.last_update
       `,
-      [employee.id, latitude, longitude]
+      [employee.id, latitude, longitude, now]
     );
+    // Sauvegarder dans l'historique (toutes les 30 secondes max pour éviter trop de données)
+    const [lastHistory] = await run<{ recorded_at: Date }>(
+      `select recorded_at from user_location_history 
+       where employee_id = $1 
+       order by recorded_at desc limit 1`,
+      [employee.id]
+    );
+    const shouldSaveHistory = !lastHistory || (now.getTime() - new Date(lastHistory.recorded_at).getTime()) > 30000;
+    if (shouldSaveHistory) {
+      await run(
+        `insert into user_location_history(employee_id, latitude, longitude, recorded_at)
+         values ($1, $2, $3, $4)`,
+        [employee.id, latitude, longitude, now]
+      );
+    }
     res.status(204).send();
   })
 );
@@ -1682,20 +1775,25 @@ app.get(
     }
     const params: string[] = [date];
     let sql = `
-      select rs.id,
+      select r.id as route_id,
+             r.status as route_status,
+             r.path,
+             rs.id as stop_id,
              rs.order_index,
              rs.estimated_time,
-             rs.status,
+             rs.status as stop_status,
              rs.notes,
+             rs.completed_at,
              c.name as customer_name,
              c.address as customer_address,
              c.latitude,
              c.longitude,
+             c.risk_level,
              r.vehicle_id,
              v.internal_number,
              v.plate_number
-      from route_stops rs
-      join routes r on r.id = rs.route_id
+      from routes r
+      left join route_stops rs on rs.route_id = r.id
       left join customers c on c.id = rs.customer_id
       left join vehicles v on v.id = r.vehicle_id
       where r.date = $1
@@ -1706,22 +1804,703 @@ app.get(
     }
     sql += ' order by r.vehicle_id nulls last, rs.order_index';
     const rows = await run<MapRouteStopRow>(sql, params);
+    const routes = new Map<
+      string,
+      {
+        id: string;
+        status: string | null;
+        path: Array<[number, number]>;
+        vehicle_id: string | null;
+        internal_number: string | null;
+        plate_number: string | null;
+        stops: Array<{
+          id: string;
+          order_index: number;
+          estimated_time: string | null;
+          status: string | null;
+          notes: string | null;
+          completed_at: string | null;
+          customer_name: string | null;
+          customer_address: string | null;
+          latitude: number | null;
+          longitude: number | null;
+          risk_level: string | null;
+        }>;
+      }
+    >();
+    rows.forEach((row) => {
+      if (!routes.has(row.route_id)) {
+        routes.set(row.route_id, {
+          id: row.route_id,
+          status: row.route_status,
+          path: Array.isArray(row.path) ? row.path : Array.isArray(row.path?.coordinates) ? row.path.coordinates : [],
+          vehicle_id: row.vehicle_id,
+          internal_number: row.internal_number,
+          plate_number: row.plate_number,
+          stops: []
+        });
+      }
+      const route = routes.get(row.route_id)!;
+      if (row.stop_id) {
+        route.stops.push({
+          id: row.stop_id,
+          order_index: row.order_index,
+          estimated_time: row.estimated_time,
+          status: row.stop_status,
+          notes: row.notes,
+          completed_at: row.completed_at,
+          customer_name: row.customer_name,
+          customer_address: row.customer_address,
+          latitude: row.latitude,
+          longitude: row.longitude,
+          risk_level: row.risk_level
+        });
+      }
+    });
+    res.json(Array.from(routes.values()));
+  })
+);
+
+// Endpoint pour récupérer l'historique des positions (pour le rejeu)
+app.get(
+  '/api/map/user-locations/history',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const date = typeof req.query.date === 'string' ? req.query.date : null;
+    const employeeId = typeof req.query.employeeId === 'string' ? req.query.employeeId : null;
+    const timeFrom = typeof req.query.timeFrom === 'string' ? req.query.timeFrom : '05:00';
+    const timeTo = typeof req.query.timeTo === 'string' ? req.query.timeTo : '19:00';
+
+    if (!date) {
+      return res.status(400).json({ message: 'Paramètre "date" requis (YYYY-MM-DD)' });
+    }
+
+    const [dateFrom, dateTo] = [new Date(`${date}T${timeFrom}:00`), new Date(`${date}T${timeTo}:00`)];
+    if (isNaN(dateFrom.getTime()) || isNaN(dateTo.getTime())) {
+      return res.status(400).json({ message: 'Format de date/heure invalide' });
+    }
+
+    let sql = `
+      select 
+        ulh.id,
+        ulh.employee_id,
+        ulh.latitude,
+        ulh.longitude,
+        ulh.recorded_at,
+        e.first_name,
+        e.last_name,
+        e.email,
+        e.department,
+        e.role,
+        e.manager_name
+      from user_location_history ulh
+      join employees e on e.id = ulh.employee_id
+      where ulh.recorded_at >= $1 and ulh.recorded_at <= $2
+    `;
+    const params: any[] = [dateFrom.toISOString(), dateTo.toISOString()];
+
+    if (employeeId) {
+      params.push(employeeId);
+      sql += ` and ulh.employee_id = $${params.length}`;
+    }
+
+    sql += ' order by ulh.recorded_at asc';
+
+    type HistoryRow = {
+      id: string;
+      employee_id: string;
+      latitude: number;
+      longitude: number;
+      recorded_at: string;
+      first_name: string;
+      last_name: string;
+      email: string;
+      department: string | null;
+      role: string | null;
+      manager_name: string | null;
+    };
+
+    const rows = await run<HistoryRow>(sql, params);
+
     res.json(
       rows.map((row) => ({
         id: row.id,
-        order_index: row.order_index,
-        estimated_time: row.estimated_time,
-        status: row.status,
-        notes: row.notes,
-        customer_name: row.customer_name,
-        customer_address: row.customer_address,
+        employee_id: row.employee_id,
         latitude: row.latitude,
         longitude: row.longitude,
-        vehicle_id: row.vehicle_id,
-        internal_number: row.internal_number,
-        plate_number: row.plate_number
+        recorded_at: row.recorded_at,
+        first_name: row.first_name,
+        last_name: row.last_name,
+        employee_email: row.email,
+        department: row.department,
+        role: row.role,
+        manager_name: row.manager_name
       }))
     );
+  })
+);
+
+// Endpoint pour créer une intervention depuis la carte
+app.post(
+  '/api/interventions',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const userId = authReq.auth?.id;
+    if (!userId) {
+      return res.status(401).json({ message: 'Session expirée' });
+    }
+
+    const {
+      customer_id,
+      customer_name,
+      customer_address,
+      title,
+      description,
+      priority,
+      assigned_to,
+      latitude,
+      longitude,
+      notes
+    } = req.body as {
+      customer_id?: string;
+      customer_name: string;
+      customer_address?: string;
+      title: string;
+      description?: string;
+      priority?: string;
+      assigned_to?: string;
+      latitude?: number;
+      longitude?: number;
+      notes?: string;
+    };
+
+    if (!customer_name || !title) {
+      return res.status(400).json({ message: 'Nom du client et titre requis' });
+    }
+
+    const [intervention] = await run<{ id: string }>(
+      `
+        insert into interventions (
+          customer_id, customer_name, customer_address, title, description,
+          priority, created_by, assigned_to, latitude, longitude, notes, status
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending')
+        returning id
+      `,
+      [
+        customer_id || null,
+        customer_name,
+        customer_address || null,
+        title,
+        description || null,
+        priority || 'medium',
+        userId,
+        assigned_to || null,
+        latitude || null,
+        longitude || null,
+        notes || null
+      ]
+    );
+
+    res.status(201).json({ id: intervention.id, message: 'Intervention créée avec succès' });
+  })
+);
+
+// ==================== ENDPOINTS CLIENTS ====================
+app.get(
+  '/api/customers',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const rows = await run<{
+      id: string;
+      name: string;
+      address: string | null;
+      latitude: number | null;
+      longitude: number | null;
+      risk_level: string | null;
+      created_at: string;
+    }>('select * from customers order by name');
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/customers',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { name, address, latitude, longitude, risk_level } = req.body as {
+      name: string;
+      address?: string;
+      latitude?: number;
+      longitude?: number;
+      risk_level?: string;
+    };
+    if (!name) {
+      return res.status(400).json({ message: 'Nom du client requis' });
+    }
+    const id = randomUUID();
+    const [customer] = await run<{ id: string }>(
+      `insert into customers (id, name, address, latitude, longitude, risk_level)
+       values ($1, $2, $3, $4, $5, $6)
+       returning id`,
+      [id, name, address || null, latitude || null, longitude || null, risk_level || null]
+    );
+    res.status(201).json({ id: customer.id, message: 'Client créé avec succès' });
+  })
+);
+
+app.patch(
+  '/api/customers/:id',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { name, address, latitude, longitude, risk_level } = req.body as {
+      name?: string;
+      address?: string;
+      latitude?: number;
+      longitude?: number;
+      risk_level?: string;
+    };
+    const updates: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+    if (name !== undefined) {
+      updates.push(`name = $${paramIndex++}`);
+      params.push(name);
+    }
+    if (address !== undefined) {
+      updates.push(`address = $${paramIndex++}`);
+      params.push(address);
+    }
+    if (latitude !== undefined) {
+      updates.push(`latitude = $${paramIndex++}`);
+      params.push(latitude);
+    }
+    if (longitude !== undefined) {
+      updates.push(`longitude = $${paramIndex++}`);
+      params.push(longitude);
+    }
+    if (risk_level !== undefined) {
+      updates.push(`risk_level = $${paramIndex++}`);
+      params.push(risk_level);
+    }
+    if (updates.length === 0) {
+      return res.status(400).json({ message: 'Aucune modification fournie' });
+    }
+    params.push(id);
+    await run(`update customers set ${updates.join(', ')} where id = $${paramIndex}`, params);
+    res.json({ message: 'Client mis à jour avec succès' });
+  })
+);
+
+app.delete(
+  '/api/customers/:id',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    await run('delete from customers where id = $1', [id]);
+    res.json({ message: 'Client supprimé avec succès' });
+  })
+);
+
+// ==================== ENDPOINTS VÉHICULES ====================
+app.get(
+  '/api/vehicles',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const rows = await run<{
+      id: string;
+      internal_number: string | null;
+      plate_number: string | null;
+      created_at: string;
+    }>('select * from vehicles order by internal_number nulls last, plate_number nulls last');
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/vehicles',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { internal_number, plate_number } = req.body as {
+      internal_number?: string;
+      plate_number?: string;
+    };
+    if (!internal_number && !plate_number) {
+      return res.status(400).json({ message: 'Numéro interne ou plaque d\'immatriculation requis' });
+    }
+    const id = randomUUID();
+    const [vehicle] = await run<{ id: string }>(
+      `insert into vehicles (id, internal_number, plate_number)
+       values ($1, $2, $3)
+       returning id`,
+      [id, internal_number || null, plate_number || null]
+    );
+    res.status(201).json({ id: vehicle.id, message: 'Véhicule créé avec succès' });
+  })
+);
+
+app.patch(
+  '/api/vehicles/:id',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { internal_number, plate_number } = req.body as {
+      internal_number?: string;
+      plate_number?: string;
+    };
+    const updates: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+    if (internal_number !== undefined) {
+      updates.push(`internal_number = $${paramIndex++}`);
+      params.push(internal_number);
+    }
+    if (plate_number !== undefined) {
+      updates.push(`plate_number = $${paramIndex++}`);
+      params.push(plate_number);
+    }
+    if (updates.length === 0) {
+      return res.status(400).json({ message: 'Aucune modification fournie' });
+    }
+    params.push(id);
+    await run(`update vehicles set ${updates.join(', ')} where id = $${paramIndex}`, params);
+    res.json({ message: 'Véhicule mis à jour avec succès' });
+  })
+);
+
+app.delete(
+  '/api/vehicles/:id',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    await run('delete from vehicles where id = $1', [id]);
+    res.json({ message: 'Véhicule supprimé avec succès' });
+  })
+);
+
+// ==================== ENDPOINTS INTERVENTIONS ====================
+app.get(
+  '/api/interventions',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const status = typeof req.query.status === 'string' ? req.query.status : null;
+    const priority = typeof req.query.priority === 'string' ? req.query.priority : null;
+    let sql = `
+      select i.*,
+             u.full_name as created_by_name,
+             e.first_name || ' ' || e.last_name as assigned_to_name
+      from interventions i
+      left join users u on u.id = i.created_by
+      left join employees e on e.id = i.assigned_to
+    `;
+    const conditions: string[] = [];
+    const params: any[] = [];
+    if (status) {
+      conditions.push(`i.status = $${params.length + 1}`);
+      params.push(status);
+    }
+    if (priority) {
+      conditions.push(`i.priority = $${params.length + 1}`);
+      params.push(priority);
+    }
+    if (conditions.length) {
+      sql += ` where ${conditions.join(' and ')}`;
+    }
+    sql += ' order by i.created_at desc';
+    const rows = await run<{
+      id: string;
+      customer_id: string | null;
+      customer_name: string;
+      customer_address: string | null;
+      title: string;
+      description: string | null;
+      status: string;
+      priority: string;
+      created_by: string | null;
+      assigned_to: string | null;
+      latitude: number | null;
+      longitude: number | null;
+      notes: string | null;
+      created_at: string;
+      updated_at: string;
+      created_by_name: string | null;
+      assigned_to_name: string | null;
+    }>(sql, params);
+    res.json(rows);
+  })
+);
+
+app.patch(
+  '/api/interventions/:id',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { status, priority, assigned_to, notes } = req.body as {
+      status?: string;
+      priority?: string;
+      assigned_to?: string;
+      notes?: string;
+    };
+    const updates: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+    if (status !== undefined) {
+      updates.push(`status = $${paramIndex++}`);
+      params.push(status);
+    }
+    if (priority !== undefined) {
+      updates.push(`priority = $${paramIndex++}`);
+      params.push(priority);
+    }
+    if (assigned_to !== undefined) {
+      updates.push(`assigned_to = $${paramIndex++}`);
+      params.push(assigned_to);
+    }
+    if (notes !== undefined) {
+      updates.push(`notes = $${paramIndex++}`);
+      params.push(notes);
+    }
+    if (updates.length === 0) {
+      return res.status(400).json({ message: 'Aucune modification fournie' });
+    }
+    updates.push(`updated_at = now()`);
+    params.push(id);
+    await run(`update interventions set ${updates.join(', ')} where id = $${paramIndex}`, params);
+    res.json({ message: 'Intervention mise à jour avec succès' });
+  })
+);
+
+app.delete(
+  '/api/interventions/:id',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    await run('delete from interventions where id = $1', [id]);
+    res.json({ message: 'Intervention supprimée avec succès' });
+  })
+);
+
+// ==================== ENDPOINTS ROUTES ====================
+app.get(
+  '/api/routes',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const date = typeof req.query.date === 'string' ? req.query.date : null;
+    let sql = `
+      select r.*,
+             v.internal_number,
+             v.plate_number
+      from routes r
+      left join vehicles v on v.id = r.vehicle_id
+    `;
+    const params: any[] = [];
+    if (date) {
+      sql += ` where r.date = $1`;
+      params.push(date);
+    }
+    sql += ' order by r.date desc, r.created_at desc';
+    const rows = await run<{
+      id: string;
+      date: string;
+      vehicle_id: string | null;
+      status: string | null;
+      path: any;
+      created_at: string;
+      internal_number: string | null;
+      plate_number: string | null;
+    }>(sql, params);
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/routes',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { date, vehicle_id, status, path } = req.body as {
+      date: string;
+      vehicle_id?: string;
+      status?: string;
+      path?: Array<[number, number]>;
+    };
+    if (!date) {
+      return res.status(400).json({ message: 'Date requise' });
+    }
+    const id = randomUUID();
+    const [route] = await run<{ id: string }>(
+      `insert into routes (id, date, vehicle_id, status, path)
+       values ($1, $2, $3, $4, $5)
+       returning id`,
+      [id, date, vehicle_id || null, status || 'pending', path ? JSON.stringify(path) : null]
+    );
+    res.status(201).json({ id: route.id, message: 'Route créée avec succès' });
+  })
+);
+
+app.patch(
+  '/api/routes/:id',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { date, vehicle_id, status, path } = req.body as {
+      date?: string;
+      vehicle_id?: string;
+      status?: string;
+      path?: Array<[number, number]>;
+    };
+    const updates: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+    if (date !== undefined) {
+      updates.push(`date = $${paramIndex++}`);
+      params.push(date);
+    }
+    if (vehicle_id !== undefined) {
+      updates.push(`vehicle_id = $${paramIndex++}`);
+      params.push(vehicle_id);
+    }
+    if (status !== undefined) {
+      updates.push(`status = $${paramIndex++}`);
+      params.push(status);
+    }
+    if (path !== undefined) {
+      updates.push(`path = $${paramIndex++}`);
+      params.push(JSON.stringify(path));
+    }
+    if (updates.length === 0) {
+      return res.status(400).json({ message: 'Aucune modification fournie' });
+    }
+    params.push(id);
+    await run(`update routes set ${updates.join(', ')} where id = $${paramIndex}`, params);
+    res.json({ message: 'Route mise à jour avec succès' });
+  })
+);
+
+app.delete(
+  '/api/routes/:id',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    await run('delete from routes where id = $1', [id]);
+    res.json({ message: 'Route supprimée avec succès' });
+  })
+);
+
+// ==================== ENDPOINTS ARRÊTS DE ROUTE ====================
+app.get(
+  '/api/route-stops',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const route_id = typeof req.query.route_id === 'string' ? req.query.route_id : null;
+    if (!route_id) {
+      return res.status(400).json({ message: 'Route ID requis' });
+    }
+    const rows = await run<{
+      id: string;
+      route_id: string;
+      customer_id: string | null;
+      order_index: number;
+      estimated_time: string | null;
+      status: string | null;
+      notes: string | null;
+      completed_at: string | null;
+      customer_name: string | null;
+      customer_address: string | null;
+    }>(
+      `select rs.*, c.name as customer_name, c.address as customer_address
+       from route_stops rs
+       left join customers c on c.id = rs.customer_id
+       where rs.route_id = $1
+       order by rs.order_index`,
+      [route_id]
+    );
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/route-stops',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { route_id, customer_id, order_index, estimated_time, notes } = req.body as {
+      route_id: string;
+      customer_id?: string;
+      order_index: number;
+      estimated_time?: string;
+      notes?: string;
+    };
+    if (!route_id) {
+      return res.status(400).json({ message: 'Route ID requis' });
+    }
+    const id = randomUUID();
+    const [stop] = await run<{ id: string }>(
+      `insert into route_stops (id, route_id, customer_id, order_index, estimated_time, notes, status)
+       values ($1, $2, $3, $4, $5, $6, 'pending')
+       returning id`,
+      [id, route_id, customer_id || null, order_index, estimated_time || null, notes || null]
+    );
+    res.status(201).json({ id: stop.id, message: 'Arrêt créé avec succès' });
+  })
+);
+
+app.patch(
+  '/api/route-stops/:id',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { customer_id, order_index, estimated_time, status, notes, completed_at } = req.body as {
+      customer_id?: string;
+      order_index?: number;
+      estimated_time?: string;
+      status?: string;
+      notes?: string;
+      completed_at?: string;
+    };
+    const updates: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+    if (customer_id !== undefined) {
+      updates.push(`customer_id = $${paramIndex++}`);
+      params.push(customer_id);
+    }
+    if (order_index !== undefined) {
+      updates.push(`order_index = $${paramIndex++}`);
+      params.push(order_index);
+    }
+    if (estimated_time !== undefined) {
+      updates.push(`estimated_time = $${paramIndex++}`);
+      params.push(estimated_time);
+    }
+    if (status !== undefined) {
+      updates.push(`status = $${paramIndex++}`);
+      params.push(status);
+    }
+    if (notes !== undefined) {
+      updates.push(`notes = $${paramIndex++}`);
+      params.push(notes);
+    }
+    if (completed_at !== undefined) {
+      updates.push(`completed_at = $${paramIndex++}`);
+      params.push(completed_at);
+    }
+    if (updates.length === 0) {
+      return res.status(400).json({ message: 'Aucune modification fournie' });
+    }
+    params.push(id);
+    await run(`update route_stops set ${updates.join(', ')} where id = $${paramIndex}`, params);
+    res.json({ message: 'Arrêt mis à jour avec succès' });
+  })
+);
+
+app.delete(
+  '/api/route-stops/:id',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    await run('delete from route_stops where id = $1', [id]);
+    res.json({ message: 'Arrêt supprimé avec succès' });
   })
 );
 

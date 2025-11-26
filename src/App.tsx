@@ -11,6 +11,10 @@ import ExpeditionPage from './pages/ExpeditionPage';
 import UsersAdminPage from './pages/UsersAdminPage';
 import LoginPage from './pages/LoginPage';
 import MapPage from './pages/MapPage';
+import CustomersPage from './pages/CustomersPage';
+import InterventionsPage from './pages/InterventionsPage';
+import VehiclesPage from './pages/VehiclesPage';
+import RoutesPage from './pages/RoutesPage';
 import { useAuth } from './hooks/useAuth';
 import { Api } from './lib/api';
 
@@ -27,7 +31,11 @@ const NAV_LINK_IDS = [
   'expedition',
   'Declassement',
   'map',
-  'adminUsers'
+  'adminUsers',
+  'customers',
+  'interventions',
+  'vehicles',
+  'routes'
 ] as const;
 type NavId = (typeof NAV_LINK_IDS)[number];
 
@@ -67,10 +75,9 @@ const NAV_SECTIONS: NavSection[] = [
     children: [
       { id: 'CDTSheets', label: 'CDT' },
           { id: 'IvntaireHalle', label: 'Inventaire halle' },
-          { id: 'expedition', label: 'Expéditions' }
+      { id: 'expedition', label: 'Expéditions' }
     ]
   },
-  { type: 'link', id: 'map', label: 'Carte', requiresManager: true },
   {
     type: 'group',
     id: 'matieres',
@@ -78,6 +85,18 @@ const NAV_SECTIONS: NavSection[] = [
     children: [
       { id: 'destruction', label: 'Destruction matières' },
           { id: 'Declassement', label: 'Déclassement matières' }
+    ]
+  },
+  {
+    type: 'group',
+    id: 'gestion',
+    label: 'Gestion',
+    children: [
+      { id: 'map', label: 'Carte', requiresManager: true },
+      { id: 'customers', label: 'Clients', requiresManager: true },
+      { id: 'interventions', label: 'Interventions', requiresManager: true },
+      { id: 'vehicles', label: 'Véhicules', requiresManager: true },
+      { id: 'routes', label: 'Routes & Tournées', requiresManager: true }
     ]
   },
   { type: 'link', id: 'alerts', label: 'Alertes sécurité', pill: 'Nouveau' },
@@ -213,6 +232,14 @@ const App = () => {
         return hasRole('admin') || hasRole('manager') ? <MapPage /> : <LeavePage initialTab="demandes" />;
       case 'adminUsers':
         return hasRole('admin') ? <UsersAdminPage /> : <LeavePage initialTab="demandes" />;
+      case 'customers':
+        return hasRole('admin') || hasRole('manager') ? <CustomersPage /> : <LeavePage initialTab="demandes" />;
+      case 'interventions':
+        return hasRole('admin') || hasRole('manager') ? <InterventionsPage /> : <LeavePage initialTab="demandes" />;
+      case 'vehicles':
+        return hasRole('admin') || hasRole('manager') ? <VehiclesPage /> : <LeavePage initialTab="demandes" />;
+      case 'routes':
+        return hasRole('admin') || hasRole('manager') ? <RoutesPage /> : <LeavePage initialTab="demandes" />;
       case 'rh':
       case 'dashboard':
       case 'alerts':

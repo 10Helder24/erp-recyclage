@@ -204,7 +204,7 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
               <h1>Centre de tri</h1>
               <p>Relevé du: {currentDate}</p>
             </div>
-            <div className="page-actions">
+            <div className="page-actions cdt-actions">
               <button
                 onClick={() => handlePreview(formData, currentDate)}
                 className="btn btn-outline"
@@ -240,7 +240,7 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
               <div className="destruction-section__header">
                 <h2>Types de bennes</h2>
               </div>
-              <div className="calendar-table-wrapper">
+              <div className="calendar-table-wrapper cdt-table-wrapper">
                 <table className="calendar-table">
                   <thead>
                     <tr>
@@ -277,7 +277,7 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
               </div>
             </section>
 
-            <section className="destruction-section">
+            <section className="destruction-section cdt-client-returns">
               <div className="destruction-section__header">
                 <h2>Retour matériel client</h2>
               </div>

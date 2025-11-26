@@ -11,27 +11,105 @@ export type MapUserLocation = {
   last_name: string;
   employee_email: string;
   department: string | null;
+  role: string | null;
+  manager_name: string | null;
+};
+
+export type MapUserLocationHistory = {
+  id: string;
+  employee_id: string;
+  latitude: number;
+  longitude: number;
+  recorded_at: string;
+  first_name: string;
+  last_name: string;
+  employee_email: string;
+  department: string | null;
+  role: string | null;
+  manager_name: string | null;
+};
+
+export type Customer = {
+  id: string;
+  name: string;
+  address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  risk_level: string | null;
+  created_at: string;
+};
+
+export type Intervention = {
+  id: string;
+  customer_id: string | null;
+  customer_name: string;
+  customer_address: string | null;
+  title: string;
+  description: string | null;
+  status: string;
+  priority: string;
+  created_by: string | null;
+  assigned_to: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by_name: string | null;
+  assigned_to_name: string | null;
+};
+
+export type Route = {
+  id: string;
+  date: string;
+  vehicle_id: string | null;
+  status: string | null;
+  path: Array<[number, number]> | null;
+  created_at: string;
+  internal_number: string | null;
+  plate_number: string | null;
+};
+
+export type RouteStop = {
+  id: string;
+  route_id: string;
+  customer_id: string | null;
+  customer_name: string | null;
+  customer_address: string | null;
+  order_index: number;
+  estimated_time: string | null;
+  status: string | null;
+  notes: string | null;
+  completed_at: string | null;
 };
 
 export type MapVehicle = {
   id: string;
   internal_number: string | null;
   plate_number: string | null;
+  created_at?: string;
 };
 
-export type MapRouteStop = {
+export type MapRoute = {
   id: string;
-  order_index: number;
-  estimated_time: string | null;
   status: string | null;
-  notes: string | null;
-  customer_name: string | null;
-  customer_address: string | null;
-  latitude: number | null;
-  longitude: number | null;
+  path: Array<[number, number]>;
   vehicle_id: string | null;
   internal_number: string | null;
   plate_number: string | null;
+  stops: Array<{
+    id: string;
+    order_index: number;
+    estimated_time: string | null;
+    status: string | null;
+    notes: string | null;
+    completed_at: string | null;
+    customer_name: string | null;
+    customer_address: string | null;
+    latitude: number | null;
+    longitude: number | null;
+    risk_level: string | null;
+  }>;
 };
 
 type DeclassementEmailPayload = {
@@ -316,18 +394,117 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
-  fetchUserLocations: () => request<MapUserLocation[]>('/map/user-locations'),
+  fetchUserLocations: (filters?: { department?: string; role?: string; manager?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.department) params.set('department', filters.department);
+    if (filters?.role) params.set('role', filters.role);
+    if (filters?.manager) params.set('manager', filters.manager);
+    const query = params.toString();
+    return request<MapUserLocation[]>(`/map/user-locations${query ? `?${query}` : ''}`);
+  },
   updateCurrentLocation: (payload: { latitude: number; longitude: number }) =>
     request<void>('/map/user-locations', {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
   fetchVehicles: () => request<MapVehicle[]>('/map/vehicles'),
+  fetchAllVehicles: () => request<MapVehicle[]>('/vehicles'),
   fetchRouteStops: (params: { date: string; vehicleId?: string }) => {
     const query = new URLSearchParams({ date: params.date });
     if (params.vehicleId) {
       query.append('vehicleId', params.vehicleId);
     }
-    return request<MapRouteStop[]>(`/map/routes?${query.toString()}`);
-  }
+    return request<MapRoute[]>(`/map/routes?${query.toString()}`);
+  },
+  fetchUserLocationHistory: (params: { date: string; employeeId?: string; timeFrom?: string; timeTo?: string }) => {
+    const query = new URLSearchParams({ date: params.date });
+    if (params.employeeId) query.append('employeeId', params.employeeId);
+    if (params.timeFrom) query.append('timeFrom', params.timeFrom);
+    if (params.timeTo) query.append('timeTo', params.timeTo);
+    return request<MapUserLocationHistory[]>(`/map/user-locations/history?${query.toString()}`);
+  },
+  createIntervention: (payload: {
+    customer_id?: string;
+    customer_name: string;
+    customer_address?: string;
+    title: string;
+    description?: string;
+    priority?: string;
+    assigned_to?: string;
+    latitude?: number;
+    longitude?: number;
+    notes?: string;
+  }) =>
+    request<{ id: string; message: string }>('/interventions', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  // Clients
+  fetchCustomers: () => request<Customer[]>('/customers'),
+  createCustomer: (payload: { name: string; address?: string; latitude?: number; longitude?: number; risk_level?: string }) =>
+    request<{ id: string; message: string }>('/customers', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateCustomer: (id: string, payload: { name?: string; address?: string; latitude?: number; longitude?: number; risk_level?: string }) =>
+    request<{ message: string }>(`/customers/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteCustomer: (id: string) => request<{ message: string }>(`/customers/${id}`, { method: 'DELETE' }),
+  // Véhicules
+  createVehicle: (payload: { internal_number?: string; plate_number?: string }) =>
+    request<{ id: string; message: string }>('/vehicles', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateVehicle: (id: string, payload: { internal_number?: string; plate_number?: string }) =>
+    request<{ message: string }>(`/vehicles/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteVehicle: (id: string) => request<{ message: string }>(`/vehicles/${id}`, { method: 'DELETE' }),
+  // Interventions
+  fetchInterventions: (params?: { status?: string; priority?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.status) query.append('status', params.status);
+    if (params?.priority) query.append('priority', params.priority);
+    return request<Intervention[]>(`/interventions${query.toString() ? `?${query.toString()}` : ''}`);
+  },
+  updateIntervention: (id: string, payload: { status?: string; priority?: string; assigned_to?: string; notes?: string }) =>
+    request<{ message: string }>(`/interventions/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteIntervention: (id: string) => request<{ message: string }>(`/interventions/${id}`, { method: 'DELETE' }),
+  // Routes
+  fetchRoutes: (params?: { date?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.date) query.append('date', params.date);
+    return request<Route[]>('/routes' + (query.toString() ? `?${query.toString()}` : ''));
+  },
+  createRoute: (payload: { date: string; vehicle_id?: string; status?: string; path?: Array<[number, number]> }) =>
+    request<{ id: string; message: string }>('/routes', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateRoute: (id: string, payload: { date?: string; vehicle_id?: string; status?: string; path?: Array<[number, number]> }) =>
+    request<{ message: string }>(`/routes/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteRoute: (id: string) => request<{ message: string }>(`/routes/${id}`, { method: 'DELETE' }),
+  // Arrêts de route
+  fetchRouteStopsByRoute: (routeId: string) => request<RouteStop[]>('/route-stops?route_id=' + routeId),
+  createRouteStop: (payload: { route_id: string; customer_id?: string; order_index: number; estimated_time?: string; notes?: string }) =>
+    request<{ id: string; message: string }>('/route-stops', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateRouteStop: (id: string, payload: { customer_id?: string; order_index?: number; estimated_time?: string; status?: string; notes?: string; completed_at?: string }) =>
+    request<{ message: string }>(`/route-stops/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteRouteStop: (id: string) => request<{ message: string }>(`/route-stops/${id}`, { method: 'DELETE' })
 };

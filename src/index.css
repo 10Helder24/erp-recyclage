@@ -372,12 +372,25 @@ button {
 
 .calendar-table-wrapper {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.calendar-table-wrapper.cdt-table-wrapper {
+  margin: 0 -20px;
+  padding: 0 20px;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .calendar-table {
   width: 100%;
   min-width: 720px;
   border-collapse: collapse;
+}
+
+.cdt-table-wrapper .calendar-table {
+  min-width: 1000px;
 }
 
 .calendar-table th,
@@ -395,6 +408,18 @@ button {
   background: var(--card-bg);
   text-align: left;
   z-index: 2;
+}
+
+.cdt-table-wrapper .calendar-table th.sticky,
+.cdt-table-wrapper .calendar-table td.sticky {
+  background: #fff;
+  box-shadow: 2px 0 4px rgba(0, 0, 0, 0.05);
+  min-width: 180px;
+}
+
+.cdt-table-wrapper .calendar-table thead th.sticky {
+  background: #f8fafc;
+  z-index: 3;
 }
 
 .calendar-table thead th {
@@ -1037,6 +1062,80 @@ button {
   font-size: 0.9rem;
 }
 
+/* Alertes cartographiques */
+.map-alerts-container {
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.map-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 12px;
+  border-left: 4px solid;
+  background: var(--card-bg);
+  box-shadow: var(--shadow-soft);
+}
+
+.map-alert--risk {
+  border-left-color: #ef4444;
+  background: linear-gradient(90deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
+}
+
+.map-alert--proximity {
+  border-left-color: #f97316;
+  background: linear-gradient(90deg, rgba(249, 115, 22, 0.1) 0%, rgba(249, 115, 22, 0.05) 100%);
+}
+
+.map-alert--empty {
+  border-left-color: #3b82f6;
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.1) 0%, rgba(59, 130, 246, 0.05) 100%);
+}
+
+.map-alert svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.map-alert--risk svg {
+  color: #ef4444;
+}
+
+.map-alert--proximity svg {
+  color: #f97316;
+}
+
+.map-alert--empty svg {
+  color: #3b82f6;
+}
+
+.map-alert > div {
+  flex: 1;
+}
+
+.map-alert strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.map-alert ul {
+  margin: 0;
+  padding-left: 20px;
+  list-style: disc;
+}
+
+.map-alert li {
+  margin: 4px 0;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
 .map-page .map-filters {
   display: flex;
   flex-wrap: wrap;
@@ -1085,6 +1184,16 @@ button {
   overflow: hidden;
 }
 
+.map-reset {
+  align-self: flex-end;
+  padding: 8px 16px;
+}
+
+.map-pending {
+  align-self: flex-end;
+  padding: 8px 16px;
+}
+
 .map-container {
   width: 100%;
   height: 100%;
@@ -1093,6 +1202,35 @@ button {
 .map-hint {
   margin-top: 12px;
   color: var(--text-muted);
+}
+
+/* Mode rejeu */
+.map-filters input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: var(--divider);
+  border-radius: 3px;
+  outline: none;
+}
+
+.map-filters input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  background: var(--primary);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.map-filters input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  background: var(--primary);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
 }
 
 .map-marker__dot {
@@ -1121,6 +1259,41 @@ button {
   margin-top: 6px;
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.status-chip--online {
+  background: rgba(34, 197, 94, 0.15);
+  color: #15803d;
+}
+
+.status-chip--warning {
+  background: rgba(249, 115, 22, 0.15);
+  color: #c2410c;
+}
+
+.status-chip--offline {
+  background: rgba(148, 163, 184, 0.2);
+  color: #475569;
+}
+
+.map-popup-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+
+.btn-small {
+  padding: 6px 12px;
+  font-size: 0.85rem;
 }
 
 .geo-banner {
@@ -2215,6 +2388,167 @@ button {
     padding: 16px;
     max-height: calc(100vh - 24px);
     overflow-y: auto;
+  }
+
+  /* Améliorations pour les nouvelles pages de gestion */
+  .map-input {
+    width: 100%;
+  }
+
+  .destruction-field {
+    width: 100%;
+  }
+
+  .destruction-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* RoutesPage - Arrêts de route sur mobile */
+  .route-stops-container {
+    gap: 12px;
+  }
+
+  .route-stop-card {
+    padding: 12px;
+  }
+
+  .route-stop-card .info-row {
+    font-size: 0.85rem;
+  }
+
+  /* InterventionsPage - Filtres sur mobile */
+  .interventions-filters {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .interventions-filters .map-input {
+    width: 100%;
+  }
+
+  /* RoutesPage - Date picker sur mobile */
+  .routes-date-picker {
+    width: 100%;
+  }
+
+  .routes-date-picker .destruction-field {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Cartes avec actions sur mobile */
+  .employee-card-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .employee-card-header > div:first-child {
+    width: 100%;
+  }
+
+  .employee-card-header .btn-small {
+    font-size: 0.75rem;
+    padding: 6px 10px;
+  }
+
+  /* Modals - Formulaires sur mobile */
+  .modal-actions {
+    flex-direction: column-reverse;
+    gap: 8px;
+  }
+
+  .modal-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Tags et badges sur mobile */
+  .tag {
+    font-size: 0.75rem;
+    padding: 4px 8px;
+  }
+
+  /* RoutesPage - Liste des arrêts */
+  .route-stops-list {
+    gap: 10px;
+  }
+
+  .route-stop-item {
+    padding: 10px;
+    font-size: 0.9rem;
+  }
+
+  .route-stop-item .info-row {
+    margin-top: 6px;
+  }
+
+  /* Page header sur mobile */
+  .page-subtitle {
+    font-size: 0.85rem;
+  }
+
+  /* Buttons dans les cartes sur mobile */
+  .employee-card .btn-outline.btn-small {
+    min-width: 36px;
+    padding: 6px;
+  }
+
+  /* CDTSheets - Table responsive sur mobile */
+  .cdt-table-wrapper {
+    margin: 0 -16px;
+    padding: 0 16px;
+  }
+
+  .cdt-table-wrapper .calendar-table {
+    min-width: 600px;
+    font-size: 0.8rem;
+  }
+
+  .cdt-table-wrapper .calendar-table th,
+  .cdt-table-wrapper .calendar-table td {
+    padding: 8px 4px;
+    font-size: 0.75rem;
+  }
+
+  .cdt-table-wrapper .calendar-table th:first-child,
+  .cdt-table-wrapper .calendar-table td:first-child {
+    min-width: 140px;
+    position: sticky;
+    left: 0;
+    background: #fff;
+    z-index: 1;
+    box-shadow: 2px 0 4px rgba(0, 0, 0, 0.05);
+  }
+
+  .cdt-table-wrapper .calendar-table th:first-child {
+    background: #f8fafc;
+    z-index: 2;
+  }
+
+  /* CDTSheets - Section retour client sur mobile */
+  .cdt-client-returns {
+    margin-top: 20px;
+  }
+
+  .cdt-client-returns .destruction-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .cdt-client-returns .destruction-field {
+    width: 100%;
+  }
+
+  /* CDTSheets - Actions sur mobile */
+  .cdt-actions {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .cdt-actions .btn {
+    width: 100%;
+    justify-content: center;
   }
 
   .destruction-section {
