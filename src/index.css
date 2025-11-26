@@ -1285,11 +1285,11 @@ button {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: calc(14px + env(safe-area-inset-top, 0)) 18px 14px;
+    padding: calc(12px + env(safe-area-inset-top, 0)) 18px 12px;
     background: rgba(15, 23, 42, 0.9);
     color: #fff;
     position: sticky;
-    top: 0;
+    top: env(safe-area-inset-top, 0);
     left: 0;
     right: 0;
     width: 100%;
@@ -1298,6 +1298,11 @@ button {
     border-bottom-left-radius: 18px;
     border-bottom-right-radius: 18px;
     box-shadow: 0 12px 30px rgba(15, 23, 42, 0.35);
+  }
+
+  .sidebar.open + .mobile-topbar {
+    opacity: 0;
+    pointer-events: none;
   }
 
   .mobile-menu-button {
