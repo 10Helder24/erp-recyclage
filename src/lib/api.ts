@@ -4,6 +4,7 @@ import type { Leave, LeaveBalance, LeaveRequestPayload, LeaveStatus } from '../t
 
 type DeclassementEmailPayload = {
   dateTime: string;
+  companyName?: string;
   vehiclePlate?: string;
   slipNumber?: string;
   notes?: string;

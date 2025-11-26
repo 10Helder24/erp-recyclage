@@ -421,8 +421,14 @@ const ExpeditionPage = () => {
                     const dayKey = toInputValue(day);
                     const slots = ensureCellArray(row.id, dayKey);
                     const isHolidayDay = Boolean(holidays[dayKey]?.isHoliday);
+                    const dayName = headerFormatter.format(day);
+                    const dayNum = day.getDate().toString().padStart(2, '0');
                     return (
                       <div key={dayKey} className={`expedition-cell${isHolidayDay ? ' holiday' : ''}`}>
+                        <div className="expedition-day-label-mobile">
+                          {dayName} {dayNum}
+                          {isHolidayDay && <span className="expedition-holiday-badge">Férié</span>}
+                        </div>
                         {slots.map((slot, slotIndex) => (
                           <div key={`${dayKey}-${slotIndex}`} className="expedition-slot">
                             <input

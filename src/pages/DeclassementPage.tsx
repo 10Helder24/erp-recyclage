@@ -26,6 +26,7 @@ const MAX_TOTAL_PHOTO_BYTES = 33 * 1024 * 1024;
 
 const DeclassementPage = () => {
   const [dateTime, setDateTime] = useState(() => getSwissDateTimeInputValue());
+  const [companyName, setCompanyName] = useState('');
   const [vehiclePlate, setVehiclePlate] = useState('');
   const [slipNumber, setSlipNumber] = useState('');
   const [generalNotes, setGeneralNotes] = useState('');
@@ -84,8 +85,8 @@ const DeclassementPage = () => {
   };
 
   const getPdfInput = () => {
-    if (!vehiclePlate && !slipNumber) {
-      toast.error('Renseignez au moins la plaque ou le numéro de bon.');
+    if (!companyName && !vehiclePlate && !slipNumber) {
+      toast.error('Renseignez au moins le nom de l\'entreprise, la plaque ou le numéro de bon.');
       return null;
     }
     if (!entries.some((entry) => entry.sourceMaterial && entry.targetMaterial)) {
@@ -96,6 +97,7 @@ const DeclassementPage = () => {
     return {
       dateLabel: formattedDate,
       isoDateTime: dateTime,
+      companyName,
       vehiclePlate,
       slipNumber,
       entries,
@@ -126,6 +128,7 @@ const DeclassementPage = () => {
 
       await Api.sendDeclassement({
         dateTime,
+        companyName,
         vehiclePlate,
         slipNumber,
         notes: generalNotes,
@@ -186,12 +189,16 @@ const DeclassementPage = () => {
                 <input type="datetime-local" className="destruction-input" value={dateTime} onChange={(e) => setDateTime(e.target.value)} />
               </label>
               <label className="destruction-field">
+                <span>Nom de l'entreprise</span>
+                <input type="text" className="destruction-input" value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="Si pas de plaque" />
+              </label>
+              <label className="destruction-field">
                 <span>Plaque du véhicule</span>
-                <input type="text" className="destruction-input" value={vehiclePlate} onChange={(e) => setVehiclePlate(e.target.value.toUpperCase())} />
+                <input type="text" className="destruction-input" value={vehiclePlate} onChange={(e) => setVehiclePlate(e.target.value.toUpperCase())} placeholder="Si disponible" />
               </label>
               <label className="destruction-field">
                 <span>Bon / Référence</span>
-                <input type="text" className="destruction-input" value={slipNumber} onChange={(e) => setSlipNumber(e.target.value)} />
+                <input type="text" className="destruction-input" value={slipNumber} onChange={(e) => setSlipNumber(e.target.value)} placeholder="Si disponible" />
               </label>
             </div>
 
@@ -264,6 +271,7 @@ const DeclassementPage = () => {
 async function buildPdf({
   dateLabel,
   isoDateTime,
+  companyName,
   vehiclePlate,
   slipNumber,
   entries,
@@ -272,6 +280,7 @@ async function buildPdf({
 }: {
   dateLabel: string;
   isoDateTime: string;
+  companyName: string;
   vehiclePlate: string;
   slipNumber: string;
   entries: DeclassementEntry[];
@@ -377,8 +386,22 @@ async function buildPdf({
   // Info cards
   const leftCardX = margin;
   const rightCardX = margin + innerWidth / 2 + 4;
-  const cardsHeight = drawInfoCard(leftCardX, 'Plaque véhicule', vehiclePlate);
-  drawInfoCard(rightCardX, 'Bon / Référence', slipNumber);
+  let cardsHeight = 0;
+  if (companyName) {
+    cardsHeight = drawInfoCard(leftCardX, 'Nom entreprise', companyName);
+    if (vehiclePlate) {
+      drawInfoCard(rightCardX, 'Plaque véhicule', vehiclePlate);
+    } else if (slipNumber) {
+      drawInfoCard(rightCardX, 'Bon / Référence', slipNumber);
+    }
+  } else if (vehiclePlate) {
+    cardsHeight = drawInfoCard(leftCardX, 'Plaque véhicule', vehiclePlate);
+    if (slipNumber) {
+      drawInfoCard(rightCardX, 'Bon / Référence', slipNumber);
+    }
+  } else if (slipNumber) {
+    cardsHeight = drawInfoCard(leftCardX, 'Bon / Référence', slipNumber);
+  }
   y += cardsHeight + 8;
 
   // Entries section

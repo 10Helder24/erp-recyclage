@@ -458,6 +458,121 @@ button {
   border: 1px solid rgba(220, 38, 38, 0.5);
 }
 
+.calendar-mobile {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.calendar-mobile-card {
+  background: var(--card-bg);
+  border-radius: 22px;
+  padding: 16px;
+  box-shadow: var(--shadow-soft);
+}
+
+.calendar-mobile-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.calendar-mobile-card header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.calendar-mobile-count {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.calendar-mobile-card ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.calendar-mobile-leave {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.calendar-mobile-leave-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.calendar-mobile-leave p {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.calendar-mobile-leave small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.calendar-mobile-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 960px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+  }
+
+  .page-actions {
+    width: 100%;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .page-actions .btn,
+  .page-actions .btn-outline,
+  .page-actions .btn-primary {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .calendar-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .calendar-controls select {
+    width: 100%;
+  }
+
+  .calendar-controls-group {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .tab-nav {
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+}
+
 .upload-field {
   border: 1px dashed var(--divider);
   border-radius: 16px;
@@ -1213,6 +1328,8 @@ button {
 @media (max-width: 640px) {
   .page-actions {
     width: 100%;
+    flex-direction: column;
+    gap: 8px;
   }
 
   .btn,
@@ -1220,6 +1337,7 @@ button {
   .btn-outline {
     flex: 1;
     justify-content: center;
+    width: 100%;
   }
 
   .card {
@@ -1233,6 +1351,74 @@ button {
 
   .modal-panel {
     padding: 20px;
+  }
+
+  /* Destruction/Déclassement mobile */
+  .destruction-page {
+    padding: 16px 0;
+  }
+
+  .destruction-card__header {
+    flex-direction: column;
+    padding: 20px 20px 0;
+    gap: 16px;
+  }
+
+  .destruction-card__header h1 {
+    font-size: 1.5rem;
+  }
+
+  .destruction-card__body {
+    padding: 20px;
+  }
+
+  .destruction-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .destruction-section {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .destruction-section__header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .destruction-section__header h2 {
+    font-size: 1rem;
+  }
+
+  .declassement-row {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid var(--divider);
+    border-radius: 12px;
+  }
+
+  .declassement-row > div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .declassement-row button {
+    align-self: flex-end;
+    margin-top: 8px;
+  }
+
+  .upload-field {
+    padding: 12px;
+    font-size: 0.9rem;
+  }
+
+  .photo-list {
+    font-size: 0.8rem;
+    margin-left: 16px;
   }
 }
 
@@ -1880,6 +2066,126 @@ button {
 
   .photo-list {
     font-size: 0.85rem;
+  }
+
+  /* Expéditions mobile */
+  .expedition-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .expedition-grid-header {
+    display: none;
+  }
+
+  .expedition-grid-row {
+    border: 1px solid var(--divider);
+    border-radius: 12px;
+    padding: 12px;
+    background: #fff;
+  }
+
+  .expedition-label {
+    font-size: 0.9rem;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--divider);
+  }
+
+  .expedition-label-input {
+    font-size: 0.9rem;
+    padding: 8px 12px;
+  }
+
+  .expedition-cell {
+    margin-bottom: 12px;
+    padding: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    background: #f8fafc;
+  }
+
+  .expedition-cell:last-child {
+    margin-bottom: 0;
+  }
+
+  .expedition-cell.holiday {
+    background: rgba(220, 38, 38, 0.1);
+    border-color: rgba(220, 38, 38, 0.3);
+  }
+
+  .expedition-slot {
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  }
+
+  .expedition-slot:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  .expedition-slot .destruction-input {
+    font-size: 0.9rem;
+    padding: 8px 10px;
+  }
+
+  .expedition-controls {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .expedition-chips {
+    width: 100%;
+  }
+
+  .expedition-chip {
+    font-size: 0.85rem;
+    padding: 6px 12px;
+  }
+
+  /* Inventaires mobile */
+  .calendar-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .calendar-table {
+    min-width: 800px;
+    font-size: 0.85rem;
+  }
+
+  .calendar-table th,
+  .calendar-table td {
+    padding: 8px 6px;
+    font-size: 0.8rem;
+  }
+
+  .calendar-table th.sticky,
+  .calendar-table td.sticky {
+    min-width: 120px;
+  }
+
+  .expedition-day-label-mobile {
+    display: block;
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: #0f172a;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.3);
+  }
+
+  .expedition-day-label-mobile .expedition-holiday-badge {
+    margin-left: 8px;
+    font-size: 0.7rem;
+    padding: 2px 6px;
+  }
+}
+
+@media (min-width: 641px) {
+  .expedition-day-label-mobile {
+    display: none;
   }
 }
 

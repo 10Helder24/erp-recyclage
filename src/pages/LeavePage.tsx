@@ -227,6 +227,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
   const managerSignatureRef = useRef<SignatureCanvas | null>(null);
 
   const days = useMemo(() => getMonthDays(currentDate.getFullYear(), currentDate.getMonth()), [currentDate]);
+  const [isCompactLayout, setIsCompactLayout] = useState(false);
   const approvedCalendarLeaves = useMemo(
     () => calendarLeaves.filter((leave) => leave.status === 'approuve'),
     [calendarLeaves]
@@ -282,6 +283,14 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
       setActiveTab(availableTabs[0]);
     }
   }, [availableTabs, activeTab]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const updateLayout = () => setIsCompactLayout(window.innerWidth <= 960);
+    updateLayout();
+    window.addEventListener('resize', updateLayout);
+    return () => window.removeEventListener('resize', updateLayout);
+  }, []);
 
   const getLeaveForDay = useCallback(
     (employeeId: string, date: Date) => {
@@ -507,6 +516,17 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
       locale: fr
     })}`;
 
+  const mobileEmployeeSummaries = useMemo(() => {
+    if (!isCompactLayout) {
+      return [];
+    }
+
+    return displayEmployees.map((employee) => ({
+      employee,
+      leaves: approvedCalendarLeaves.filter((leave) => leave.employee_id === employee.id)
+    }));
+  }, [isCompactLayout, displayEmployees, approvedCalendarLeaves]);
+
   return (
     <section>
       <div className="page-header">
@@ -617,61 +637,106 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
                 {showEmptyCalendarMessage && (
                   <div className="calendar-hint">Aucun congé approuvé pour ce mois. Les jours fériés et week-ends restent visibles.</div>
                 )}
-                <div className="calendar-table-wrapper">
-                  <table className="calendar-table">
-                    <thead>
-                      <tr>
-                        <th className="sticky">Employé</th>
-                        {days.map((day) => {
-                          const dayClasses = ['calendar-day-header'];
-                          if (isDateWeekend(day)) dayClasses.push('weekend');
-                          if (isHoliday(day, selectedCanton)) dayClasses.push('holiday');
-                          return (
-                            <th key={day.toISOString()} className={dayClasses.join(' ')}>
-                              {day.getDate()}
-                            </th>
-                          );
-                        })}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {displayEmployees.length === 0 ? (
-                        <tr className="calendar-placeholder-row">
-                          <td className="sticky">—</td>
-                          <td colSpan={days.length} className="calendar-placeholder-cell">
-                            Aucun congé approuvé ce mois-ci
-                          </td>
+                {isCompactLayout ? (
+                  <div className="calendar-mobile">
+                    {displayEmployees.length === 0 ? (
+                      <div className="calendar-hint">Aucun congé approuvé ce mois-ci</div>
+                    ) : (
+                      mobileEmployeeSummaries.map(({ employee, leaves }) => (
+                        <article key={employee.id} className="calendar-mobile-card">
+                          <header>
+                            <div>
+                              <strong>
+                                {employee.first_name} {employee.last_name}
+                              </strong>
+                              <p>{employee.department || 'Département non défini'}</p>
+                            </div>
+                            <span className="calendar-mobile-count">{leaves.length} période(s)</span>
+                          </header>
+                          {leaves.length === 0 ? (
+                            <p className="calendar-mobile-empty">Pas de congé ce mois.</p>
+                          ) : (
+                            <ul>
+                              {leaves.map((leave) => (
+                                <li key={leave.id} className="calendar-mobile-leave">
+                                  <span
+                                    className="calendar-mobile-leave-dot"
+                                    style={{ background: TYPE_COLORS[leave.type] }}
+                                    aria-hidden
+                                  />
+                                  <div>
+                                    <p>{TYPE_LABELS[leave.type]}</p>
+                                    <small>{formatRange(leave)}</small>
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </article>
+                      ))
+                    )}
+                  </div>
+                ) : (
+                  <div className="calendar-table-wrapper">
+                    <table className="calendar-table">
+                      <thead>
+                        <tr>
+                          <th className="sticky">Employé</th>
+                          {days.map((day) => {
+                            const dayClasses = ['calendar-day-header'];
+                            if (isDateWeekend(day)) dayClasses.push('weekend');
+                            if (isHoliday(day, selectedCanton)) dayClasses.push('holiday');
+                            return (
+                              <th key={day.toISOString()} className={dayClasses.join(' ')}>
+                                {day.getDate()}
+                              </th>
+                            );
+                          })}
                         </tr>
-                      ) : (
-                        displayEmployees.map((employee) => (
-                          <tr key={employee.id}>
-                            <td className="sticky">{`${employee.first_name} ${employee.last_name}`}</td>
-                            {days.map((day) => {
-                              const leave = getLeaveForDay(employee.id, day);
-                            const classNames = ['calendar-cell'];
-                              if (isDateWeekend(day)) classNames.push('weekend');
-                              if (isHoliday(day, selectedCanton)) classNames.push('holiday');
-                            if (leave) classNames.push('leave');
-                            const cellStyle: React.CSSProperties = {};
-                            if (isHoliday(day, selectedCanton)) {
-                              cellStyle.boxShadow = 'inset 0 0 0 2px rgba(248, 113, 113, 0.9)';
-                            }
-                              return (
-                                <td key={`${employee.id}-${day.toISOString()}`}>
-                                <div className={classNames.join(' ')} style={Object.keys(cellStyle).length > 0 ? cellStyle : undefined}>
-                                  {leave && (
-                                    <span className="calendar-leave-pill" style={{ background: TYPE_COLORS[leave.type] }} aria-label={TYPE_LABELS[leave.type]} />
-                                  )}
-                                </div>
-                                </td>
-                              );
-                            })}
+                      </thead>
+                      <tbody>
+                        {displayEmployees.length === 0 ? (
+                          <tr className="calendar-placeholder-row">
+                            <td className="sticky">—</td>
+                            <td colSpan={days.length} className="calendar-placeholder-cell">
+                              Aucun congé approuvé ce mois-ci
+                            </td>
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                        ) : (
+                          displayEmployees.map((employee) => (
+                            <tr key={employee.id}>
+                              <td className="sticky">{`${employee.first_name} ${employee.last_name}`}</td>
+                              {days.map((day) => {
+                                const leave = getLeaveForDay(employee.id, day);
+                                const classNames = ['calendar-cell'];
+                                if (isDateWeekend(day)) classNames.push('weekend');
+                                if (isHoliday(day, selectedCanton)) classNames.push('holiday');
+                                if (leave) classNames.push('leave');
+                                const cellStyle: React.CSSProperties = {};
+                                if (isHoliday(day, selectedCanton)) {
+                                  cellStyle.boxShadow = 'inset 0 0 0 2px rgba(248, 113, 113, 0.9)';
+                                }
+                                return (
+                                  <td key={`${employee.id}-${day.toISOString()}`}>
+                                    <div className={classNames.join(' ')} style={Object.keys(cellStyle).length > 0 ? cellStyle : undefined}>
+                                      {leave && (
+                                        <span
+                                          className="calendar-leave-pill"
+                                          style={{ background: TYPE_COLORS[leave.type] }}
+                                          aria-label={TYPE_LABELS[leave.type]}
+                                        />
+                                      )}
+                                    </div>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
 

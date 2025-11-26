@@ -1232,6 +1232,7 @@ app.post(
 
 type DeclassementEmailPayload = {
   dateTime: string;
+  companyName?: string;
   vehiclePlate?: string;
   slipNumber?: string;
   notes?: string;
@@ -1249,7 +1250,7 @@ type DeclassementEmailPayload = {
 app.post(
   '/api/declassements/send',
   asyncHandler(async (req, res) => {
-    const { dateTime, vehiclePlate, slipNumber, notes, entries, pdfBase64, pdfFilename } =
+    const { dateTime, companyName, vehiclePlate, slipNumber, notes, entries, pdfBase64, pdfFilename } =
       req.body as DeclassementEmailPayload;
 
     if (!pdfBase64) {
@@ -1277,8 +1278,9 @@ app.post(
 
     const textBody = [
       `Déclassement réalisé le : ${dateTime || new Date().toISOString()}`,
-      `Plaque véhicule : ${vehiclePlate || '—'}`,
-      `Bon / Référence : ${slipNumber || '—'}`,
+      companyName ? `Nom entreprise : ${companyName}` : null,
+      vehiclePlate ? `Plaque véhicule : ${vehiclePlate}` : null,
+      slipNumber ? `Bon / Référence : ${slipNumber}` : null,
       '',
       'Détails :',
       entriesSummary,
@@ -1286,11 +1288,11 @@ app.post(
       `Notes : ${notes || '—'}`,
       '',
       'Le rapport PDF (incluant les photos) est joint à cet e-mail.'
-    ].join('\n');
+    ].filter(Boolean).join('\n');
 
     await sendBrevoEmail({
       to: recipients,
-      subject: `Déclassement matières - ${vehiclePlate || slipNumber || dateTime}`,
+      subject: `Déclassement matières - ${companyName || vehiclePlate || slipNumber || dateTime}`,
       text: textBody,
       attachments: [
         {
