@@ -99,6 +99,7 @@ export type MapRoute = {
   plate_number: string | null;
   stops: Array<{
     id: string;
+    customer_id: string | null;
     order_index: number;
     estimated_time: string | null;
     status: string | null;

@@ -2,7 +2,8 @@ import { useEffect, useState, useMemo } from 'react';
 import { AlertTriangle, Filter, CheckCircle, Clock, XCircle, Edit2, Trash2, Plus, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-import { Api, type Intervention, type Employee } from '../lib/api';
+import { Api, type Intervention } from '../lib/api';
+import type { Employee } from '../types/employees';
 import { useAuth } from '../hooks/useAuth';
 
 const STATUS_OPTIONS = [
