@@ -240,7 +240,9 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
               <div className="destruction-section__header">
                 <h2>Types de bennes</h2>
               </div>
-              <div className="calendar-table-wrapper cdt-table-wrapper">
+              
+              {/* Vue desktop - Tableau */}
+              <div className="calendar-table-wrapper cdt-table-wrapper cdt-table-desktop">
                 <table className="calendar-table">
                   <thead>
                     <tr>
@@ -274,6 +276,38 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
                     ))}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Vue mobile - Cartes */}
+              <div className="cdt-mobile-cards">
+                {binTypes.map((item, index) => (
+                  <div key={index} className="cdt-mobile-card">
+                    <h3 className="cdt-mobile-card-title">{item.name}</h3>
+                    <div className="cdt-mobile-card-fields">
+                      {[
+                        { key: '7m3', label: '7m3' },
+                        { key: '10m3', label: '10m3' },
+                        { key: '20m3', label: '20m3' },
+                        { key: '36m3', label: '36m3' },
+                        { key: '24m3', label: '24m3 compacteur' },
+                        { key: 'benne', label: 'en benne' },
+                        { key: 'vrac', label: 'en vrac estimé' },
+                        { key: 'vider', label: 'A vider sur site' }
+                      ].map(({ key, label }) => (
+                        <div key={key} className="cdt-mobile-field">
+                          <label className="cdt-mobile-field-label">{label}</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={formData[`${item.name}_${key}`] || ''}
+                            onChange={(e) => handleInputChange(`${item.name}_${key}`, e.target.value)}
+                            placeholder="-"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             </section>
 
