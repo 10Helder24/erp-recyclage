@@ -86,6 +86,27 @@ type LeaveBalanceRow = LeaveBalance & { employee: EmployeeRow };
 
 type UserRole = 'admin' | 'manager' | 'user';
 
+type MapVehicle = {
+  id: string;
+  internal_number: string | null;
+  plate_number: string | null;
+};
+
+type MapRouteStopRow = {
+  id: string;
+  order_index: number;
+  estimated_time: string | null;
+  status: string | null;
+  notes: string | null;
+  customer_name: string | null;
+  customer_address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  vehicle_id: string | null;
+  internal_number: string | null;
+  plate_number: string | null;
+};
+
 type UserRow = {
   id: string;
   email: string;
@@ -413,6 +434,58 @@ const ensureSchema = async () => {
   `);
 
   await run('create unique index if not exists leave_balances_employee_year_idx on leave_balances(employee_id, year)');
+
+  await run(`
+    create table if not exists user_locations (
+      employee_id uuid primary key references employees(id) on delete cascade,
+      latitude double precision not null,
+      longitude double precision not null,
+      last_update timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists user_locations_last_update_idx on user_locations(last_update desc)');
+
+  await run(`
+    create table if not exists vehicles (
+      id uuid primary key,
+      internal_number text,
+      plate_number text,
+      created_at timestamptz not null default now()
+    )
+  `);
+
+  await run(`
+    create table if not exists customers (
+      id uuid primary key,
+      name text not null,
+      address text,
+      latitude double precision,
+      longitude double precision,
+      created_at timestamptz not null default now()
+    )
+  `);
+
+  await run(`
+    create table if not exists routes (
+      id uuid primary key,
+      date date not null,
+      vehicle_id uuid references vehicles(id) on delete set null,
+      created_at timestamptz not null default now()
+    )
+  `);
+
+  await run(`
+    create table if not exists route_stops (
+      id uuid primary key,
+      route_id uuid not null references routes(id) on delete cascade,
+      customer_id uuid references customers(id) on delete set null,
+      order_index int not null default 0,
+      estimated_time timestamptz,
+      status text,
+      notes text
+    )
+  `);
+  await run('create index if not exists route_stops_route_idx on route_stops(route_id)');
 
   await run(`
     create table if not exists users (
@@ -1509,6 +1582,146 @@ app.post(
     });
 
     res.json({ message: 'Email envoyé' });
+  })
+);
+
+app.get(
+  '/api/map/user-locations',
+  requireAuth(),
+  asyncHandler(async (_req, res) => {
+    const rows = await run<
+      {
+        employee_id: string;
+        latitude: number;
+        longitude: number;
+        last_update: string;
+        first_name: string;
+        last_name: string;
+        email: string;
+        department: string | null;
+      }
+    >(
+      `
+        select ul.employee_id,
+               ul.latitude,
+               ul.longitude,
+               ul.last_update,
+               e.first_name,
+               e.last_name,
+               e.email,
+               e.department
+        from user_locations ul
+        join employees e on e.id = ul.employee_id
+        order by ul.last_update desc
+      `
+    );
+    res.json(
+      rows.map((row) => ({
+        employee_id: row.employee_id,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        last_update: row.last_update,
+        first_name: row.first_name,
+        last_name: row.last_name,
+        employee_email: row.email,
+        department: row.department
+      }))
+    );
+  })
+);
+
+app.post(
+  '/api/map/user-locations',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const email = authReq.auth?.email;
+    if (!email) {
+      return res.status(401).json({ message: 'Session expirée' });
+    }
+    const { latitude, longitude } = req.body as { latitude?: number; longitude?: number };
+    if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+      return res.status(400).json({ message: 'Coordonnées invalides' });
+    }
+    const [employee] = await run<{ id: string }>('select id from employees where lower(email) = lower($1)', [email]);
+    if (!employee) {
+      return res.status(404).json({ message: 'Employé introuvable pour cet utilisateur' });
+    }
+    await run(
+      `
+        insert into user_locations(employee_id, latitude, longitude, last_update)
+        values ($1, $2, $3, now())
+        on conflict (employee_id) do update
+        set latitude = excluded.latitude,
+            longitude = excluded.longitude,
+            last_update = now()
+      `,
+      [employee.id, latitude, longitude]
+    );
+    res.status(204).send();
+  })
+);
+
+app.get(
+  '/api/map/vehicles',
+  requireAuth(),
+  asyncHandler(async (_req, res) => {
+    const rows = await run<MapVehicle[]>(`select id, internal_number, plate_number from vehicles order by internal_number nulls last, plate_number`);
+    res.json(rows);
+  })
+);
+
+app.get(
+  '/api/map/routes',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const date = typeof req.query.date === 'string' ? req.query.date : null;
+    const vehicleId = typeof req.query.vehicleId === 'string' ? req.query.vehicleId : null;
+    if (!date) {
+      return res.status(400).json({ message: 'Paramètre "date" requis (YYYY-MM-DD)' });
+    }
+    const params: string[] = [date];
+    let sql = `
+      select rs.id,
+             rs.order_index,
+             rs.estimated_time,
+             rs.status,
+             rs.notes,
+             c.name as customer_name,
+             c.address as customer_address,
+             c.latitude,
+             c.longitude,
+             r.vehicle_id,
+             v.internal_number,
+             v.plate_number
+      from route_stops rs
+      join routes r on r.id = rs.route_id
+      left join customers c on c.id = rs.customer_id
+      left join vehicles v on v.id = r.vehicle_id
+      where r.date = $1
+    `;
+    if (vehicleId) {
+      params.push(vehicleId);
+      sql += ` and r.vehicle_id = $${params.length}`;
+    }
+    sql += ' order by r.vehicle_id nulls last, rs.order_index';
+    const rows = await run<MapRouteStopRow>(sql, params);
+    res.json(
+      rows.map((row) => ({
+        id: row.id,
+        order_index: row.order_index,
+        estimated_time: row.estimated_time,
+        status: row.status,
+        notes: row.notes,
+        customer_name: row.customer_name,
+        customer_address: row.customer_address,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        vehicle_id: row.vehicle_id,
+        internal_number: row.internal_number,
+        plate_number: row.plate_number
+      }))
+    );
   })
 );
 

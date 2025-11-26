@@ -2,6 +2,38 @@
 import type { AuthUser, UserRole } from '../types/auth';
 import type { Leave, LeaveBalance, LeaveRequestPayload, LeaveStatus } from '../types/leaves';
 
+export type MapUserLocation = {
+  employee_id: string;
+  latitude: number;
+  longitude: number;
+  last_update: string;
+  first_name: string;
+  last_name: string;
+  employee_email: string;
+  department: string | null;
+};
+
+export type MapVehicle = {
+  id: string;
+  internal_number: string | null;
+  plate_number: string | null;
+};
+
+export type MapRouteStop = {
+  id: string;
+  order_index: number;
+  estimated_time: string | null;
+  status: string | null;
+  notes: string | null;
+  customer_name: string | null;
+  customer_address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  vehicle_id: string | null;
+  internal_number: string | null;
+  plate_number: string | null;
+};
+
 type DeclassementEmailPayload = {
   dateTime: string;
   companyName?: string;
@@ -283,5 +315,19 @@ export const Api = {
     request<{ message: string }>('/expeditions/send', {
       method: 'POST',
       body: JSON.stringify(payload)
-    })
+    }),
+  fetchUserLocations: () => request<MapUserLocation[]>('/map/user-locations'),
+  updateCurrentLocation: (payload: { latitude: number; longitude: number }) =>
+    request<void>('/map/user-locations', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchVehicles: () => request<MapVehicle[]>('/map/vehicles'),
+  fetchRouteStops: (params: { date: string; vehicleId?: string }) => {
+    const query = new URLSearchParams({ date: params.date });
+    if (params.vehicleId) {
+      query.append('vehicleId', params.vehicleId);
+    }
+    return request<MapRouteStop[]>(`/map/routes?${query.toString()}`);
+  }
 };

@@ -1037,6 +1037,92 @@ button {
   font-size: 0.9rem;
 }
 
+.map-page .map-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.map-page .map-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.map-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--divider);
+  border-radius: 14px;
+  padding: 8px 12px;
+  background: #fff;
+}
+
+.map-input svg {
+  color: var(--text-muted);
+}
+
+.map-input input,
+.map-input select {
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 0.95rem;
+}
+
+.map-card {
+  background: var(--card-bg);
+  border-radius: 28px;
+  box-shadow: var(--shadow-soft);
+  padding: 0;
+  height: 65vh;
+  overflow: hidden;
+}
+
+.map-container {
+  width: 100%;
+  height: 100%;
+}
+
+.map-hint {
+  margin-top: 12px;
+  color: var(--text-muted);
+}
+
+.map-marker__dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.7);
+}
+
+.map-marker__dot--red {
+  background: #dc2626;
+}
+
+.map-marker__dot--blue {
+  background: #2563eb;
+}
+
+.map-marker__dot--me {
+  background: #f97316;
+  width: 24px;
+  height: 24px;
+  box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.8);
+}
+
+.map-note {
+  margin-top: 6px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
 .request-card-info {
   display: flex;
   gap: 12px;

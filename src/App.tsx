@@ -10,6 +10,7 @@ import { InventorySheet } from './pages/InventaireHalleSheet';
 import ExpeditionPage from './pages/ExpeditionPage';
 import UsersAdminPage from './pages/UsersAdminPage';
 import LoginPage from './pages/LoginPage';
+import MapPage from './pages/MapPage';
 import { useAuth } from './hooks/useAuth';
 
 const NAV_LINK_IDS = [
@@ -24,6 +25,7 @@ const NAV_LINK_IDS = [
   'IvntaireHalle',
   'expedition',
   'Declassement',
+  'map',
   'adminUsers'
 ] as const;
 type NavId = (typeof NAV_LINK_IDS)[number];
@@ -66,6 +68,7 @@ const NAV_SECTIONS: NavSection[] = [
           { id: 'expedition', label: 'Expéditions' }
     ]
   },
+  { type: 'link', id: 'map', label: 'Carte' },
   {
     type: 'group',
     id: 'matieres',
@@ -136,6 +139,8 @@ const App = () => {
         return <ExpeditionPage />;
       case 'Declassement':
         return <DeclassementPage />;
+      case 'map':
+        return <MapPage />;
       case 'adminUsers':
         return hasRole('admin') ? <UsersAdminPage /> : <LeavePage initialTab="demandes" />;
       case 'rh':
