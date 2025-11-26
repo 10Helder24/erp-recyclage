@@ -2583,6 +2583,63 @@ button {
     font-size: 0.9rem;
   }
 
+  /* InventaireHalleSheet - Vue mobile en cartes */
+  .inventory-mobile-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .inventory-mobile-card {
+    background: #fff;
+    border: 1px solid var(--divider);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  }
+
+  .inventory-mobile-card-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #0f172a;
+    margin: 0 0 16px 0;
+    padding-bottom: 12px;
+    border-bottom: 2px solid #e2e8f0;
+  }
+
+  .inventory-mobile-card-fields {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .inventory-mobile-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .inventory-mobile-field-label {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #475569;
+  }
+
+  .inventory-mobile-field .destruction-input {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 0.9rem;
+  }
+
+  /* Masquer le tableau sur mobile, afficher les cartes */
+  .inventory-table-desktop {
+    display: none !important;
+  }
+
+  .inventory-mobile-cards {
+    display: flex !important;
+  }
+
   /* Masquer le tableau sur mobile, afficher les cartes */
   .cdt-table-desktop {
     display: none !important;
@@ -2760,6 +2817,15 @@ button {
   }
 
   .cdt-mobile-cards {
+    display: none !important;
+  }
+
+  /* InventaireHalleSheet - Afficher tableau sur desktop, masquer cartes */
+  .inventory-table-desktop {
+    display: block !important;
+  }
+
+  .inventory-mobile-cards {
     display: none !important;
   }
 }

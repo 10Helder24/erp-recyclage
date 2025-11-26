@@ -581,7 +581,9 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                 <div className="destruction-section__header">
                   <h2>Plastique en BB</h2>
                 </div>
-                <div className="calendar-table-wrapper">
+                
+                {/* Vue desktop - Tableau */}
+                <div className="calendar-table-wrapper inventory-table-desktop">
                   <table className="calendar-table">
                     <thead>
                       <tr>
@@ -622,6 +624,44 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                     </tbody>
                   </table>
                 </div>
+
+                {/* Vue mobile - Cartes */}
+                <div className="inventory-mobile-cards">
+                  {halleData.map((row, index) => (
+                    <div key={index} className="inventory-mobile-card">
+                      <h3 className="inventory-mobile-card-title">Matière #{index + 1}</h3>
+                      <div className="inventory-mobile-card-fields">
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Matière</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={row.matiere}
+                            onChange={(e) => handleHalleChange(index, 'matiere', e.target.value)}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">BB</label>
+                          <input
+                            type="number"
+                            className="destruction-input"
+                            value={row.bb}
+                            onChange={(e) => handleHalleChange(index, 'bb', e.target.value)}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Palette</label>
+                          <input
+                            type="number"
+                            className="destruction-input"
+                            value={row.palette}
+                            onChange={(e) => handleHalleChange(index, 'palette', e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </section>
             )}
 
@@ -630,7 +670,9 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                 <div className="destruction-section__header">
                   <h2>Plastique en balles</h2>
                 </div>
-                <div className="calendar-table-wrapper">
+                
+                {/* Vue desktop - Tableau */}
+                <div className="calendar-table-wrapper inventory-table-desktop">
                   <table className="calendar-table">
                     <thead>
                       <tr>
@@ -671,6 +713,44 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                     </tbody>
                   </table>
                 </div>
+
+                {/* Vue mobile - Cartes */}
+                <div className="inventory-mobile-cards">
+                  {plastiqueBData.map((item, index) => (
+                    <div key={index} className="inventory-mobile-card">
+                      <h3 className="inventory-mobile-card-title">Matière #{index + 1}</h3>
+                      <div className="inventory-mobile-card-fields">
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Matière</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.matiere}
+                            onChange={(e) => handlePlastiqueBChange(index, 'matiere', e.target.value)}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Balles</label>
+                          <input
+                            type="number"
+                            className="destruction-input"
+                            value={item.balles}
+                            onChange={(e) => handlePlastiqueBChange(index, 'balles', e.target.value)}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Palettes</label>
+                          <input
+                            type="number"
+                            className="destruction-input"
+                            value={item.palettes}
+                            onChange={(e) => handlePlastiqueBChange(index, 'palettes', e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </section>
             )}
 
@@ -680,7 +760,9 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                 <div className="destruction-section__header">
                   <h2>CDT</h2>
                 </div>
-                <div className="calendar-table-wrapper">
+                
+                {/* Vue desktop - Tableau */}
+                <div className="calendar-table-wrapper inventory-table-desktop">
                   <table className="calendar-table">
                     <thead>
                       <tr>
@@ -712,6 +794,35 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                     </tbody>
                   </table>
                 </div>
+
+                {/* Vue mobile - Cartes */}
+                <div className="inventory-mobile-cards">
+                  {cdtData.map((item, index) => (
+                    <div key={index} className="inventory-mobile-card">
+                      <h3 className="inventory-mobile-card-title">Matière #{index + 1}</h3>
+                      <div className="inventory-mobile-card-fields">
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Matière</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.matiere}
+                            onChange={(e) => handleCDTChange(index, 'matiere', e.target.value)}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">m³</label>
+                          <input
+                            type="number"
+                            className="destruction-input"
+                            value={item.m3}
+                            onChange={(e) => handleCDTChange(index, 'm3', e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </section>
             )}
 
@@ -721,7 +832,9 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                 <div className="destruction-section__header">
                   <h2>Papier en balles</h2>
                 </div>
-                <div className="calendar-table-wrapper">
+                
+                {/* Vue desktop - Tableau */}
+                <div className="calendar-table-wrapper inventory-table-desktop">
                   <table className="calendar-table">
                     <thead>
                       <tr>
@@ -762,6 +875,44 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                     </tbody>
                   </table>
                 </div>
+
+                {/* Vue mobile - Cartes */}
+                <div className="inventory-mobile-cards">
+                  {papierData.map((item, index) => (
+                    <div key={index} className="inventory-mobile-card">
+                      <h3 className="inventory-mobile-card-title">Ligne #{index + 1}</h3>
+                      <div className="inventory-mobile-card-fields">
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Numéro</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.num}
+                            onChange={(e) => handlePapierChange(index, 'num', e.target.value)}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Matière</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.mat}
+                            onChange={(e) => handlePapierChange(index, 'mat', e.target.value)}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">N° de balles</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.bal}
+                            onChange={(e) => handlePapierChange(index, 'bal', e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </section>
             )}
 
@@ -771,7 +922,9 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                 <div className="destruction-section__header">
                   <h2>Autres</h2>
                 </div>
-                <div className="calendar-table-wrapper">
+                
+                {/* Vue desktop - Tableau */}
+                <div className="calendar-table-wrapper inventory-table-desktop">
                   <table className="calendar-table">
                     <thead>
                       <tr>
@@ -859,10 +1012,104 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                     </tbody>
                   </table>
                 </div>
+
+                {/* Vue mobile - Cartes */}
+                <div className="inventory-mobile-cards">
+                  <div className="inventory-mobile-card">
+                    <h3 className="inventory-mobile-card-title">Stock Diesel</h3>
+                    <div className="inventory-mobile-card-fields">
+                      <div className="inventory-mobile-field">
+                        <label className="inventory-mobile-field-label">Litres</label>
+                        <input
+                          type="number"
+                          className="destruction-input"
+                          value={autresData.diesel.litres}
+                          onChange={(e) => setAutresData({
+                            ...autresData,
+                            diesel: { ...autresData.diesel, litres: parseInt(e.target.value) || 0 }
+                          })}
+                        />
+                      </div>
+                      <div className="inventory-mobile-field">
+                        <label className="inventory-mobile-field-label">Pièce</label>
+                        <input
+                          type="number"
+                          className="destruction-input"
+                          value={autresData.diesel.piece}
+                          onChange={(e) => setAutresData({
+                            ...autresData,
+                            diesel: { ...autresData.diesel, piece: parseInt(e.target.value) || 0 }
+                          })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="inventory-mobile-card">
+                    <h3 className="inventory-mobile-card-title">AD blue</h3>
+                    <div className="inventory-mobile-card-fields">
+                      <div className="inventory-mobile-field">
+                        <label className="inventory-mobile-field-label">Litres</label>
+                        <input
+                          type="number"
+                          className="destruction-input"
+                          value={autresData.adBlue.litres}
+                          onChange={(e) => setAutresData({
+                            ...autresData,
+                            adBlue: { ...autresData.adBlue, litres: parseInt(e.target.value) || 0 }
+                          })}
+                        />
+                      </div>
+                      <div className="inventory-mobile-field">
+                        <label className="inventory-mobile-field-label">Pièce</label>
+                        <input
+                          type="number"
+                          className="destruction-input"
+                          value={autresData.adBlue.piece}
+                          onChange={(e) => setAutresData({
+                            ...autresData,
+                            adBlue: { ...autresData.adBlue, piece: parseInt(e.target.value) || 0 }
+                          })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="inventory-mobile-card">
+                    <h3 className="inventory-mobile-card-title">Stock fil de fer</h3>
+                    <div className="inventory-mobile-card-fields">
+                      <div className="inventory-mobile-field">
+                        <label className="inventory-mobile-field-label">Litres</label>
+                        <input
+                          type="number"
+                          className="destruction-input"
+                          value={autresData.filFer.litres}
+                          onChange={(e) => setAutresData({
+                            ...autresData,
+                            filFer: { ...autresData.filFer, litres: parseInt(e.target.value) || 0 }
+                          })}
+                        />
+                      </div>
+                      <div className="inventory-mobile-field">
+                        <label className="inventory-mobile-field-label">Pièce</label>
+                        <input
+                          type="number"
+                          className="destruction-input"
+                          value={autresData.filFer.piece}
+                          onChange={(e) => setAutresData({
+                            ...autresData,
+                            filFer: { ...autresData.filFer, piece: parseInt(e.target.value) || 0 }
+                          })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="destruction-section__header" style={{ marginTop: '24px' }}>
                   <h2>EAU (COMPTEUR)</h2>
                 </div>
-                <div className="calendar-table-wrapper">
+                
+                {/* Vue desktop - Tableau EAU */}
+                <div className="calendar-table-wrapper inventory-table-desktop">
                   <table className="calendar-table">
                     <thead>
                       <tr>
@@ -968,6 +1215,115 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                     </tbody>
                   </table>
                 </div>
+
+                {/* Vue mobile - Cartes EAU */}
+                <div className="inventory-mobile-cards">
+                  <div className="inventory-mobile-card">
+                    <h3 className="inventory-mobile-card-title">Morgevon 11</h3>
+                    <div className="inventory-mobile-card-fields">
+                      <div className="inventory-mobile-field">
+                        <label className="inventory-mobile-field-label">m³</label>
+                        <input
+                          type="number"
+                          className="destruction-input"
+                          value={autresData.eau.morgevon11.m3}
+                          onChange={(e) => setAutresData({
+                            ...autresData,
+                            eau: {
+                              ...autresData.eau,
+                              morgevon11: { ...autresData.eau.morgevon11, m3: parseInt(e.target.value) || 0 }
+                            }
+                          })}
+                        />
+                      </div>
+                      <div className="inventory-mobile-field">
+                        <label className="inventory-mobile-field-label">Compteur</label>
+                        <input
+                          type="number"
+                          className="destruction-input"
+                          value={autresData.eau.morgevon11.compteur}
+                          onChange={(e) => setAutresData({
+                            ...autresData,
+                            eau: {
+                              ...autresData.eau,
+                              morgevon11: { ...autresData.eau.morgevon11, compteur: parseInt(e.target.value) || 0 }
+                            }
+                          })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="inventory-mobile-card">
+                    <h3 className="inventory-mobile-card-title">Morgevon 13</h3>
+                    <div className="inventory-mobile-card-fields">
+                      <div className="inventory-mobile-field">
+                        <label className="inventory-mobile-field-label">m³</label>
+                        <input
+                          type="number"
+                          className="destruction-input"
+                          value={autresData.eau.morgevon13.m3}
+                          onChange={(e) => setAutresData({
+                            ...autresData,
+                            eau: {
+                              ...autresData.eau,
+                              morgevon13: { ...autresData.eau.morgevon13, m3: parseInt(e.target.value) || 0 }
+                            }
+                          })}
+                        />
+                      </div>
+                      <div className="inventory-mobile-field">
+                        <label className="inventory-mobile-field-label">Compteur</label>
+                        <input
+                          type="number"
+                          className="destruction-input"
+                          value={autresData.eau.morgevon13.compteur}
+                          onChange={(e) => setAutresData({
+                            ...autresData,
+                            eau: {
+                              ...autresData.eau,
+                              morgevon13: { ...autresData.eau.morgevon13, compteur: parseInt(e.target.value) || 0 }
+                            }
+                          })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="inventory-mobile-card">
+                    <h3 className="inventory-mobile-card-title">Halle à bois</h3>
+                    <div className="inventory-mobile-card-fields">
+                      <div className="inventory-mobile-field">
+                        <label className="inventory-mobile-field-label">m³</label>
+                        <input
+                          type="number"
+                          className="destruction-input"
+                          value={autresData.eau.halleBois.m3}
+                          onChange={(e) => setAutresData({
+                            ...autresData,
+                            eau: {
+                              ...autresData.eau,
+                              halleBois: { ...autresData.eau.halleBois, m3: parseInt(e.target.value) || 0 }
+                            }
+                          })}
+                        />
+                      </div>
+                      <div className="inventory-mobile-field">
+                        <label className="inventory-mobile-field-label">Compteur</label>
+                        <input
+                          type="number"
+                          className="destruction-input"
+                          value={autresData.eau.halleBois.compteur}
+                          onChange={(e) => setAutresData({
+                            ...autresData,
+                            eau: {
+                              ...autresData.eau,
+                              halleBois: { ...autresData.eau.halleBois, compteur: parseInt(e.target.value) || 0 }
+                            }
+                          })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </section>
             )}
 
@@ -977,7 +1333,9 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                 <div className="destruction-section__header">
                   <h2>Contenants</h2>
                 </div>
-                <div className="calendar-table-wrapper">
+                
+                {/* Vue desktop - Tableau */}
+                <div className="calendar-table-wrapper inventory-table-desktop">
                   <table className="calendar-table">
                     <thead>
                       <tr>
@@ -1026,6 +1384,52 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                     </tbody>
                   </table>
                 </div>
+
+                {/* Vue mobile - Cartes */}
+                <div className="inventory-mobile-cards">
+                  {containersData.map((item, index) => (
+                    <div key={index} className="inventory-mobile-card">
+                      <h3 className="inventory-mobile-card-title">Contenant #{index + 1}</h3>
+                      <div className="inventory-mobile-card-fields">
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Type</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.type}
+                            onChange={(e) => handleContainerChange(index, 'type', e.target.value)}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Quantité</label>
+                          <input
+                            type="number"
+                            className="destruction-input"
+                            value={item.quantite}
+                            onChange={(e) => {
+                              const newData = [...containersData];
+                              newData[index] = { ...newData[index], quantite: parseInt(e.target.value) || 0 };
+                              setContainersData(newData);
+                            }}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Localisation</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.location}
+                            onChange={(e) => {
+                              const newData = [...containersData];
+                              newData[index] = { ...newData[index], location: e.target.value };
+                              setContainersData(newData);
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </section>
             )}
 
@@ -1035,7 +1439,9 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                 <div className="destruction-section__header">
                   <h2>Sacs</h2>
                 </div>
-                <div className="calendar-table-wrapper">
+                
+                {/* Vue desktop - Tableau */}
+                <div className="calendar-table-wrapper inventory-table-desktop">
                   <table className="calendar-table">
                     <thead>
                       <tr>
@@ -1084,6 +1490,52 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                     </tbody>
                   </table>
                 </div>
+
+                {/* Vue mobile - Cartes */}
+                <div className="inventory-mobile-cards">
+                  {bagsData.map((item, index) => (
+                    <div key={index} className="inventory-mobile-card">
+                      <h3 className="inventory-mobile-card-title">Sac #{index + 1}</h3>
+                      <div className="inventory-mobile-card-fields">
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Type</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.type}
+                            onChange={(e) => handleBagChange(index, 'type', e.target.value)}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Quantité</label>
+                          <input
+                            type="number"
+                            className="destruction-input"
+                            value={item.quantite}
+                            onChange={(e) => {
+                              const newData = [...bagsData];
+                              newData[index] = { ...newData[index], quantite: parseInt(e.target.value) || 0 };
+                              setBagsData(newData);
+                            }}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Localisation</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.location}
+                            onChange={(e) => {
+                              const newData = [...bagsData];
+                              newData[index] = { ...newData[index], location: e.target.value };
+                              setBagsData(newData);
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </section>
             )}
 
@@ -1093,7 +1545,9 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                 <div className="destruction-section__header">
                   <h2>Machine</h2>
                 </div>
-                <div className="calendar-table-wrapper">
+                
+                {/* Vue desktop - Tableau */}
+                <div className="calendar-table-wrapper inventory-table-desktop">
                   <table className="calendar-table">
                     <thead>
                       <tr>
@@ -1142,6 +1596,53 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
                       ))}
                     </tbody>
                   </table>
+                </div>
+
+                {/* Vue mobile - Cartes */}
+                <div className="inventory-mobile-cards">
+                  {machineData.map((item, index) => (
+                    <div key={index} className="inventory-mobile-card">
+                      <h3 className="inventory-mobile-card-title">Machine #{index + 1}</h3>
+                      <div className="inventory-mobile-card-fields">
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Numéro</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.num1}
+                            onChange={(e) => handleMachineChange(index, 'num1', e.target.value)}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Machine</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.mac}
+                            onChange={(e) => handleMachineChange(index, 'mac', e.target.value)}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">N° de balles</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.ball}
+                            onChange={(e) => handleMachineChange(index, 'ball', e.target.value)}
+                          />
+                        </div>
+                        <div className="inventory-mobile-field">
+                          <label className="inventory-mobile-field-label">Heures</label>
+                          <input
+                            type="text"
+                            className="destruction-input"
+                            value={item.heur}
+                            onChange={(e) => handleMachineChange(index, 'heur', e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </section>
             )}
