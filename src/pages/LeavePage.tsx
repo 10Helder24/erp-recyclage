@@ -183,7 +183,8 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
       const fallback = employees.find((employee) => employee.id === (summary?.id ?? leave.employee_id));
       return {
         department: summary?.department ?? fallback?.department ?? null,
-        manager: summary?.manager_name ?? fallback?.manager_name ?? null
+        manager: summary?.manager_name ?? fallback?.manager_name ?? null,
+        role: summary?.role ?? fallback?.role ?? null
       };
     },
     [employees]
@@ -223,6 +224,56 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     [groupedPendingLeaves, matchesFilters]
   );
 
+  const overlappingPendingLeaves = useMemo(() => {
+    const conflictIds = new Set<string>();
+    const conflictDetails = new Map<string, { department: string | null; role: string | null }>();
+    const buckets = new Map<string, Leave[]>();
+
+    pendingLeaves.forEach((leave) => {
+      const meta = resolveEmployeeMeta(leave);
+      const department = meta.department ?? null;
+      const role = meta.role ?? null;
+      if (!department || !role) {
+        return;
+      }
+      const key = `${department}::${role}`;
+      const bucket = buckets.get(key);
+      if (bucket) {
+        bucket.push(leave);
+      } else {
+        buckets.set(key, [leave]);
+      }
+    });
+
+    buckets.forEach((bucket, key) => {
+      if (bucket.length < 2) return;
+      const sorted = bucket.slice().sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
+      for (let i = 0; i < sorted.length; i += 1) {
+        const current = sorted[i];
+        const currentStart = new Date(current.start_date).getTime();
+        const currentEnd = new Date(current.end_date).getTime();
+        for (let j = i + 1; j < sorted.length; j += 1) {
+          const next = sorted[j];
+          const nextStart = new Date(next.start_date).getTime();
+          const nextEnd = new Date(next.end_date).getTime();
+          if (nextStart > currentEnd) {
+            break;
+          }
+          if (currentStart <= nextEnd && nextStart <= currentEnd) {
+            conflictIds.add(current.id);
+            conflictIds.add(next.id);
+            const [department, role] = key.split('::');
+            conflictDetails.set(current.id, { department, role });
+            conflictDetails.set(next.id, { department, role });
+          }
+        }
+      }
+    });
+
+    return { conflictIds, conflictDetails };
+  }, [pendingLeaves, resolveEmployeeMeta]);
+  const { conflictIds, conflictDetails } = overlappingPendingLeaves;
+
   const employeeSignatureRef = useRef<SignatureCanvas | null>(null);
   const managerSignatureRef = useRef<SignatureCanvas | null>(null);
 
@@ -246,6 +297,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     [leaveBalances, isManager, currentEmployee?.id]
   );
   const showEmptyCalendarMessage = approvedCalendarLeaves.length === 0 || displayEmployees.length === 0;
+  const [showFullMobileCalendar, setShowFullMobileCalendar] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -292,6 +344,12 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     return () => window.removeEventListener('resize', updateLayout);
   }, []);
 
+  useEffect(() => {
+    if (!isCompactLayout && showFullMobileCalendar) {
+      setShowFullMobileCalendar(false);
+    }
+  }, [isCompactLayout, showFullMobileCalendar]);
+
   const getLeaveForDay = useCallback(
     (employeeId: string, date: Date) => {
       return approvedCalendarLeaves.find((leave) => {
@@ -306,8 +364,19 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
 
   const openAddModal = () => {
     setShowAddModal(true);
-    setNewLeave(createDefaultFormState());
     requestAnimationFrame(() => employeeSignatureRef.current?.clear());
+    setNewLeave((prev) => {
+      if (!currentEmployee) {
+        return createDefaultFormState();
+      }
+      return {
+        ...prev,
+        employee_id: currentEmployee.id ?? '',
+        first_name: currentEmployee.first_name || prev.first_name,
+        last_name: currentEmployee.last_name || prev.last_name,
+        email: currentEmployee.email || user?.email || prev.email
+      };
+    });
   };
 
   const closeAddModal = () => {
@@ -318,13 +387,23 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
 
   const handleEmployeeSelect = (employeeId: string) => {
     if (!employeeId) {
-      setNewLeave((prev) => ({
-        ...prev,
-        employee_id: '',
-        first_name: '',
-        last_name: '',
-        email: ''
-      }));
+      if (currentEmployee) {
+        setNewLeave((prev) => ({
+          ...prev,
+          employee_id: currentEmployee.id ?? '',
+          first_name: currentEmployee.first_name ?? '',
+          last_name: currentEmployee.last_name ?? '',
+          email: currentEmployee.email ?? user?.email ?? ''
+        }));
+      } else {
+        setNewLeave((prev) => ({
+          ...prev,
+          employee_id: '',
+          first_name: '',
+          last_name: '',
+          email: ''
+        }));
+      }
       return;
     }
     const employee = employees.find((emp) => emp.id === employeeId);
@@ -342,16 +421,16 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
   };
 
   useEffect(() => {
-    if (!isManager && currentEmployee) {
+    if (currentEmployee) {
       setNewLeave((prev) => ({
         ...prev,
-        employee_id: currentEmployee.id,
-        first_name: currentEmployee.first_name,
-        last_name: currentEmployee.last_name,
-        email: currentEmployee.email
+        employee_id: currentEmployee.id ?? '',
+        first_name: currentEmployee.first_name ?? '',
+        last_name: currentEmployee.last_name ?? '',
+        email: currentEmployee.email ?? user?.email ?? ''
       }));
     }
-  }, [currentEmployee, isManager]);
+  }, [currentEmployee, user?.email]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -632,12 +711,21 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
                       Jours fériés
                     </span>
                   </div>
+                {isCompactLayout && (
+                  <button
+                    type="button"
+                    className="btn btn-outline mobile-calendar-toggle"
+                    onClick={() => setShowFullMobileCalendar((prev) => !prev)}
+                  >
+                    {showFullMobileCalendar ? 'Vue compacte' : 'Voir le calendrier'}
+                  </button>
+                )}
                 </div>
 
                 {showEmptyCalendarMessage && (
                   <div className="calendar-hint">Aucun congé approuvé pour ce mois. Les jours fériés et week-ends restent visibles.</div>
                 )}
-                {isCompactLayout ? (
+              {isCompactLayout && !showFullMobileCalendar ? (
                   <div className="calendar-mobile">
                     {displayEmployees.length === 0 ? (
                       <div className="calendar-hint">Aucun congé approuvé ce mois-ci</div>
@@ -676,8 +764,11 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
                       ))
                     )}
                   </div>
-                ) : (
+              ) : (
                   <div className="calendar-table-wrapper">
+                  {isCompactLayout && showFullMobileCalendar && (
+                    <p className="calendar-hint">Vue calendrier complète (défilable) avec jours fériés visibles.</p>
+                  )}
                     <table className="calendar-table">
                       <thead>
                         <tr>
@@ -786,6 +877,8 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
                 )}
                 {filteredPendingGroups.map((group) => {
                   const leave = group[0];
+                  const conflictLeave = group.find((period) => conflictIds.has(period.id));
+                  const conflictInfo = conflictLeave ? conflictDetails.get(conflictLeave.id) : null;
                   return (
                     <div key={leave.request_group_id ?? leave.id} className="request-card">
                     <div className="request-card-info">
@@ -818,6 +911,12 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
                         </div>
                       ))}
                     </div>
+                    {conflictInfo && (
+                      <div className="conflict-alert">
+                        ⚠️ Conflit potentiel : un autre {conflictInfo.role?.toLowerCase() || 'employé'} du département{' '}
+                        {conflictInfo.department || 'inconnu'} demande ces dates.
+                      </div>
+                    )}
                     <div className="request-card-actions">
                       <button type="button" className="icon-button approve" onClick={() => handleRequestAction(leave, 'approuve')}>
                         <Check size={18} />

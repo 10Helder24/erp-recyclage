@@ -533,6 +533,11 @@ button {
   font-size: 0.85rem;
 }
 
+.mobile-calendar-toggle {
+  width: 100%;
+  margin-top: 12px;
+}
+
 @media (max-width: 960px) {
   .page-header {
     flex-direction: column;
@@ -1021,6 +1026,17 @@ button {
   justify-content: space-between;
 }
 
+.conflict-alert {
+  flex-basis: 100%;
+  margin-top: -4px;
+  padding: 10px 14px;
+  border-left: 4px solid #f97316;
+  background: rgba(249, 115, 22, 0.08);
+  color: #9a3412;
+  border-radius: 12px;
+  font-size: 0.9rem;
+}
+
 .request-card-info {
   display: flex;
   gap: 12px;
@@ -1223,7 +1239,7 @@ button {
 
   .sidebar {
     position: fixed;
-    top: 16px;
+    top: calc(16px + env(safe-area-inset-top, 0));
     left: 16px;
     right: 16px;
     width: auto;
@@ -1236,10 +1252,14 @@ button {
     transition: transform 0.3s ease;
     overflow-y: auto;
     background: var(--sidebar-bg);
+    opacity: 0;
+    pointer-events: none;
   }
 
   .sidebar.open {
     transform: translateY(0);
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .sidebar-toggle {
@@ -1257,7 +1277,7 @@ button {
 
   .main-content {
     padding: 24px 20px 48px;
-    margin-top: 90px;
+    margin-top: calc(90px + env(safe-area-inset-top, 0));
   }
 
   .mobile-topbar {
@@ -1265,11 +1285,15 @@ button {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 14px 18px;
+    padding: calc(14px + env(safe-area-inset-top, 0)) 18px 14px;
     background: rgba(15, 23, 42, 0.9);
     color: #fff;
     position: sticky;
     top: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    margin: 0;
     z-index: 15;
     border-bottom-left-radius: 18px;
     border-bottom-right-radius: 18px;

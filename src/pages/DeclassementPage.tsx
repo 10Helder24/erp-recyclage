@@ -306,20 +306,33 @@ async function buildPdf({
     }
   };
 
-  const drawInfoCard = (x: number, label: string, value: string) => {
-    const cardWidth = innerWidth / 2 - 4;
-    const cardHeight = 20;
-    doc.setDrawColor(209, 213, 219);
-    doc.roundedRect(x, y, cardWidth, cardHeight, 3, 3);
+  const drawClientSection = () => {
+    const lines = [
+      `Nom de l'entreprise : ${companyName || '—'}`,
+      `Plaque véhicule : ${vehiclePlate || '—'}`,
+      `Bon / Référence : ${slipNumber || '—'}`
+    ];
+    const blockHeight = 24 + lines.length * 6;
+    ensureSpace(blockHeight + 8, footerLogo);
+    doc.setDrawColor(148, 163, 184);
+    doc.roundedRect(margin, y, innerWidth, blockHeight, 3, 3);
+
+    let innerY = y + 8;
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(75, 85, 99);
-    doc.text(label.toUpperCase(), x + 4, y + 7);
+    doc.setFontSize(12);
+    doc.setTextColor(30, 64, 175);
+    doc.text('Client', margin + 6, innerY);
+    innerY += 6;
+
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(11);
+    doc.setFontSize(10);
     doc.setTextColor(17, 24, 39);
-    doc.text(value || '—', x + 4, y + 15);
-    return cardHeight;
+    lines.forEach((line) => {
+      doc.text(line, margin + 6, innerY + 4);
+      innerY += 6;
+    });
+
+    y += blockHeight + 8;
   };
 
   const drawSectionTitle = (label: string) => {
@@ -383,26 +396,8 @@ async function buildPdf({
   doc.setTextColor(17, 24, 39);
   y = headerHeight + 8;
 
-  // Info cards
-  const leftCardX = margin;
-  const rightCardX = margin + innerWidth / 2 + 4;
-  let cardsHeight = 0;
-  if (companyName) {
-    cardsHeight = drawInfoCard(leftCardX, 'Nom entreprise', companyName);
-    if (vehiclePlate) {
-      drawInfoCard(rightCardX, 'Plaque véhicule', vehiclePlate);
-    } else if (slipNumber) {
-      drawInfoCard(rightCardX, 'Bon / Référence', slipNumber);
-    }
-  } else if (vehiclePlate) {
-    cardsHeight = drawInfoCard(leftCardX, 'Plaque véhicule', vehiclePlate);
-    if (slipNumber) {
-      drawInfoCard(rightCardX, 'Bon / Référence', slipNumber);
-    }
-  } else if (slipNumber) {
-    cardsHeight = drawInfoCard(leftCardX, 'Bon / Référence', slipNumber);
-  }
-  y += cardsHeight + 8;
+  // Client section
+  drawClientSection();
 
   // Entries section
   drawSectionTitle('Matières déclarées');
