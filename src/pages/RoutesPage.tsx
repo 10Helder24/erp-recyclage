@@ -1,8 +1,15 @@
 import { useEffect, useState, useMemo } from 'react';
-import { Plus, Route, Calendar, Truck, MapPin, Edit2, Trash2, Search, Loader2, X, CheckCircle, Clock } from 'lucide-react';
+import { Plus, Route, Calendar, Truck, MapPin, Edit2, Trash2, Loader2, X, CheckCircle, Clock, Shuffle } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-import { Api, type Route as RouteType, type Customer, type MapVehicle, type RouteStop } from '../lib/api';
+import {
+  Api,
+  type Route as RouteType,
+  type Customer,
+  type MapVehicle,
+  type RouteStop,
+  type RouteOptimizationResponse
+} from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
 
 
@@ -44,6 +51,7 @@ export const RoutesPage = () => {
   const [routeStops, setRouteStops] = useState<Map<string, RouteStop[]>>(new Map());
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [routeStartTime, setRouteStartTime] = useState('08:00');
   const [showRouteModal, setShowRouteModal] = useState(false);
   const [showStopModal, setShowStopModal] = useState(false);
   const [editingRoute, setEditingRoute] = useState<RouteType | null>(null);
@@ -51,6 +59,11 @@ export const RoutesPage = () => {
   const [routeForm, setRouteForm] = useState<RouteForm>(DEFAULT_ROUTE_FORM);
   const [stopForm, setStopForm] = useState<RouteStopForm>(DEFAULT_STOP_FORM);
   const [editingStop, setEditingStop] = useState<RouteStop | null>(null);
+  const [optimizingRouteId, setOptimizingRouteId] = useState<string | null>(null);
+  const [optimizationPreview, setOptimizationPreview] = useState<{
+    route: RouteType;
+    result: RouteOptimizationResponse;
+  } | null>(null);
 
   const loadData = async () => {
     try {
@@ -230,6 +243,36 @@ export const RoutesPage = () => {
     }
   };
 
+  const handleOptimizeRoute = async (route: RouteType) => {
+    try {
+      setOptimizingRouteId(route.id);
+      const result = await Api.optimizeRoute(route.id, { startTime: routeStartTime });
+      setOptimizationPreview({ route, result });
+      toast.success('Suggestion calculée');
+    } catch (error) {
+      console.error(error);
+      toast.error("Impossible d'optimiser la tournée");
+    } finally {
+      setOptimizingRouteId(null);
+    }
+  };
+
+  const applyOptimizationSuggestion = async () => {
+    if (!optimizationPreview) return;
+    try {
+      setOptimizingRouteId(optimizationPreview.route.id);
+      await Api.optimizeRoute(optimizationPreview.route.id, { startTime: routeStartTime, apply: true });
+      toast.success('Ordre appliqué');
+      setOptimizationPreview(null);
+      loadData();
+    } catch (error) {
+      console.error(error);
+      toast.error("Application de l'optimisation impossible");
+    } finally {
+      setOptimizingRouteId(null);
+    }
+  };
+
   const getStatusColor = (status?: string | null) => {
     if (!status) return '#6b7280';
     const s = status.toLowerCase();
@@ -266,7 +309,7 @@ export const RoutesPage = () => {
 
       <div className="destruction-card">
         <div className="destruction-section">
-          <div className="routes-date-picker" style={{ marginBottom: '20px', display: 'flex', gap: '16px', alignItems: 'flex-end' }}>
+          <div className="routes-date-picker" style={{ marginBottom: '20px', display: 'flex', gap: '16px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div className="destruction-field" style={{ flex: '0 0 200px' }}>
               <label className="destruction-label">Date</label>
               <div className="map-input">
@@ -278,6 +321,15 @@ export const RoutesPage = () => {
                   style={{ border: 'none', background: 'transparent', outline: 'none', flex: 1 }}
                 />
               </div>
+            </div>
+            <div className="destruction-field" style={{ flex: '0 0 160px' }}>
+              <label className="destruction-label">Départ (heure)</label>
+              <input
+                type="time"
+                className="destruction-input"
+                value={routeStartTime}
+                onChange={(e) => setRouteStartTime(e.target.value)}
+              />
             </div>
           </div>
 
@@ -323,6 +375,24 @@ export const RoutesPage = () => {
                       </div>
                       {canEdit && (
                         <div style={{ display: 'flex', gap: '8px' }}>
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-small"
+                            onClick={() => handleOptimizeRoute(route)}
+                            disabled={optimizingRouteId === route.id}
+                          >
+                            {optimizingRouteId === route.id ? (
+                              <>
+                                <Loader2 className="spinner" size={14} />
+                                Calcul...
+                              </>
+                            ) : (
+                              <>
+                                <Shuffle size={14} />
+                                IA Optimiser
+                              </>
+                            )}
+                          </button>
                           <button
                             type="button"
                             className="btn btn-outline btn-small"
@@ -446,6 +516,104 @@ export const RoutesPage = () => {
           )}
         </div>
       </div>
+
+      {optimizationPreview && (
+        <div className="modal-backdrop" onClick={() => setOptimizationPreview(null)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '780px' }}>
+            <div className="modal-header">
+              <h2 className="modal-title">
+                Suggestion IA · {new Date(optimizationPreview.route.date).toLocaleDateString('fr-FR')}
+              </h2>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => setOptimizationPreview(null)}
+                style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer' }}
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="team-alerts" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}>
+                <div className="team-alert-card">
+                  <p className="muted-text">Distance totale estimée</p>
+                  <h3>{optimizationPreview.result.totalDistanceKm} km</h3>
+                </div>
+                <div className="team-alert-card">
+                  <p className="muted-text">Durée projetée</p>
+                  <h3>{optimizationPreview.result.totalDurationMin} min</h3>
+                </div>
+              </div>
+              {optimizationPreview.result.trafficNotes.length > 0 && (
+                <div className="conflict-alert">
+                  Zones denses détectées : {optimizationPreview.result.trafficNotes.join(', ')}
+                </div>
+              )}
+              <div className="detail-table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Ancien ordre</th>
+                      <th>Nouveau</th>
+                      <th>Client</th>
+                      <th>ETA</th>
+                      <th>Trajet</th>
+                      <th>Trafic</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {optimizationPreview.result.suggestedStops.map((stop) => (
+                      <tr key={stop.stop_id}>
+                        <td>#{stop.previous_order + 1}</td>
+                        <td>
+                          #{stop.suggested_order}
+                          {stop.previous_order + 1 !== stop.suggested_order && (
+                            <span className="tag" style={{ marginLeft: 6, backgroundColor: '#f97316', color: '#fff' }}>
+                              déplacé
+                            </span>
+                          )}
+                        </td>
+                        <td>{stop.customer_name || 'Client'}</td>
+                        <td>{stop.eta ? new Date(stop.eta).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                        <td>
+                          {stop.distance_km} km · {stop.travel_minutes} min
+                        </td>
+                        <td>
+                          {stop.traffic_label ? (
+                            <span className="tag" style={{ backgroundColor: '#0ea5e9', color: '#fff' }}>
+                              {stop.traffic_label}
+                            </span>
+                          ) : (
+                            'Fluide'
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {optimizationPreview.result.missingStops.length > 0 && (
+                <p className="muted-text">
+                  {optimizationPreview.result.missingStops.length} arrêt(s) gardé(s) à la fin faute de coordonnées complètes.
+                </p>
+              )}
+              <div className="modal-actions">
+                <button type="button" className="btn btn-outline" onClick={() => setOptimizationPreview(null)}>
+                  Fermer
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={applyOptimizationSuggestion}
+                  disabled={optimizingRouteId === optimizationPreview.route.id}
+                >
+                  {optimizingRouteId === optimizationPreview.route.id ? 'Application...' : 'Appliquer la suggestion'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal création/édition route */}
       {showRouteModal && (

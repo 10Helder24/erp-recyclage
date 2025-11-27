@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Plus, MapPin, Shield, Edit2, Trash2, Search, Loader2 } from 'lucide-react';
+import { Plus, MapPin, Shield, Edit2, Trash2, Search, Loader2, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { Api, type Customer } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
+import CustomerDetailPage from './CustomerDetailPage';
 
 type CustomerForm = {
   name: string;
@@ -22,10 +23,10 @@ const DEFAULT_FORM: CustomerForm = {
 };
 
 export const CustomersPage = () => {
-  const { hasRole } = useAuth();
+  const { hasRole, hasPermission } = useAuth();
   const isAdmin = hasRole('admin');
   const isManager = hasRole('manager');
-  const canEdit = isAdmin || isManager;
+  const canEdit = isAdmin || isManager || hasPermission('edit_customers');
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -33,6 +34,7 @@ export const CustomersPage = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [form, setForm] = useState<CustomerForm>(DEFAULT_FORM);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
 
   const loadCustomers = async () => {
     try {
@@ -202,25 +204,35 @@ export const CustomersPage = () => {
                         </span>
                       )}
                     </div>
-                    {canEdit && (
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <button
-                          type="button"
-                          className="btn btn-outline btn-small"
-                          onClick={() => openEditModal(customer)}
-                        >
-                          <Edit2 size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-outline btn-small"
-                          onClick={() => handleDelete(customer.id)}
-                          style={{ color: '#ef4444' }}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    )}
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-small"
+                        onClick={() => setSelectedCustomerId(customer.id)}
+                      >
+                        <Eye size={14} />
+                        Fiche
+                      </button>
+                      {canEdit && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-small"
+                            onClick={() => openEditModal(customer)}
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-small"
+                            onClick={() => handleDelete(customer.id)}
+                            style={{ color: '#ef4444' }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                   <div className="employee-info">
                     {customer.address && (
@@ -330,6 +342,10 @@ export const CustomersPage = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {selectedCustomerId && (
+        <CustomerDetailPage customerId={selectedCustomerId} onClose={() => setSelectedCustomerId(null)} />
       )}
     </section>
   );

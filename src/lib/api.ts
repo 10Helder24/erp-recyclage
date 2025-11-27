@@ -39,6 +39,28 @@ export type Customer = {
   created_at: string;
 };
 
+export type CustomerDocument = {
+  id: string;
+  filename: string;
+  mimetype: string | null;
+  size: number | null;
+  uploaded_by: string | null;
+  uploaded_by_name: string | null;
+  created_at: string;
+};
+
+export type AuditLogEntry = {
+  id: string;
+  entity_type: string;
+  entity_id: string | null;
+  action: string;
+  changed_by: string | null;
+  changed_by_name: string | null;
+  before_data: Record<string, any> | null;
+  after_data: Record<string, any> | null;
+  created_at: string;
+};
+
 export type Intervention = {
   id: string;
   customer_id: string | null;
@@ -81,6 +103,63 @@ export type RouteStop = {
   status: string | null;
   notes: string | null;
   completed_at: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  risk_level?: string | null;
+};
+
+export type RouteOptimizationResponse = {
+  applied: boolean;
+  suggestedStops: Array<{
+    stop_id: string;
+    customer_name: string | null;
+    previous_order: number;
+    suggested_order: number;
+    eta: string | null;
+    distance_km: number;
+    travel_minutes: number;
+    traffic_factor: number;
+    traffic_label: string | null;
+  }>;
+  missingStops: Array<{ id: string; name: string | null }>;
+  totalDistanceKm: number;
+  totalDurationMin: number;
+  trafficNotes: string[];
+};
+
+export type PdfTemplateConfig = {
+  headerLogo?: string | null;
+  footerLogo?: string | null;
+  primaryColor?: string | null;
+  accentColor?: string | null;
+  title?: string | null;
+  subtitle?: string | null;
+  footerText?: string | null;
+  customTexts?: Record<string, string>;
+};
+
+export type PdfTemplate = {
+  id: string;
+  module: string;
+  config: PdfTemplateConfig;
+  updated_at: string | null;
+  updated_by: string | null;
+  updated_by_name?: string | null;
+};
+
+export type CustomerDetailPayload = {
+  customer: Customer;
+  interventions: Intervention[];
+  routeStops: Array<
+    RouteStop & {
+      route_date: string;
+      route_status: string | null;
+      internal_number: string | null;
+      plate_number: string | null;
+    }
+  >;
+  documents: CustomerDocument[];
+  auditLogs: AuditLogEntry[];
 };
 
 export type MapVehicle = {
@@ -167,21 +246,55 @@ const buildHeaders = (options: RequestInit) => {
 };
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
-    headers: buildHeaders(options),
-    ...options
-  });
+  const isOffline = !navigator.onLine;
+  const method = options.method || 'GET';
+  const isMutation = method !== 'GET' && method !== 'HEAD';
 
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || 'Erreur serveur');
+  if (isOffline && isMutation) {
+    const { offlineStorage } = await import('../utils/offlineStorage');
+    await offlineStorage.init();
+    const actionId = await offlineStorage.savePendingAction({
+      type: 'api_request',
+      endpoint: `${API_URL}${path}`,
+      method,
+      payload: options.body ? (typeof options.body === 'string' ? JSON.parse(options.body) : options.body) : undefined
+    });
+    throw new Error(`OFFLINE_QUEUED:${actionId}`);
   }
 
-  if (response.status === 204) {
-    return undefined as T;
-  }
+  try {
+    const response = await fetch(`${API_URL}${path}`, {
+      headers: buildHeaders(options),
+      ...options
+    });
 
-  return response.json();
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || 'Erreur serveur');
+    }
+
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    return response.json();
+  } catch (error) {
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      if (isMutation) {
+        const { offlineStorage } = await import('../utils/offlineStorage');
+        await offlineStorage.init();
+        const actionId = await offlineStorage.savePendingAction({
+          type: 'api_request',
+          endpoint: `${API_URL}${path}`,
+          method,
+          payload: options.body ? (typeof options.body === 'string' ? JSON.parse(options.body) : options.body) : undefined
+        });
+        throw new Error(`OFFLINE_QUEUED:${actionId}`);
+      }
+      throw new Error('Pas de connexion internet');
+    }
+    throw error;
+  }
 }
 
 export const Api = {
@@ -212,6 +325,7 @@ export const Api = {
     full_name?: string;
     department?: string | null;
     manager_name?: string | null;
+    permissions?: string[];
   }) =>
     request<{ user: AuthUser }>('/auth/users', {
       method: 'POST',
@@ -226,6 +340,7 @@ export const Api = {
       department?: string | null;
       manager_name?: string | null;
       password?: string;
+      permissions?: string[];
     }
   ) =>
     request<{ user: AuthUser }>(`/auth/users/${id}`, {
@@ -328,10 +443,13 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
-  updateLeaveStatus: (id: string, status: LeaveStatus, signature?: string) =>
-    request<Leave>(`/leaves/${id}/status`, {
+  updateLeaveWorkflow: (
+    id: string,
+    payload: { decision: 'approve' | 'reject'; comment?: string; signature?: string }
+  ) =>
+    request<{ leaves: Leave[] }>(`/leaves/${id}/status`, {
       method: 'PATCH',
-      body: JSON.stringify({ status, signature })
+      body: JSON.stringify(payload)
     }),
   notifyVacationApproval: (payload: VacationNotificationPayload) =>
     request<{ message: string }>('/leaves/notify', {
@@ -453,6 +571,56 @@ export const Api = {
       body: JSON.stringify(payload)
     }),
   deleteCustomer: (id: string) => request<{ message: string }>(`/customers/${id}`, { method: 'DELETE' }),
+  fetchCustomerDetail: (id: string) => request<CustomerDetailPayload>(`/customers/${id}/detail`),
+  fetchCustomerDocuments: (id: string) => request<CustomerDocument[]>(`/customers/${id}/documents`),
+  uploadCustomerDocument: (id: string, payload: { filename: string; mimetype?: string; base64: string }) =>
+    request<{ document: CustomerDocument }>(`/customers/${id}/documents`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  deleteCustomerDocument: (customerId: string, documentId: string) =>
+    request<{ message: string }>(`/customers/${customerId}/documents/${documentId}`, {
+      method: 'DELETE'
+    }),
+  downloadCustomerDocument: async (customerId: string, documentId: string) => {
+    const response = await fetch(`${API_URL}/customers/${customerId}/documents/${documentId}/download`, {
+      headers: authToken
+        ? {
+            Authorization: `Bearer ${authToken}`
+          }
+        : undefined
+    });
+    if (!response.ok) {
+      throw new Error('Téléchargement impossible');
+    }
+    return response.blob();
+  },
+  fetchAuditLogs: (params: { entity_type: string; entity_id?: string; limit?: number }) => {
+    const searchParams = new URLSearchParams({ entity_type: params.entity_type });
+    if (params.entity_id) {
+      searchParams.set('entity_id', params.entity_id);
+    }
+    if (params.limit) {
+      searchParams.set('limit', params.limit.toString());
+    }
+    return request<AuditLogEntry[]>(`/audit-logs?${searchParams.toString()}`);
+  },
+  fetchLogisticsKpis: (params: { start?: string; end?: string }) => {
+    const searchParams = new URLSearchParams();
+    if (params.start) searchParams.set('start', params.start);
+    if (params.end) searchParams.set('end', params.end);
+    const suffix = searchParams.toString() ? `?${searchParams.toString()}` : '';
+    return request<{
+      start: string;
+      end: string;
+      total_routes: number;
+      completed_routes: number;
+      status_breakdown: Record<string, number>;
+      rotations_per_day: Record<string, number>;
+      avg_fill_rate: number;
+      avg_route_duration_minutes: number;
+    }>(`/logistics/kpis${suffix}`);
+  },
   // Véhicules
   createVehicle: (payload: { internal_number?: string; plate_number?: string }) =>
     request<{ id: string; message: string }>('/vehicles', {
@@ -494,6 +662,11 @@ export const Api = {
       method: 'PATCH',
       body: JSON.stringify(payload)
     }),
+  optimizeRoute: (id: string, payload: { apply?: boolean; startTime?: string }) =>
+    request<RouteOptimizationResponse>(`/routes/${id}/optimize`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
   deleteRoute: (id: string) => request<{ message: string }>(`/routes/${id}`, { method: 'DELETE' }),
   // Arrêts de route
   fetchRouteStopsByRoute: (routeId: string) => request<RouteStop[]>('/route-stops?route_id=' + routeId),
@@ -507,5 +680,13 @@ export const Api = {
       method: 'PATCH',
       body: JSON.stringify(payload)
     }),
-  deleteRouteStop: (id: string) => request<{ message: string }>(`/route-stops/${id}`, { method: 'DELETE' })
+  deleteRouteStop: (id: string) => request<{ message: string }>(`/route-stops/${id}`, { method: 'DELETE' }),
+  // PDF Templates
+  fetchPdfTemplates: () => request<PdfTemplate[]>('/pdf-templates'),
+  fetchPdfTemplate: (module: string) => request<PdfTemplate>(`/pdf-templates/${module}`),
+  updatePdfTemplate: (module: string, config: PdfTemplateConfig) =>
+    request<PdfTemplate>(`/pdf-templates/${module}`, {
+      method: 'PUT',
+      body: JSON.stringify({ config })
+    })
 };

@@ -13,6 +13,7 @@ type UserFormState = {
   department: string;
   manager_name: string;
   password: string;
+  permissions: string[];
 };
 
 const defaultForm = (): UserFormState => ({
@@ -21,7 +22,8 @@ const defaultForm = (): UserFormState => ({
   role: 'manager',
   department: '',
   manager_name: '',
-  password: ''
+  password: '',
+  permissions: []
 });
 
 const roleLabels: Record<UserRole, string> = {
@@ -29,6 +31,52 @@ const roleLabels: Record<UserRole, string> = {
   manager: 'Responsable',
   user: 'Utilisateur'
 };
+
+const PERMISSION_GROUPS: Array<{
+  label: string;
+  permissions: Array<{ id: string; label: string }>;
+}> = [
+  {
+    label: 'Clients',
+    permissions: [
+      { id: 'view_customers', label: 'Lecture' },
+      { id: 'edit_customers', label: 'Édition' }
+    ]
+  },
+  {
+    label: 'Interventions',
+    permissions: [
+      { id: 'view_interventions', label: 'Lecture' },
+      { id: 'edit_interventions', label: 'Édition' }
+    ]
+  },
+  {
+    label: 'Routes',
+    permissions: [
+      { id: 'view_routes', label: 'Lecture' },
+      { id: 'edit_routes', label: 'Édition' }
+    ]
+  },
+  {
+    label: 'Véhicules',
+    permissions: [
+      { id: 'view_vehicles', label: 'Lecture' },
+      { id: 'edit_vehicles', label: 'Édition' }
+    ]
+  },
+  {
+    label: 'Carte',
+    permissions: [{ id: 'view_map', label: 'Accès carte' }]
+  },
+  {
+    label: 'Congés',
+    permissions: [
+      { id: 'approve_leave_manager', label: 'Validation manager' },
+      { id: 'approve_leave_hr', label: 'Validation RH' },
+      { id: 'approve_leave_director', label: 'Validation direction' }
+    ]
+  }
+];
 
 const UsersAdminPage = () => {
   const [users, setUsers] = useState<AuthUser[]>([]);
@@ -67,7 +115,8 @@ const UsersAdminPage = () => {
       role: user.role,
       department: user.department || '',
       manager_name: user.manager_name || '',
-      password: ''
+      password: '',
+      permissions: user.permissions || []
     });
     setModalOpen(true);
   };
@@ -81,6 +130,15 @@ const UsersAdminPage = () => {
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
+  const togglePermission = (permission: string) => {
+    setForm((prev) => {
+      const permissions = prev.permissions.includes(permission)
+        ? prev.permissions.filter((perm) => perm !== permission)
+        : [...prev.permissions, permission];
+      return { ...prev, permissions };
+    });
+  };
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
@@ -92,7 +150,8 @@ const UsersAdminPage = () => {
           full_name: form.full_name || null,
           department: form.department || null,
           manager_name: form.manager_name || null,
-          password: form.password || undefined
+          password: form.password || undefined,
+          permissions: form.permissions
         });
         toast.success('Utilisateur mis à jour');
       } else {
@@ -107,7 +166,8 @@ const UsersAdminPage = () => {
           role: form.role,
           full_name: form.full_name || undefined,
           department: form.department || undefined,
-          manager_name: form.manager_name || undefined
+          manager_name: form.manager_name || undefined,
+          permissions: form.permissions
         });
         toast.success('Utilisateur créé');
       }
@@ -203,6 +263,7 @@ const UsersAdminPage = () => {
               <span>Nom</span>
               <span>Rôle</span>
               <span>Département</span>
+              <span>Autorisations</span>
               <span>Responsable</span>
               <span>Actions</span>
             </div>
@@ -212,6 +273,13 @@ const UsersAdminPage = () => {
                 <span>{user.full_name || '—'}</span>
                 <span>{roleLabels[user.role]}</span>
                 <span>{user.department || '—'}</span>
+                <span>
+                  {user.permissions && user.permissions.length > 0 ? (
+                    <span className="permission-count">{user.permissions.length} modules</span>
+                  ) : (
+                    '—'
+                  )}
+                </span>
                 <span>{user.manager_name || '—'}</span>
                 <span className="users-actions">
                   <button className="icon-button" onClick={() => openEditModal(user)} aria-label="Modifier">
@@ -296,6 +364,29 @@ const UsersAdminPage = () => {
                   required={!form.id}
                 />
               </label>
+              <div className="permissions-wrapper">
+                <p className="permissions-title">Autorisations fines</p>
+                <div className="permissions-grid">
+                  {PERMISSION_GROUPS.map((group) => (
+                    <div key={group.label} className="permissions-group">
+                      <p>{group.label}</p>
+                      <div className="permissions-options">
+                        {group.permissions.map((permission) => (
+                          <label key={permission.id} className="checkbox-chip">
+                            <input
+                              type="checkbox"
+                              checked={form.permissions.includes(permission.id)}
+                              onChange={() => togglePermission(permission.id)}
+                            />
+                            <span>{permission.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="muted-text">Les autorisations complètent les rôles et permettent d’ouvrir l’accès module par module.</p>
+              </div>
               <div className="modal-actions">
                 <button type="button" className="btn btn-outline" onClick={closeModal} disabled={saving}>
                   Annuler

@@ -15,7 +15,10 @@ import CustomersPage from './pages/CustomersPage';
 import InterventionsPage from './pages/InterventionsPage';
 import VehiclesPage from './pages/VehiclesPage';
 import RoutesPage from './pages/RoutesPage';
+import LogisticsDashboard from './pages/LogisticsDashboard';
+import PdfTemplatesPage from './pages/PdfTemplatesPage';
 import { useAuth } from './hooks/useAuth';
+import { useOffline } from './hooks/useOffline';
 import { Api } from './lib/api';
 
 const NAV_LINK_IDS = [
@@ -35,7 +38,9 @@ const NAV_LINK_IDS = [
   'customers',
   'interventions',
   'vehicles',
-  'routes'
+  'routes',
+  'logistics',
+  'pdfTemplates'
 ] as const;
 type NavId = (typeof NAV_LINK_IDS)[number];
 
@@ -45,6 +50,7 @@ type NavLink = {
   pill?: string;
   requiresAdmin?: boolean;
   requiresManager?: boolean;
+  requiresPermissions?: string[];
 };
 
 type NavSection =
@@ -92,11 +98,13 @@ const NAV_SECTIONS: NavSection[] = [
     id: 'gestion',
     label: 'Gestion',
     children: [
-      { id: 'map', label: 'Carte', requiresManager: true },
-      { id: 'customers', label: 'Clients', requiresManager: true },
-      { id: 'interventions', label: 'Interventions', requiresManager: true },
-      { id: 'vehicles', label: 'Véhicules', requiresManager: true },
-      { id: 'routes', label: 'Routes & Tournées', requiresManager: true }
+      { id: 'map', label: 'Carte', requiresManager: true, requiresPermissions: ['view_map'] },
+      { id: 'customers', label: 'Clients', requiresManager: true, requiresPermissions: ['view_customers'] },
+      { id: 'interventions', label: 'Interventions', requiresManager: true, requiresPermissions: ['view_interventions'] },
+      { id: 'vehicles', label: 'Véhicules', requiresManager: true, requiresPermissions: ['view_vehicles'] },
+      { id: 'routes', label: 'Routes & Tournées', requiresManager: true, requiresPermissions: ['view_routes'] },
+      { id: 'logistics', label: 'Tableau logistique', requiresManager: true, requiresPermissions: ['view_routes'] },
+      { id: 'pdfTemplates', label: 'Templates PDF', requiresManager: true, requiresPermissions: ['edit_pdf_templates'] }
     ]
   },
   { type: 'link', id: 'alerts', label: 'Alertes sécurité', pill: 'Nouveau' },
@@ -104,7 +112,8 @@ const NAV_SECTIONS: NavSection[] = [
 ];
 
 const App = () => {
-  const { user, loading, logout, hasRole } = useAuth();
+  const { user, loading, logout, hasRole, hasPermission } = useAuth();
+  const { pendingCount } = useOffline();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeNav, setActiveNav] = useState<NavId>('rh');
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
@@ -113,6 +122,19 @@ const App = () => {
   const [showGeoPrompt, setShowGeoPrompt] = useState(false);
   const [geoWatchId, setGeoWatchId] = useState<number | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((registration) => {
+          console.log('Service Worker registered:', registration);
+        })
+        .catch((error) => {
+          console.error('Service Worker registration failed:', error);
+        });
+    }
+  }, []);
 
   const toggleGroup = (groupId: string) => {
     setOpenGroups((prev) => ({
@@ -179,13 +201,18 @@ const App = () => {
   }, [handleGeolocationSuccess]);
 
   const canDisplayLink = (link: NavLink) => {
-    if (link.requiresAdmin && !hasRole('admin')) {
+    const isAdmin = hasRole('admin');
+    const isManager = hasRole('manager') || isAdmin;
+    if (link.requiresAdmin && !isAdmin) {
       return false;
     }
-    if (link.requiresManager && !(hasRole('manager') || hasRole('admin'))) {
-      return false;
+    const hasRoleAccess =
+      (!link.requiresManager && !link.requiresAdmin) || (link.requiresManager && isManager) || link.requiresAdmin;
+    if (link.requiresPermissions) {
+      const permissionOk = hasPermission(...link.requiresPermissions);
+      return permissionOk || hasRoleAccess;
     }
-    return true;
+    return hasRoleAccess;
   };
 
   const filteredSections = useMemo(() => {
@@ -229,17 +256,49 @@ const App = () => {
       case 'Declassement':
         return <DeclassementPage />;
       case 'map':
-        return hasRole('admin') || hasRole('manager') ? <MapPage /> : <LeavePage initialTab="demandes" />;
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_map') ? (
+          <MapPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
       case 'adminUsers':
         return hasRole('admin') ? <UsersAdminPage /> : <LeavePage initialTab="demandes" />;
       case 'customers':
-        return hasRole('admin') || hasRole('manager') ? <CustomersPage /> : <LeavePage initialTab="demandes" />;
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_customers') ? (
+          <CustomersPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
       case 'interventions':
-        return hasRole('admin') || hasRole('manager') ? <InterventionsPage /> : <LeavePage initialTab="demandes" />;
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_interventions') ? (
+          <InterventionsPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
       case 'vehicles':
-        return hasRole('admin') || hasRole('manager') ? <VehiclesPage /> : <LeavePage initialTab="demandes" />;
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_vehicles') ? (
+          <VehiclesPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
       case 'routes':
-        return hasRole('admin') || hasRole('manager') ? <RoutesPage /> : <LeavePage initialTab="demandes" />;
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_routes') ? (
+          <RoutesPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'logistics':
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_routes') ? (
+          <LogisticsDashboard />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'pdfTemplates':
+        return hasRole('admin') || hasPermission('edit_pdf_templates') ? (
+          <PdfTemplatesPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
       case 'rh':
       case 'dashboard':
       case 'alerts':

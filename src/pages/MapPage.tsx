@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, Popup, Circle } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Polyline, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Calendar, Truck, Users, AlertTriangle, Users as UsersIcon, MapPin, Clock, Download, Play, Pause, Plus, FileText, User } from 'lucide-react';
@@ -10,6 +10,14 @@ import { Api, type MapUserLocation, type MapVehicle, type MapRoute, type MapUser
 import { useAuth } from '../hooks/useAuth';
 
 const DEFAULT_POSITION: [number, number] = [46.548452466797585, 6.572221457669403];
+
+const MapCenterController = ({ center }: { center: [number, number] }) => {
+  const map = useMap();
+  useEffect(() => {
+    map.setView(center);
+  }, [center, map]);
+  return null;
+};
 
 const FIXED_POINTS: Array<{ id: number; position: [number, number]; name: string; description: string }> = [
   { id: 1, position: [46.548452466797585, 6.572221457669403], name: 'Crissier', description: 'Dépôt principal' },
@@ -78,6 +86,8 @@ export const MapPage = () => {
     managers: []
   });
   const [showPendingOnly, setShowPendingOnly] = useState(false);
+  const [centerOverride, setCenterOverride] = useState<[number, number] | null>(null);
+  const [highlightedCustomer, setHighlightedCustomer] = useState<{ id?: string; name?: string } | null>(null);
   
   // Mode rejeu
   const [replayMode, setReplayMode] = useState(false);
@@ -362,7 +372,36 @@ export const MapPage = () => {
     return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
-  const mapCenter = useMemo<[number, number]>(() => userPosition || DEFAULT_POSITION, [userPosition]);
+  const mapCenter = useMemo<[number, number]>(() => centerOverride || userPosition || DEFAULT_POSITION, [centerOverride, userPosition]);
+  useEffect(() => {
+    const raw = localStorage.getItem('erp_map_focus_customer');
+    if (!raw) return;
+    localStorage.removeItem('erp_map_focus_customer');
+    try {
+      const data = JSON.parse(raw);
+      if (typeof data?.latitude === 'number' && typeof data?.longitude === 'number') {
+        setCenterOverride([data.latitude, data.longitude]);
+        setHighlightedCustomer({ id: data.id, name: data.name });
+        toast.success(`Client ${data.name || ''} centré sur la carte`);
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!centerOverride) return;
+    const timeout = setTimeout(() => {
+      setCenterOverride(null);
+      setHighlightedCustomer(null);
+    }, 20000);
+    return () => clearTimeout(timeout);
+  }, [centerOverride]);
+
+  const dismissHighlight = () => {
+    setCenterOverride(null);
+    setHighlightedCustomer(null);
+  };
 
   const currentUserEmail = user?.email?.toLowerCase() ?? '';
   const routeColors: Record<string, string> = {
@@ -779,9 +818,21 @@ export const MapPage = () => {
         </div>
       </div>
 
+      {highlightedCustomer && (
+        <div className="conflict-alert" style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>
+            Fiche client <strong>{highlightedCustomer.name || 'sélectionnée'}</strong> ouverte depuis le module Clients. Centrage temporaire de la carte.
+          </span>
+          <button type="button" className="btn btn-outline btn-small" onClick={dismissHighlight}>
+            Fermer
+          </button>
+        </div>
+      )}
+
       <div className="map-card">
         <MapContainer center={mapCenter} zoom={9} className="map-container">
           <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <MapCenterController center={mapCenter} />
 
           {FIXED_POINTS.map((point) => (
             <Marker key={point.id} position={point.position}>
@@ -795,6 +846,20 @@ export const MapPage = () => {
           {routes.map((route) => (
             <Polyline key={route.id} positions={getFullRoutePath(route)} pathOptions={{ color: getRouteColor(route.status) }} />
           ))}
+
+          {highlightedCustomer && centerOverride && (
+            <Circle
+              center={centerOverride}
+              radius={180}
+              pathOptions={{
+                color: '#0ea5e9',
+                fillColor: '#38bdf8',
+                fillOpacity: 0.15,
+                weight: 2,
+                dashArray: '6,4'
+              }}
+            />
+          )}
 
           {routes.map((route) =>
             route.stops

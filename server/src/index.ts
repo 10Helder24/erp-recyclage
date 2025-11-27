@@ -7,6 +7,8 @@ const TYPE_LABELS_SERVER: Record<string, string> = {
   heures_sup: 'Récup. heures',
   armee: 'Armée / PC'
 };
+const WORKFLOW_STEPS = ['manager', 'hr', 'director'] as const;
+type WorkflowStep = (typeof WORKFLOW_STEPS)[number];
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -42,6 +44,8 @@ const run = async <T = any>(text: string, params: unknown[] = []): Promise<T[]> 
   const result = await pool.query(text, params) as unknown as { rows: T[] };
   return result.rows;
 };
+
+const MAX_CUSTOMER_DOCUMENT_SIZE = Number(process.env.MAX_CUSTOMER_DOC_SIZE_MB ?? 10) * 1024 * 1024; // 10 Mo par défaut
 
 type EmployeeRow = {
   id: string;
@@ -120,6 +124,7 @@ type UserRow = {
   full_name: string | null;
   department: string | null;
   manager_name: string | null;
+  permissions: string[] | null;
   reset_token: string | null;
   reset_token_expires: string | null;
   created_at: string | null;
@@ -132,6 +137,7 @@ type AuthPayload = {
   role: UserRole;
   department: string | null;
   manager_name: string | null;
+  permissions: string[] | null;
 };
 
 type AuthenticatedRequest = express.Request & { auth?: AuthPayload };
@@ -181,8 +187,551 @@ const mapUserRow = (row: UserRow) => ({
   role: row.role,
   department: row.department,
   manager_name: row.manager_name,
+  permissions: row.permissions ?? [],
   created_at: row.created_at
 });
+
+const OSRM_BASE_URL = process.env.OSRM_BASE_URL || 'https://router.project-osrm.org';
+const DEPOT_COORDS: [number, number] = [46.548452466797585, 6.572221457669403];
+const DEFAULT_ROUTE_START_TIME = '08:00';
+
+type TrafficWindow = {
+  label: string;
+  startHour: number;
+  endHour: number;
+  factor: number;
+};
+
+type TrafficZone = {
+  name: string;
+  latitude: number;
+  longitude: number;
+  radiusKm: number;
+  windows: TrafficWindow[];
+};
+
+const TRAFFIC_ZONES: TrafficZone[] = [
+  {
+    name: 'Lausanne / Crissier',
+    latitude: 46.535,
+    longitude: 6.6,
+    radiusKm: 10,
+    windows: [
+      { label: 'matin', startHour: 6, endHour: 9, factor: 1.35 },
+      { label: 'soir', startHour: 16, endHour: 19, factor: 1.4 }
+    ]
+  },
+  {
+    name: 'Genève centre',
+    latitude: 46.2044,
+    longitude: 6.1432,
+    radiusKm: 8,
+    windows: [
+      { label: 'matin', startHour: 6.5, endHour: 9.5, factor: 1.45 },
+      { label: 'soir', startHour: 15.5, endHour: 19.5, factor: 1.5 }
+    ]
+  },
+  {
+    name: 'Vevey / Riviera',
+    latitude: 46.463,
+    longitude: 6.84,
+    radiusKm: 6,
+    windows: [{ label: 'soir', startHour: 16, endHour: 18.5, factor: 1.25 }]
+  }
+];
+
+const toRadians = (value: number) => (value * Math.PI) / 180;
+
+const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const R = 6371;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
+const sanitizeStartTime = (value?: string) => {
+  if (value && /^\d{2}:\d{2}$/.test(value)) {
+    return value;
+  }
+  return DEFAULT_ROUTE_START_TIME;
+};
+
+const buildRouteStartDate = (date: string, startTime?: string) => {
+  const time = sanitizeStartTime(startTime);
+  return new Date(`${date}T${time}:00`);
+};
+
+const getTrafficImpact = (lat: number, lon: number, timestamp: Date) => {
+  let factor = 1;
+  let label: string | null = null;
+  const hour = timestamp.getHours() + timestamp.getMinutes() / 60;
+  for (const zone of TRAFFIC_ZONES) {
+    const distance = haversineKm(lat, lon, zone.latitude, zone.longitude);
+    if (distance > zone.radiusKm) continue;
+    for (const window of zone.windows) {
+      if (hour >= window.startHour && hour <= window.endHour && window.factor > factor) {
+        factor = window.factor;
+        label = `${zone.name} (${window.label})`;
+      }
+    }
+  }
+  return { factor, label };
+};
+
+const roundNumber = (value: number, digits = 2) => {
+  const power = Math.pow(10, digits);
+  return Math.round(value * power) / power;
+};
+
+type OptimizationStopRow = {
+  id: string;
+  customer_name: string | null;
+  latitude: number;
+  longitude: number;
+  order_index: number;
+  risk_level: string | null;
+};
+
+type OptimizationStopSuggestion = {
+  stop_id: string;
+  customer_name: string | null;
+  previous_order: number;
+  suggested_order: number;
+  eta: string | null;
+  distance_km: number;
+  travel_minutes: number;
+  traffic_factor: number;
+  traffic_label: string | null;
+};
+
+type OptimizationComputationResult = {
+  suggestedStops: OptimizationStopSuggestion[];
+  totalDistanceKm: number;
+  totalDurationMin: number;
+  trafficNotes: string[];
+};
+
+type OptimizationLeg = {
+  distance: number; // meters
+  duration: number; // seconds
+};
+
+type PdfTemplateConfig = {
+  headerLogo?: string | null;
+  footerLogo?: string | null;
+  primaryColor?: string | null;
+  accentColor?: string | null;
+  title?: string | null;
+  subtitle?: string | null;
+  footerText?: string | null;
+  customTexts?: Record<string, string>;
+};
+
+type PdfTemplateRow = {
+  id: string;
+  module: string;
+  config: PdfTemplateConfig;
+  updated_at: string;
+  updated_by: string | null;
+  updated_by_name: string | null;
+};
+
+const DEFAULT_PDF_TEMPLATES: Record<string, PdfTemplateConfig> = {
+  declassement: {
+    title: 'Déclassement de matières',
+    subtitle: 'Rapport de tri',
+    primaryColor: '#000000',
+    accentColor: '#0ea5e9',
+    footerText: 'Retripa SA · Service Qualité'
+  },
+  destruction: {
+    title: 'Destruction de documents',
+    subtitle: 'Certificat d’intervention',
+    primaryColor: '#0f172a',
+    accentColor: '#04b6d9',
+    footerText: 'Confidentiel - usage interne'
+  },
+  leave: {
+    title: 'Demande de congé',
+    subtitle: 'Workflow digital',
+    primaryColor: '#0f172a',
+    accentColor: '#38bdf8',
+    footerText: 'Validée électroniquement'
+  },
+  cdt: {
+    title: 'Centre de tri - CDT',
+    subtitle: 'Feuille de suivi',
+    primaryColor: '#0f172a',
+    accentColor: '#22d3ee'
+  },
+  inventory: {
+    title: 'Inventaire Halle',
+    subtitle: 'Export PDF',
+    primaryColor: '#0f172a',
+    accentColor: '#0ea5e9'
+  },
+  expedition: {
+    title: 'Expéditions',
+    subtitle: 'Plan de chargement',
+    primaryColor: '#0f172a',
+    accentColor: '#0ea5e9'
+  }
+};
+
+const buildSuggestionFromLegs = (
+  orderedStops: OptimizationStopRow[],
+  legs: OptimizationLeg[],
+  routeDate: string,
+  startTime?: string
+): OptimizationComputationResult => {
+  const startDate = buildRouteStartDate(routeDate, startTime);
+  let cursorTime = new Date(startDate);
+  let totalDistanceKm = 0;
+  let totalDurationMin = 0;
+  const notes = new Set<string>();
+
+  const suggestions: OptimizationStopSuggestion[] = orderedStops.map((stop, index) => {
+    const leg = legs[index];
+    const legDistanceKm = leg ? leg.distance / 1000 : 0;
+    let legDurationMin = leg ? leg.duration / 60 : legDistanceKm * (60 / 45); // fallback 45 km/h
+    if (Number.isNaN(legDurationMin)) {
+      legDurationMin = 0;
+    }
+
+    const { factor, label } = getTrafficImpact(stop.latitude, stop.longitude, cursorTime);
+    const adjustedDuration = legDurationMin * factor;
+    const etaDate = new Date(cursorTime.getTime() + adjustedDuration * 60 * 1000);
+
+    cursorTime = etaDate;
+    totalDistanceKm += legDistanceKm;
+    totalDurationMin += adjustedDuration;
+    if (label) {
+      notes.add(label);
+    }
+
+    return {
+      stop_id: stop.id,
+      customer_name: stop.customer_name,
+      previous_order: stop.order_index,
+      suggested_order: index + 1,
+      eta: etaDate.toISOString(),
+      distance_km: roundNumber(legDistanceKm, 2),
+      travel_minutes: roundNumber(adjustedDuration, 1),
+      traffic_factor: roundNumber(factor, 2),
+      traffic_label: label
+    };
+  });
+
+  return {
+    suggestedStops: suggestions,
+    totalDistanceKm: roundNumber(totalDistanceKm, 2),
+    totalDurationMin: roundNumber(totalDurationMin, 1),
+    trafficNotes: Array.from(notes)
+  };
+};
+
+const buildHeuristicOptimization = (
+  stops: OptimizationStopRow[],
+  routeDate: string,
+  startTime?: string
+): OptimizationComputationResult => {
+  const remaining = [...stops];
+  const ordered: OptimizationStopRow[] = [];
+  let currentLat = DEPOT_COORDS[0];
+  let currentLon = DEPOT_COORDS[1];
+
+  while (remaining.length > 0) {
+    let bestIndex = 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    remaining.forEach((stop, idx) => {
+      const dist = haversineKm(currentLat, currentLon, stop.latitude, stop.longitude);
+      if (dist < bestDistance) {
+        bestDistance = dist;
+        bestIndex = idx;
+      }
+    });
+    const [nextStop] = remaining.splice(bestIndex, 1);
+    ordered.push(nextStop);
+    currentLat = nextStop.latitude;
+    currentLon = nextStop.longitude;
+  }
+
+  const legs: OptimizationLeg[] = ordered.map((stop, index) => {
+    const originLat = index === 0 ? DEPOT_COORDS[0] : ordered[index - 1].latitude;
+    const originLon = index === 0 ? DEPOT_COORDS[1] : ordered[index - 1].longitude;
+    const distanceKm = haversineKm(originLat, originLon, stop.latitude, stop.longitude);
+    const durationMinutes = distanceKm * (60 / 40); // approx 40km/h en zone urbaine
+    return { distance: distanceKm * 1000, duration: durationMinutes * 60 };
+  });
+
+  return buildSuggestionFromLegs(ordered, legs, routeDate, startTime);
+};
+
+const buildOsrmOptimization = async (
+  stops: OptimizationStopRow[],
+  routeDate: string,
+  startTime?: string
+): Promise<OptimizationComputationResult> => {
+  const coords = [`${DEPOT_COORDS[1]},${DEPOT_COORDS[0]}`, ...stops.map((stop) => `${stop.longitude},${stop.latitude}`)];
+  const url = `${OSRM_BASE_URL}/trip/v1/driving/${coords.join(';')}?source=first&roundtrip=false&overview=false&annotations=duration,distance`;
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`OSRM error: ${response.status}`);
+  }
+  const data = (await response.json()) as {
+    code?: string;
+    message?: string;
+    trips?: Array<{
+      legs: OptimizationLeg[];
+      waypoint_order?: number[];
+      distance: number;
+      duration: number;
+    }>;
+    waypoints?: Array<{ waypoint_index: number }>;
+  };
+  if (data.code !== 'Ok' || !data.trips?.length) {
+    throw new Error(`OSRM response invalid: ${data.message ?? 'unknown'}`);
+  }
+  const trip = data.trips[0];
+  let order = trip.waypoint_order;
+  if (!order && data.waypoints) {
+    order = data.waypoints.map((wp) => wp.waypoint_index);
+  }
+  if (!order) {
+    throw new Error('OSRM order missing');
+  }
+  const filteredOrder = order.filter((index) => index !== 0); // remove dépôt
+  const orderedStops = filteredOrder.map((waypointIndex) => {
+    const stop = stops[waypointIndex - 1];
+    if (!stop) {
+      throw new Error('OSRM waypoint index mismatch');
+    }
+    return stop;
+  });
+
+  return buildSuggestionFromLegs(orderedStops, trip.legs || [], routeDate, startTime);
+};
+
+const mergeTemplateConfig = (module: string, config?: PdfTemplateConfig | null): PdfTemplateConfig => ({
+  ...(DEFAULT_PDF_TEMPLATES[module] || {}),
+  ...(config || {})
+});
+
+const getPdfTemplate = async (module: string): Promise<PdfTemplateRow> => {
+  const rows = await run<
+    PdfTemplateRow & {
+      updated_by_name: string | null;
+    }
+  >(
+    `select t.id,
+            t.module,
+            t.config,
+            t.updated_at,
+            t.updated_by,
+            u.full_name as updated_by_name
+     from pdf_templates t
+     left join users u on u.id = t.updated_by
+     where module = $1`,
+    [module]
+  );
+  if (!rows.length) {
+    return {
+      id: '',
+      module,
+      config: mergeTemplateConfig(module),
+      updated_at: new Date().toISOString(),
+      updated_by: null,
+      updated_by_name: null
+    };
+  }
+  return {
+    ...rows[0],
+    config: mergeTemplateConfig(module, rows[0].config)
+  };
+};
+
+const upsertPdfTemplate = async (module: string, config: PdfTemplateConfig, userId?: string) => {
+  const merged = mergeTemplateConfig(module, config);
+  await run(
+    `insert into pdf_templates (module, config, updated_by)
+     values ($1, $2, $3)
+     on conflict (module)
+     do update set config = $2, updated_by = $3, updated_at = now()`,
+    [module, merged, userId || null]
+  );
+  return getPdfTemplate(module);
+};
+
+type WorkflowPipelineStep = WorkflowStep | 'completed';
+
+const getNextWorkflowStep = (current: WorkflowStep): WorkflowPipelineStep => {
+  const idx = WORKFLOW_STEPS.indexOf(current);
+  if (idx === -1 || idx === WORKFLOW_STEPS.length - 1) {
+    return 'completed';
+  }
+  return WORKFLOW_STEPS[idx + 1];
+};
+
+const canUserApproveStep = (auth: AuthenticatedRequest['auth'], step: WorkflowStep) => {
+  if (!auth) {
+    return false;
+  }
+  if (auth.role === 'admin') {
+    return true;
+  }
+  const permissions = auth.permissions ?? [];
+  switch (step) {
+    case 'manager':
+      return auth.role === 'manager' || permissions.includes('approve_leave_manager');
+    case 'hr':
+      return permissions.includes('approve_leave_hr');
+    case 'director':
+      return permissions.includes('approve_leave_director');
+    default:
+      return false;
+  }
+};
+
+const parseRecipients = (value?: string | null) =>
+  (value || '')
+    .split(',')
+    .map((email) => email.trim())
+    .filter(Boolean);
+
+const getWorkflowRecipients = (step: WorkflowStep) => {
+  if (step === 'hr') {
+    return parseRecipients(process.env.LEAVE_HR_RECIPIENTS ?? process.env.BREVO_SENDER_EMAIL);
+  }
+  if (step === 'director') {
+    return parseRecipients(process.env.LEAVE_DIRECTION_RECIPIENTS ?? process.env.BREVO_SENDER_EMAIL);
+  }
+  return parseRecipients(process.env.LEAVE_MANAGER_RECIPIENTS ?? process.env.BREVO_SENDER_EMAIL);
+};
+
+const formatLeaveLines = (leaves: LeaveRow[]) =>
+  leaves
+    .map((leave) => {
+      const name = `${leave.employee?.first_name ?? ''} ${leave.employee?.last_name ?? ''}`.trim();
+      const start = format(new Date(leave.start_date), 'dd.MM.yyyy', { locale: fr });
+      const end = format(new Date(leave.end_date), 'dd.MM.yyyy', { locale: fr });
+      return `${name} · ${TYPE_LABELS_SERVER[leave.type as LeaveType] || leave.type} · ${start} → ${end}`;
+    })
+    .join('\n');
+
+const notifyWorkflowStep = async (step: WorkflowStep, leaves: LeaveRow[]) => {
+  const recipients = getWorkflowRecipients(step);
+  if (!recipients.length) {
+    return;
+  }
+  const subject =
+    step === 'hr'
+      ? 'Validation RH requise - Congés'
+      : step === 'director'
+        ? 'Validation Direction requise - Congés'
+        : 'Validation manager requise - Congés';
+  const text = [
+    `Bonjour,`,
+    '',
+    `Une demande de congé nécessite une validation (${step.toUpperCase()}).`,
+    '',
+    formatLeaveLines(leaves),
+    '',
+    'Merci de traiter la demande dans l’ERP.'
+  ].join('\n');
+  await sendBrevoEmail({ to: recipients, subject, text });
+};
+
+const notifyApplicantDecision = async (leaves: LeaveRow[], decision: 'approve' | 'reject', stage: WorkflowStep) => {
+  const emails = Array.from(
+    new Set(
+      leaves
+        .map((leave) => leave.employee?.email?.trim())
+        .filter((email): email is string => Boolean(email))
+    )
+  );
+  if (!emails.length) {
+    return;
+  }
+  const subject =
+    decision === 'approve'
+      ? 'Votre demande de congé a été approuvée'
+      : 'Votre demande de congé a été refusée';
+  const text = [
+    `Bonjour,`,
+    '',
+    decision === 'approve'
+      ? `Votre demande a été approuvée par la ${stage === 'director' ? 'direction' : 'hiérarchie'}.`
+      : `Votre demande a été refusée lors de l'étape ${stage.toUpperCase()}.`,
+    '',
+    formatLeaveLines(leaves),
+    '',
+    'Merci de prendre note.'
+  ].join('\n');
+  await sendBrevoEmail({ to: emails, subject, text });
+};
+
+const fetchLeavesByGroup = async (groupIdentifier: string, hasGroup: boolean) => {
+  if (hasGroup) {
+    return run<LeaveRow>(`${leaveBaseSelect} where l.request_group_id = $1 order by l.start_date asc`, [groupIdentifier]);
+  }
+  return run<LeaveRow>(`${leaveBaseSelect} where l.id = $1`, [groupIdentifier]);
+};
+
+const canViewLeaveInbox = (auth?: AuthPayload) => {
+  if (!auth) return false;
+  if (auth.role === 'admin' || auth.role === 'manager') {
+    return true;
+  }
+  const permissions = auth.permissions ?? [];
+  return (
+    permissions.includes('approve_leave_manager') ||
+    permissions.includes('approve_leave_hr') ||
+    permissions.includes('approve_leave_director')
+  );
+};
+
+type AuditAction = 'create' | 'update' | 'delete';
+const recordAuditLog = async ({
+  entityType,
+  entityId,
+  action,
+  req,
+  before,
+  after
+}: {
+  entityType: string;
+  entityId?: string | null;
+  action: AuditAction;
+  req?: express.Request;
+  before?: unknown;
+  after?: unknown;
+}) => {
+  try {
+    const auth = req ? (req as AuthenticatedRequest).auth : undefined;
+    const userId = auth?.id ?? null;
+    const userName = auth?.full_name ?? auth?.email ?? null;
+    await run(
+      `insert into audit_logs (id, entity_type, entity_id, action, changed_by, changed_by_name, before_data, after_data)
+       values (gen_random_uuid(), $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)`,
+      [
+        entityType,
+        entityId ?? null,
+        action,
+        userId,
+        userName,
+        before ? JSON.stringify(before) : null,
+        after ? JSON.stringify(after) : null
+      ]
+    );
+  } catch (error) {
+    console.error('[AUDIT] Impossible d’enregistrer le log', error);
+  }
+};
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -253,7 +802,8 @@ const createAuthPayload = (user: UserRow): AuthPayload => ({
   full_name: user.full_name,
   role: user.role,
   department: user.department,
-  manager_name: user.manager_name
+  manager_name: user.manager_name,
+  permissions: user.permissions ?? []
 });
 
 const signToken = (payload: AuthPayload) =>
@@ -262,7 +812,7 @@ const signToken = (payload: AuthPayload) =>
   });
 
 const requireAuth =
-  (options?: { roles?: UserRole[] }): express.RequestHandler =>
+  (options?: { roles?: UserRole[]; permissions?: string[] }): express.RequestHandler =>
   (req, res, next) => {
     const header = req.headers.authorization;
     if (!header || !header.startsWith('Bearer ')) {
@@ -272,7 +822,11 @@ const requireAuth =
     try {
       const payload = jwt.verify(token, JWT_SECRET) as AuthPayload;
       (req as AuthenticatedRequest).auth = payload;
-      if (options?.roles && !options.roles.includes(payload.role)) {
+      const roleOk = !options?.roles || options.roles.includes(payload.role);
+      const permissionsList = payload.permissions ?? [];
+      const permissionOk =
+        !options?.permissions || options.permissions.some((perm) => permissionsList.includes(perm));
+      if ((options?.roles || options?.permissions) && !(roleOk || permissionOk)) {
         return res.status(403).json({ message: 'Accès refusé' });
       }
       next();
@@ -424,6 +978,25 @@ const ensureSchema = async () => {
   await run(`alter table leaves add column if not exists army_start_date date`);
   await run(`alter table leaves add column if not exists army_end_date date`);
   await run(`alter table leaves add column if not exists army_reference text`);
+  await run(`alter table leaves add column if not exists workflow_step text not null default 'manager'`);
+  await run(`alter table leaves add column if not exists manager_status text`);
+  await run(`alter table leaves add column if not exists hr_status text`);
+  await run(`alter table leaves add column if not exists director_status text`);
+  await run(`alter table leaves add column if not exists manager_decision_at timestamptz`);
+  await run(`alter table leaves add column if not exists hr_decision_at timestamptz`);
+  await run(`alter table leaves add column if not exists director_decision_at timestamptz`);
+  await run(`alter table leaves add column if not exists manager_decision_by uuid references users(id) on delete set null`);
+  await run(`alter table leaves add column if not exists hr_decision_by uuid references users(id) on delete set null`);
+  await run(`alter table leaves add column if not exists director_decision_by uuid references users(id) on delete set null`);
+  await run(`alter table leaves add column if not exists manager_comment text`);
+  await run(`alter table leaves add column if not exists hr_comment text`);
+  await run(`alter table leaves add column if not exists director_comment text`);
+  await run(
+    `update leaves
+     set workflow_step = 'completed'
+     where coalesce(workflow_step, 'manager') <> 'completed'
+       and status in ('approuve','refuse')`
+  );
 
   await run(`
     create table if not exists leave_balances (
@@ -487,6 +1060,21 @@ const ensureSchema = async () => {
   await run(`alter table customers add column if not exists risk_level text`);
 
   await run(`
+    create table if not exists customer_documents (
+      id uuid primary key default gen_random_uuid(),
+      customer_id uuid not null references customers(id) on delete cascade,
+      filename text not null,
+      mimetype text,
+      size bigint,
+      file_data bytea,
+      uploaded_by uuid references users(id) on delete set null,
+      uploaded_by_name text,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists customer_documents_customer_idx on customer_documents(customer_id, created_at desc)');
+
+  await run(`
     create table if not exists routes (
       id uuid primary key,
       date date not null,
@@ -540,6 +1128,17 @@ const ensureSchema = async () => {
   await run('create index if not exists interventions_created_at_idx on interventions(created_at desc)');
 
   await run(`
+    create table if not exists pdf_templates (
+      id uuid primary key default gen_random_uuid(),
+      module text not null unique,
+      config jsonb not null default '{}'::jsonb,
+      updated_by uuid references users(id) on delete set null,
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create unique index if not exists pdf_templates_module_idx on pdf_templates(module)');
+
+  await run(`
     create table if not exists users (
       id uuid primary key,
       email text not null unique,
@@ -548,6 +1147,7 @@ const ensureSchema = async () => {
       full_name text,
       department text,
       manager_name text,
+      permissions text[],
       reset_token text,
       reset_token_expires timestamptz,
       created_at timestamptz not null default now()
@@ -556,6 +1156,23 @@ const ensureSchema = async () => {
 
   await run(`alter table users add column if not exists reset_token text`);
   await run(`alter table users add column if not exists reset_token_expires timestamptz`);
+  await run(`alter table users add column if not exists permissions text[]`);
+
+  await run(`
+    create table if not exists audit_logs (
+      id uuid primary key default gen_random_uuid(),
+      entity_type text not null,
+      entity_id uuid,
+      action text not null,
+      changed_by uuid references users(id) on delete set null,
+      changed_by_name text,
+      before_data jsonb,
+      after_data jsonb,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists audit_logs_entity_idx on audit_logs(entity_type, entity_id, created_at desc)');
+  await run('create index if not exists audit_logs_created_idx on audit_logs(created_at desc)');
 };
 
 const ensureEmployee = async (payload: LeaveRequestPayload): Promise<EmployeeRow> => {
@@ -632,13 +1249,14 @@ app.post(
   '/api/auth/users',
   adminOrSetupGuard,
   asyncHandler(async (req, res) => {
-    const { email, password, role = 'manager', full_name, department, manager_name } = req.body as {
+    const { email, password, role = 'manager', full_name, department, manager_name, permissions } = req.body as {
       email?: string;
       password?: string;
       role?: UserRole;
       full_name?: string;
       department?: string | null;
       manager_name?: string | null;
+      permissions?: string[];
     };
     if (!email || !password) {
       return res.status(400).json({ message: 'Email et mot de passe requis' });
@@ -654,13 +1272,25 @@ app.post(
     if (existing.length > 0) {
       return res.status(409).json({ message: 'Un utilisateur existe déjà avec cet email' });
     }
+    const sanitizedPermissions = Array.isArray(permissions)
+      ? permissions.filter((perm): perm is string => typeof perm === 'string')
+      : [];
     const id = randomUUID();
     const passwordHash = await hashPassword(password);
     const [inserted] = await run<UserRow>(
-      `insert into users (id, email, password_hash, role, full_name, department, manager_name)
-       values ($1,$2,$3,$4,$5,$6,$7)
+      `insert into users (id, email, password_hash, role, full_name, department, manager_name, permissions)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)
        returning *`,
-      [id, normalizedEmail, passwordHash, role, full_name ?? null, department ?? null, manager_name ?? null]
+      [
+        id,
+        normalizedEmail,
+        passwordHash,
+        role,
+        full_name ?? null,
+        department ?? null,
+        manager_name ?? null,
+        sanitizedPermissions.length ? sanitizedPermissions : null
+      ]
     );
     res.status(201).json({ user: mapUserRow(inserted) });
   })
@@ -741,13 +1371,14 @@ app.patch(
   requireAdminAuth,
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { role, full_name, department, manager_name, password, email } = req.body as {
+    const { role, full_name, department, manager_name, password, email, permissions } = req.body as {
       role?: UserRole;
       full_name?: string | null;
       department?: string | null;
       manager_name?: string | null;
       password?: string;
       email?: string;
+      permissions?: string[];
     };
 
     const updates: string[] = [];
@@ -780,6 +1411,11 @@ app.patch(
       const passwordHash = await hashPassword(password);
       updates.push(`password_hash = $${updates.length + 1}`);
       values.push(passwordHash);
+    }
+    if (Array.isArray(permissions)) {
+      const sanitizedPermissions = permissions.filter((perm): perm is string => typeof perm === 'string');
+      updates.push(`permissions = $${updates.length + 1}`);
+      values.push(sanitizedPermissions.length ? sanitizedPermissions : null);
     }
 
     if (updates.length === 0) {
@@ -1094,10 +1730,108 @@ app.get(
 
 app.get(
   '/api/leaves/pending',
-  requireManagerAuth,
-  asyncHandler(async (_req, res) => {
-    const rows = await run<LeaveRow>(`${leaveBaseSelect} where l.status = 'en_attente' order by l.start_date asc`);
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    if (!canViewLeaveInbox(authReq.auth)) {
+      return res.status(403).json({ message: 'Accès refusé' });
+    }
+    const rows = await run<LeaveRow>(
+      `${leaveBaseSelect} where coalesce(l.workflow_step, 'manager') <> 'completed' order by l.start_date asc`
+    );
     res.json(rows);
+  })
+);
+
+app.get(
+  '/api/logistics/kpis',
+  requireManagerAuth,
+  asyncHandler(async (req, res) => {
+    const start = typeof req.query.start === 'string' ? req.query.start : null;
+    const end = typeof req.query.end === 'string' ? req.query.end : null;
+    const today = new Date();
+    const defaultEnd = end ?? new Date().toISOString().slice(0, 10);
+    const defaultStart =
+      start ?? new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6).toISOString().slice(0, 10);
+
+    const rows = await run<{
+      id: string;
+      date: string;
+      status: string | null;
+      planned_stops: string;
+      completed_stops: string;
+      first_completed: string | null;
+      last_completed: string | null;
+    }>(
+      `
+      select
+        r.id,
+        r.date,
+        r.status,
+        count(rs.id) as planned_stops,
+        count(rs.id) filter (where rs.completed_at is not null) as completed_stops,
+        min(rs.completed_at) as first_completed,
+        max(rs.completed_at) as last_completed
+      from routes r
+      left join route_stops rs on rs.route_id = r.id
+      where ($1::date is null or r.date >= $1::date)
+        and ($2::date is null or r.date <= $2::date)
+      group by r.id, r.date, r.status
+      order by r.date asc
+      `,
+      [defaultStart, defaultEnd]
+    );
+
+    const metrics = {
+      start: defaultStart,
+      end: defaultEnd,
+      total_routes: 0,
+      completed_routes: 0,
+      status_breakdown: {} as Record<string, number>,
+      rotations_per_day: {} as Record<string, number>,
+      avg_fill_rate: 0,
+      avg_route_duration_minutes: 0
+    };
+
+    let sumFillRate = 0;
+    let fillRateCount = 0;
+    let durationSum = 0;
+    let durationCount = 0;
+
+    rows.forEach((row) => {
+      const planned = Number(row.planned_stops) || 0;
+      const completed = Number(row.completed_stops) || 0;
+      metrics.total_routes += 1;
+
+      const status = row.status || 'pending';
+      metrics.status_breakdown[status] = (metrics.status_breakdown[status] ?? 0) + 1;
+
+      metrics.rotations_per_day[row.date] = (metrics.rotations_per_day[row.date] ?? 0) + 1;
+
+      if (status === 'completed' || completed === planned) {
+        metrics.completed_routes += 1;
+      }
+
+      if (planned > 0) {
+        sumFillRate += completed / planned;
+        fillRateCount += 1;
+      }
+
+      if (row.first_completed && row.last_completed) {
+        const startTime = new Date(row.first_completed).getTime();
+        const endTime = new Date(row.last_completed).getTime();
+        if (!Number.isNaN(startTime) && !Number.isNaN(endTime) && endTime > startTime) {
+          durationSum += (endTime - startTime) / (1000 * 60);
+          durationCount += 1;
+        }
+      }
+    });
+
+    metrics.avg_fill_rate = fillRateCount > 0 ? Math.round((sumFillRate / fillRateCount) * 100) / 100 : 0;
+    metrics.avg_route_duration_minutes =
+      durationCount > 0 ? Math.round((durationSum / durationCount) * 10) / 10 : 0;
+
+    res.json(metrics);
   })
 );
 
@@ -1235,35 +1969,119 @@ app.post(
       inserted.push({ ...(row as Leave), employee } as LeaveRow);
     }
 
+    if (inserted.length) {
+      await notifyWorkflowStep('manager', inserted);
+    }
+
     res.status(201).json(inserted);
   })
 );
 
 app.patch(
   '/api/leaves/:id/status',
-  requireManagerAuth,
+  requireAuth(),
   asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const auth = authReq.auth;
     const { id } = req.params;
-    const { status, signature } = req.body as { status: LeaveStatus; signature?: string };
+    const { decision, status, signature, comment } = req.body as {
+      decision?: 'approve' | 'reject';
+      status?: LeaveStatus;
+      signature?: string;
+      comment?: string;
+    };
 
-    const [row] = await run<Leave>(
-      `update leaves
-       set
-        status = $1,
-        approved_at = case when $1 = 'approuve' then now() else approved_at end,
-        approved_by = case when $1 = 'approuve' then 'manager' else approved_by end,
-        signature = coalesce($2, signature)
-       where id = $3
-       returning *`,
-      [status, signature ?? null, id]
-    );
+    const effectiveDecision =
+      decision ??
+      (status === 'approuve' ? 'approve' : status === 'refuse' ? 'reject' : undefined);
 
-    if (!row) {
+    if (!effectiveDecision || (effectiveDecision !== 'approve' && effectiveDecision !== 'reject')) {
+      return res.status(400).json({ message: 'Décision invalide' });
+    }
+
+    const [current] = await run<Leave>('select * from leaves where id = $1', [id]);
+    if (!current) {
       return res.status(404).json({ message: 'Demande introuvable' });
     }
 
-    const [employee] = await run<EmployeeRow>('select * from employees where id = $1', [(row as Leave).employee_id]);
-    res.json({ ...(row as Leave), employee } as LeaveRow);
+    const currentStep = (current.workflow_step as WorkflowStep) ?? 'manager';
+    if (current.workflow_step === 'completed') {
+      return res.status(400).json({ message: 'Flux d’approbation déjà terminé' });
+    }
+    if (!canUserApproveStep(auth, currentStep)) {
+      return res.status(403).json({ message: 'Accès refusé' });
+    }
+
+    const groupIdentifier = current.request_group_id ?? current.id;
+    const hasGroup = Boolean(current.request_group_id);
+
+    const updates: string[] = ['updated_at = now()'];
+    const values: unknown[] = [];
+
+    const stageLabel = currentStep === 'director' ? 'direction' : currentStep;
+
+    const pushValue = (value: unknown) => {
+      values.push(value);
+      return `$${values.length}`;
+    };
+
+    if (currentStep === 'manager') {
+      updates.push(`manager_status = ${pushValue(effectiveDecision === 'approve' ? 'approved' : 'rejected')}`);
+      updates.push(`manager_decision_by = ${pushValue(auth?.id ?? null)}`);
+      updates.push('manager_decision_at = now()');
+      updates.push(`manager_comment = ${pushValue(comment ?? null)}`);
+    } else if (currentStep === 'hr') {
+      updates.push(`hr_status = ${pushValue(effectiveDecision === 'approve' ? 'approved' : 'rejected')}`);
+      updates.push(`hr_decision_by = ${pushValue(auth?.id ?? null)}`);
+      updates.push('hr_decision_at = now()');
+      updates.push(`hr_comment = ${pushValue(comment ?? null)}`);
+    } else if (currentStep === 'director') {
+      updates.push(`director_status = ${pushValue(effectiveDecision === 'approve' ? 'approved' : 'rejected')}`);
+      updates.push(`director_decision_by = ${pushValue(auth?.id ?? null)}`);
+      updates.push('director_decision_at = now()');
+      updates.push(`director_comment = ${pushValue(comment ?? null)}`);
+      if (signature) {
+        updates.push(`signature = ${pushValue(signature)}`);
+      }
+    }
+
+    let nextStep: WorkflowPipelineStep = current.workflow_step as WorkflowPipelineStep;
+
+    if (effectiveDecision === 'approve') {
+      nextStep = getNextWorkflowStep(currentStep);
+      updates.push(`workflow_step = ${pushValue(nextStep)}`);
+      if (nextStep === 'completed') {
+        updates.push(`status = ${pushValue('approuve' satisfies LeaveStatus)}`);
+        updates.push(`approved_by = ${pushValue(stageLabel)}`);
+        updates.push('approved_at = now()');
+      } else {
+        updates.push(`status = ${pushValue('en_attente' satisfies LeaveStatus)}`);
+      }
+    } else {
+      updates.push(`status = ${pushValue('refuse' satisfies LeaveStatus)}`);
+      updates.push(`workflow_step = ${pushValue('completed')}`);
+    }
+
+    const whereClause = hasGroup ? 'request_group_id = $' : 'id = $';
+    const identifierPosition = values.length + 1;
+    const finalQuery = `update leaves set ${updates.join(', ')} where ${whereClause}${identifierPosition}`;
+    values.push(groupIdentifier);
+
+    await run(finalQuery, values);
+
+    const updatedLeaves = await fetchLeavesByGroup(groupIdentifier, hasGroup);
+
+    if (effectiveDecision === 'approve') {
+      if (nextStep === 'completed') {
+        await notifyApplicantDecision(updatedLeaves, 'approve', currentStep);
+      } else if (nextStep !== 'manager') {
+        await notifyWorkflowStep(nextStep as WorkflowStep, updatedLeaves);
+      }
+    } else {
+      await notifyApplicantDecision(updatedLeaves, 'reject', currentStep);
+    }
+
+    res.json({ leaves: updatedLeaves });
   })
 );
 
@@ -1271,6 +2089,7 @@ app.post(
   '/api/leaves/notify',
   requireManagerAuth,
   asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
     const { leaveIds, canton, pdfBase64, pdfFilename } = req.body as VacationNotificationPayload;
     if (!leaveIds?.length) {
       return res.status(400).json({ message: 'leaveIds requis' });
@@ -1300,7 +2119,12 @@ app.post(
       )
     );
 
-    const mailsTo = [...baseRecipients, ...uniqueEmployeeEmails].filter(Boolean);
+    const approverEmail = authReq.auth?.email?.trim();
+    const mailsTo = [...baseRecipients, ...uniqueEmployeeEmails];
+    if (approverEmail) {
+      mailsTo.push(approverEmail);
+    }
+    const finalRecipients = mailsTo.filter((email): email is string => Boolean(email));
 
     const textBody = rows
       .map(
@@ -1316,7 +2140,7 @@ app.post(
       .join('\n');
 
     await sendBrevoEmail({
-      to: mailsTo,
+      to: finalRecipients,
       subject: `Congés approuvés (${rows.length}) - ${canton}`,
       text: textBody,
       attachments: pdfBase64
@@ -2010,7 +2834,7 @@ app.post(
 // ==================== ENDPOINTS CLIENTS ====================
 app.get(
   '/api/customers',
-  requireAuth(),
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
   asyncHandler(async (req, res) => {
     const rows = await run<{
       id: string;
@@ -2027,7 +2851,7 @@ app.get(
 
 app.post(
   '/api/customers',
-  requireAuth(),
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_customers'] }),
   asyncHandler(async (req, res) => {
     const { name, address, latitude, longitude, risk_level } = req.body as {
       name: string;
@@ -2040,19 +2864,28 @@ app.post(
       return res.status(400).json({ message: 'Nom du client requis' });
     }
     const id = randomUUID();
-    const [customer] = await run<{ id: string }>(
+    const [customer] = await run<{
+      id: string;
+      name: string;
+      address: string | null;
+      latitude: number | null;
+      longitude: number | null;
+      risk_level: string | null;
+      created_at: string;
+    }>(
       `insert into customers (id, name, address, latitude, longitude, risk_level)
        values ($1, $2, $3, $4, $5, $6)
-       returning id`,
+       returning *`,
       [id, name, address || null, latitude || null, longitude || null, risk_level || null]
     );
+    await recordAuditLog({ entityType: 'customer', entityId: customer.id, action: 'create', req, after: customer });
     res.status(201).json({ id: customer.id, message: 'Client créé avec succès' });
   })
 );
 
 app.patch(
   '/api/customers/:id',
-  requireAuth(),
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_customers'] }),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { name, address, latitude, longitude, risk_level } = req.body as {
@@ -2088,19 +2921,198 @@ app.patch(
     if (updates.length === 0) {
       return res.status(400).json({ message: 'Aucune modification fournie' });
     }
+    const [before] = await run('select * from customers where id = $1', [id]);
+    if (!before) {
+      return res.status(404).json({ message: 'Client introuvable' });
+    }
     params.push(id);
-    await run(`update customers set ${updates.join(', ')} where id = $${paramIndex}`, params);
+    const [updated] = await run(`update customers set ${updates.join(', ')} where id = $${paramIndex} returning *`, params);
+    await recordAuditLog({ entityType: 'customer', entityId: id, action: 'update', req, before, after: updated });
     res.json({ message: 'Client mis à jour avec succès' });
   })
 );
 
 app.delete(
   '/api/customers/:id',
-  requireAuth(),
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_customers'] }),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
+    const [before] = await run('select * from customers where id = $1', [id]);
     await run('delete from customers where id = $1', [id]);
+    if (before) {
+      await recordAuditLog({ entityType: 'customer', entityId: id, action: 'delete', req, before });
+    }
     res.json({ message: 'Client supprimé avec succès' });
+  })
+);
+
+app.get(
+  '/api/customers/:id/detail',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const [customer] = await run('select * from customers where id = $1', [id]);
+    if (!customer) {
+      return res.status(404).json({ message: 'Client introuvable' });
+    }
+    const interventions = await run(
+      `select i.*, u.full_name as created_by_name, e.first_name as assigned_first_name, e.last_name as assigned_last_name
+       from interventions i
+       left join users u on u.id = i.created_by
+       left join employees e on e.id = i.assigned_to
+       where i.customer_id = $1
+       order by i.created_at desc
+       limit 25`,
+      [id]
+    );
+    const routeStops = await run(
+      `select rs.*, r.date as route_date, r.status as route_status, v.internal_number, v.plate_number
+       from route_stops rs
+       join routes r on r.id = rs.route_id
+       left join vehicles v on v.id = r.vehicle_id
+       where rs.customer_id = $1
+       order by r.date desc
+       limit 20`,
+      [id]
+    );
+    const documents = await run(
+      `select id, filename, mimetype, size, uploaded_by, uploaded_by_name, created_at
+       from customer_documents
+       where customer_id = $1
+       order by created_at desc`,
+      [id]
+    );
+    const auditLogs = await run(
+      `select id, entity_type, entity_id, action, changed_by, changed_by_name, before_data, after_data, created_at
+       from audit_logs
+       where entity_type = 'customer' and entity_id = $1
+       order by created_at desc
+       limit 30`,
+      [id]
+    );
+    res.json({ customer, interventions, routeStops, documents, auditLogs });
+  })
+);
+
+app.get(
+  '/api/customers/:id/documents',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const documents = await run(
+      `select id, filename, mimetype, size, uploaded_by, uploaded_by_name, created_at
+       from customer_documents
+       where customer_id = $1
+       order by created_at desc`,
+      [id]
+    );
+    res.json(documents);
+  })
+);
+
+app.post(
+  '/api/customers/:id/documents',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_customers'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { filename, base64, mimetype } = req.body as { filename?: string; base64?: string; mimetype?: string };
+    if (!filename || !base64) {
+      return res.status(400).json({ message: 'Fichier invalide' });
+    }
+    const [customer] = await run('select id from customers where id = $1', [id]);
+    if (!customer) {
+      return res.status(404).json({ message: 'Client introuvable' });
+    }
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(base64, 'base64');
+    } catch {
+      return res.status(400).json({ message: 'Fichier non valide (base64)' });
+    }
+    if (!buffer.length) {
+      return res.status(400).json({ message: 'Fichier vide' });
+    }
+    if (buffer.length > MAX_CUSTOMER_DOCUMENT_SIZE) {
+      return res.status(400).json({ message: 'Fichier trop volumineux (10 Mo max par défaut)' });
+    }
+    const auth = (req as AuthenticatedRequest).auth;
+    const [document] = await run(
+      `insert into customer_documents (customer_id, filename, mimetype, size, file_data, uploaded_by, uploaded_by_name)
+       values ($1, $2, $3, $4, $5, $6, $7)
+       returning id, filename, mimetype, size, uploaded_by, uploaded_by_name, created_at`,
+      [
+        id,
+        filename,
+        mimetype || null,
+        buffer.length,
+        buffer,
+        auth?.id ?? null,
+        auth?.full_name ?? auth?.email ?? null
+      ]
+    );
+    await recordAuditLog({ entityType: 'customer_document', entityId: document.id, action: 'create', req, after: document });
+    res.status(201).json({ document });
+  })
+);
+
+app.get(
+  '/api/customers/:customerId/documents/:documentId/download',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
+  asyncHandler(async (req, res) => {
+    const { customerId, documentId } = req.params;
+    const [document] = await run<{ filename: string; mimetype: string | null; file_data: Buffer | null }>(
+      `select filename, mimetype, file_data from customer_documents where id = $1 and customer_id = $2`,
+      [documentId, customerId]
+    );
+    if (!document || !document.file_data) {
+      return res.status(404).json({ message: 'Document introuvable' });
+    }
+    res.setHeader('Content-Type', document.mimetype || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${document.filename}"`);
+    res.send(document.file_data);
+  })
+);
+
+app.delete(
+  '/api/customers/:customerId/documents/:documentId',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_customers'] }),
+  asyncHandler(async (req, res) => {
+    const { customerId, documentId } = req.params;
+    const [document] = await run(
+      `delete from customer_documents where id = $1 and customer_id = $2
+       returning id, filename, mimetype, size, uploaded_by, uploaded_by_name, created_at`,
+      [documentId, customerId]
+    );
+    if (!document) {
+      return res.status(404).json({ message: 'Document introuvable' });
+    }
+    await recordAuditLog({ entityType: 'customer_document', entityId: documentId, action: 'delete', req, before: document });
+    res.json({ message: 'Document supprimé' });
+  })
+);
+
+app.get(
+  '/api/audit-logs',
+  requireAuth({ roles: ['admin', 'manager'] }),
+  asyncHandler(async (req, res) => {
+    const entityType = (req.query.entity_type as string) ?? null;
+    const entityId = (req.query.entity_id as string) ?? null;
+    const limit = Math.min(Number(req.query.limit ?? 50), 200);
+    if (!entityType) {
+      return res.status(400).json({ message: 'Paramètre entity_type requis' });
+    }
+    const params: unknown[] = [entityType];
+    let sql = `select id, entity_type, entity_id, action, changed_by, changed_by_name, before_data, after_data, created_at
+               from audit_logs
+               where entity_type = $1`;
+    if (entityId) {
+      params.push(entityId);
+      sql += ` and entity_id = $${params.length}`;
+    }
+    sql += ' order by created_at desc limit $' + (params.length + 1);
+    params.push(limit);
+    const logs = await run(sql, params);
+    res.json(logs);
   })
 );
 
@@ -2378,6 +3390,170 @@ app.patch(
   })
 );
 
+app.post(
+  '/api/routes/:id/optimize',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['optimize_routes', 'edit_routes'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { apply, startTime } = (req.body ?? {}) as { apply?: boolean; startTime?: string };
+
+    const [route] = await run<{ id: string; date: string }>('select id, date from routes where id = $1', [id]);
+    if (!route) {
+      return res.status(404).json({ message: 'Route introuvable' });
+    }
+
+    const stops = await run<
+      OptimizationStopRow & {
+        customer_address: string | null;
+        latitude: number | null;
+        longitude: number | null;
+      }
+    >(
+      `select rs.id,
+              rs.order_index,
+              rs.notes,
+              c.name as customer_name,
+              c.address as customer_address,
+              c.latitude,
+              c.longitude,
+              c.risk_level
+       from route_stops rs
+       left join customers c on c.id = rs.customer_id
+       where rs.route_id = $1
+       order by rs.order_index`,
+      [id]
+    );
+
+    if (stops.length < 2) {
+      return res.status(400).json({ message: 'Au moins deux arrêts sont requis pour optimiser la tournée' });
+    }
+
+    const withCoords = stops.filter((stop) => stop.latitude !== null && stop.longitude !== null) as OptimizationStopRow[];
+    if (withCoords.length < 2) {
+      return res.status(400).json({
+        message: 'Coordonnées insuffisantes pour optimiser cette tournée. Complétez les adresses clients.'
+      });
+    }
+
+    let optimization: OptimizationComputationResult;
+    try {
+      optimization = await buildOsrmOptimization(withCoords, route.date, startTime);
+    } catch (error) {
+      console.warn('OSRM optimization failed, fallback to heuristic', error);
+      optimization = buildHeuristicOptimization(withCoords, route.date, startTime);
+    }
+
+    const missingStops = stops.filter((stop) => stop.latitude === null || stop.longitude === null);
+    const suggestionWithMissing = [...optimization.suggestedStops];
+    missingStops.forEach((stop, index) => {
+      suggestionWithMissing.push({
+        stop_id: stop.id,
+        customer_name: stop.customer_name,
+        previous_order: stop.order_index,
+        suggested_order: suggestionWithMissing.length + 1,
+        eta: null,
+        distance_km: 0,
+        travel_minutes: 0,
+        traffic_factor: 1,
+        traffic_label: 'Coordonnées manquantes'
+      });
+    });
+
+    let applied = false;
+    if (apply) {
+      const orderedIds = suggestionWithMissing.map((stop) => stop.stop_id);
+      await Promise.all(
+        orderedIds.map((stopId, index) => run('update route_stops set order_index = $1 where id = $2', [index, stopId]))
+      );
+      applied = true;
+    }
+
+    return res.json({
+      applied,
+      suggestedStops: suggestionWithMissing,
+      missingStops: missingStops.map((stop) => ({ id: stop.id, name: stop.customer_name })),
+      totalDistanceKm: optimization.totalDistanceKm,
+      totalDurationMin: optimization.totalDurationMin,
+      trafficNotes: optimization.trafficNotes
+    });
+  })
+);
+
+// ==================== PDF Templates ====================
+app.get(
+  '/api/pdf-templates',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_pdf_templates', 'view_pdf_templates'] }),
+  asyncHandler(async (_req, res) => {
+    const rows = await run<
+      PdfTemplateRow & {
+        updated_by_name: string | null;
+      }
+    >(
+      `select t.id,
+              t.module,
+              t.config,
+              t.updated_at,
+              t.updated_by,
+              u.full_name as updated_by_name
+       from pdf_templates t
+       left join users u on u.id = t.updated_by`
+    );
+    const map = new Map<string, PdfTemplateRow>();
+    rows.forEach((row) => {
+      map.set(row.module, {
+        ...row,
+        config: mergeTemplateConfig(row.module, row.config)
+      });
+    });
+    const modules = new Set<string>([
+      ...Object.keys(DEFAULT_PDF_TEMPLATES),
+      ...Array.from(map.keys())
+    ]);
+    const data = Array.from(modules).map((module) => {
+      const row = map.get(module);
+      if (row) {
+        return row;
+      }
+      return {
+        id: '',
+        module,
+        config: mergeTemplateConfig(module),
+        updated_at: null,
+        updated_by: null,
+        updated_by_name: null
+      };
+    });
+    res.json(data);
+  })
+);
+
+app.get(
+  '/api/pdf-templates/:module',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_pdf_templates', 'view_pdf_templates'] }),
+  asyncHandler(async (req, res) => {
+    const module = req.params.module;
+    const template = await getPdfTemplate(module);
+    res.json(template);
+  })
+);
+
+app.put(
+  '/api/pdf-templates/:module',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_pdf_templates'] }),
+  asyncHandler(async (req, res) => {
+    const module = req.params.module;
+    const config = (req.body?.config ?? {}) as PdfTemplateConfig;
+    if (config.headerLogo && !config.headerLogo.startsWith('data:') && !config.headerLogo.startsWith('http')) {
+      return res.status(400).json({ message: 'Logo invalide (utiliser data URL ou lien http)' });
+    }
+    if (config.footerLogo && !config.footerLogo.startsWith('data:') && !config.footerLogo.startsWith('http')) {
+      return res.status(400).json({ message: 'Logo invalide (utiliser data URL ou lien http)' });
+    }
+    const template = await upsertPdfTemplate(module, config, (req as AuthenticatedRequest).auth?.id);
+    res.json(template);
+  })
+);
+
 app.delete(
   '/api/routes/:id',
   requireAuth(),
@@ -2408,8 +3584,11 @@ app.get(
       completed_at: string | null;
       customer_name: string | null;
       customer_address: string | null;
+      latitude: number | null;
+      longitude: number | null;
+      risk_level: string | null;
     }>(
-      `select rs.*, c.name as customer_name, c.address as customer_address
+      `select rs.*, c.name as customer_name, c.address as customer_address, c.latitude, c.longitude, c.risk_level
        from route_stops rs
        left join customers c on c.id = rs.customer_id
        where rs.route_id = $1

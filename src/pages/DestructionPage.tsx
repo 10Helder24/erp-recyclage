@@ -3,8 +3,10 @@ import jsPDF from 'jspdf';
 import { Camera, Plus, Trash2, FileText, X, Pencil, Image as ImageIcon, Send, Download } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import toast from 'react-hot-toast';
-import { Api } from '../lib/api';
+import { Api, type PdfTemplateConfig } from '../lib/api';
+import { usePdfTemplate } from '../hooks/usePdfTemplate';
 import { openPdfPreview } from '../utils/pdfPreview';
+import { getFooterLines, getTemplateColors, resolveTemplateImage } from '../utils/pdfTemplate';
 
 const LOGO_URL = '/logo-retripa.png';
 const SGS_URL = '/sgs.png';
@@ -58,6 +60,7 @@ const DestructionMatieres: React.FC = () => {
   const [loading, setLoading] = React.useState(false);
 
   const signatureRef = React.useRef<SignatureCanvas | null>(null);
+  const { config: templateConfig, loading: templateLoading } = usePdfTemplate('destruction');
 
   const handleAddMarchandise = () => {
     setMarchandises((prev) => [...prev, { id: crypto.randomUUID(), nom: '', reference: '' }]);
@@ -120,7 +123,7 @@ const DestructionMatieres: React.FC = () => {
     return value;
   };
 
-  const buildPDF = async (): Promise<{ doc: jsPDF; base64: string; filename: string }> => {
+  const buildPDF = async (template?: PdfTemplateConfig): Promise<{ doc: jsPDF; base64: string; filename: string }> => {
     const doc = new jsPDF({
       orientation: 'p',
       unit: 'mm',
@@ -128,23 +131,73 @@ const DestructionMatieres: React.FC = () => {
       compress: true
     });
     const pageWidth = 210;
+    const pageHeight = doc.internal.pageSize.getHeight();
     const margin = 15;
-    const logoImg = await loadImageBase64(LOGO_URL);
-    const sgsImg = await loadImageBase64(SGS_URL);
+    const { primary, accent } = getTemplateColors(template, {
+      primary: [0, 70, 32],
+      accent: [0, 100, 0]
+    });
+    const footerLines = getFooterLines(template, [
+      'Retripa Crissier S.A.',
+      'Chemin de Mongevon 11 – 1023 Crissier',
+      'T +41 21 637 66 66    info@retripa.ch    www.retripa.ch'
+    ]);
+    const [headerLogo, footerLogo] = await Promise.all([
+      resolveTemplateImage(template?.headerLogo, LOGO_URL),
+      resolveTemplateImage(template?.footerLogo, SGS_URL)
+    ]);
 
     const inscriptionDate = formatDateLong(dateDestruction || new Date().toISOString().slice(0, 10));
 
-    if (logoImg) {
-      doc.addImage(logoImg, 'PNG', 0, 0, 300, 40);
-    }
+    const drawHeader = () => {
+      doc.setFillColor(...primary);
+      doc.rect(0, 0, pageWidth, 22, 'F');
+      if (headerLogo) {
+        doc.addImage(headerLogo, 'PNG', margin, 4, 45, 14, undefined, 'FAST');
+      }
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.setTextColor(255, 255, 255);
+      doc.text(template?.title || 'CERTIFICAT DE DESTRUCTION', pageWidth - margin, 12, { align: 'right' });
+      doc.setFont('helvetica', 'normal');
+      if (template?.subtitle) {
+        doc.setFontSize(10);
+        doc.text(template.subtitle, pageWidth - margin, 18, { align: 'right' });
+      }
+      doc.setTextColor(0, 0, 0);
+    };
+
+    const drawFooter = () => {
+      const footerTop = pageHeight - 18;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      footerLines.forEach((line, index) => {
+        doc.text(line, margin, footerTop + index * 4);
+      });
+      doc.text(inscriptionDate, pageWidth - margin, pageHeight - 6, { align: 'right' });
+      if (footerLogo) {
+        const size = 12;
+        const spacing = 6;
+        const total = size * 3 + spacing * 2;
+        const startX = pageWidth - margin - total;
+        for (let i = 0; i < 3; i += 1) {
+          doc.addImage(footerLogo, 'PNG', startX + i * (size + spacing), footerTop - 2, size, size, undefined, 'FAST');
+        }
+      }
+    };
+
+    drawHeader();
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(24);
-    doc.text('CERTIFICAT DE DESTRUCTION', pageWidth / 2, 60, { align: 'center' });
+    doc.setTextColor(...accent);
+    doc.text(template?.customTexts?.title || 'CERTIFICAT DE DESTRUCTION', pageWidth / 2, 60, { align: 'center' });
+    doc.setTextColor(0, 0, 0);
 
     doc.setFontSize(11);
     doc.text(
-      "Le présent certificat justifie que Retripa Crissier SA a appliqué toutes les procédures nécessaires pour assurer la totale destruction de la marchandise énoncée ci-dessous.",
+      template?.subtitle ||
+        "Le présent certificat justifie que Retripa Crissier SA a appliqué toutes les procédures nécessaires pour assurer la totale destruction de la marchandise énoncée ci-dessous.",
       pageWidth / 2,
       70,
       { align: 'center', maxWidth: 180 }
@@ -186,7 +239,7 @@ const DestructionMatieres: React.FC = () => {
 
     // Tableau marches
     y += 15;
-    doc.setFillColor(200, 255, 200);
+    doc.setFillColor(accent[0], accent[1], accent[2]);
     doc.rect(margin, y, 180, 10, 'F');
     doc.setFont('helvetica', 'bold');
     doc.text('Description de la marchandise détruite', margin + 2, y + 7);
@@ -223,30 +276,21 @@ const DestructionMatieres: React.FC = () => {
 
     const ySign = y + 25;
     doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...accent);
     doc.text('RETRIPA CRISSIER SA', margin, ySign + 10);
     doc.setFont('helvetica', 'normal');
+    doc.setTextColor(0, 0, 0);
     doc.text(`Nom : ${nomAgent}`, margin, ySign + 20);
     doc.text('Signature :', margin, ySign + 30);
     if (signatureImage) {
       doc.addImage(signatureImage, 'PNG', margin + 30, ySign + 22, 40, 12);
     }
 
-    doc.setFontSize(8);
-    doc.text('Retripa Crissier S.A.', margin, 280);
-    doc.text('Chemin de Mongevon 11 – 1023 Crissier', margin, 284);
-    doc.text('T +41 21 637 66 66    info@retripa.ch    www.retripa.ch', margin, 288);
-    doc.text(inscriptionDate, 145, 288);
-    if (sgsImg) {
-      doc.addImage(sgsImg, 'PNG', 160, 277, 12, 12);
-      doc.addImage(sgsImg, 'PNG', 175, 277, 12, 12);
-      doc.addImage(sgsImg, 'PNG', 190, 277, 12, 12);
-    }
+    drawFooter();
 
     // Page 2
     doc.addPage();
-    if (logoImg) {
-      doc.addImage(logoImg, 'PNG', 0, 0, 200, 40);
-    }
+    drawHeader();
 
     y = 55;
     doc.setFontSize(11);
@@ -289,16 +333,7 @@ const DestructionMatieres: React.FC = () => {
       y += 45 - 10;
     }
 
-    doc.setFontSize(8);
-    doc.text('Retripa Crissier S.A.', margin, 280);
-    doc.text('Chemin de Mongevon 11 – 1023 Crissier', margin, 284);
-    doc.text('T +41 21 637 66 66    info@retripa.ch    www.retripa.ch', margin, 288);
-    doc.text(inscriptionDate, 145, 288);
-    if (sgsImg) {
-      doc.addImage(sgsImg, 'PNG', 160, 277, 12, 12);
-      doc.addImage(sgsImg, 'PNG', 175, 277, 12, 12);
-      doc.addImage(sgsImg, 'PNG', 190, 277, 12, 12);
-    }
+    drawFooter();
 
     const filename = `certificat_destruction_${dateDestruction || new Date().toISOString().slice(0, 10)}.pdf`;
     const base64 = doc.output('datauristring').split(',')[1] ?? '';
@@ -316,7 +351,7 @@ const DestructionMatieres: React.FC = () => {
     }
 
     try {
-      const pdf = await buildPDF();
+      const pdf = await buildPDF(templateConfig || undefined);
       openPdfPreview({ doc: pdf.doc as unknown as jsPDF, filename: pdf.filename });
     } catch (error) {
       toast.error((error as Error).message || 'Impossible de générer le PDF');
@@ -335,7 +370,7 @@ const DestructionMatieres: React.FC = () => {
 
     setLoading(true);
     try {
-      const pdf = await buildPDF();
+      const pdf = await buildPDF(templateConfig || undefined);
 
       await Api.sendDestruction({
         dateDestruction,
@@ -374,7 +409,7 @@ const DestructionMatieres: React.FC = () => {
     }
 
     try {
-      const pdf = await buildPDF();
+      const pdf = await buildPDF(templateConfig || undefined);
       pdf.doc.save(pdf.filename);
     } catch (error) {
       toast.error((error as Error).message || 'Impossible de générer le PDF');
@@ -392,11 +427,11 @@ const DestructionMatieres: React.FC = () => {
               <p>Centralisez la prise de photos, signatures et PDF officiels.</p>
             </div>
             <div className="page-actions">
-              <button className="btn btn-outline" onClick={handlePreview} disabled={loading}>
+              <button className="btn btn-outline" onClick={handlePreview} disabled={loading || templateLoading}>
                 <Download size={16} />
                 Prévisualiser PDF
               </button>
-              <button className="btn btn-primary" onClick={handleSendEmail} disabled={loading}>
+              <button className="btn btn-primary" onClick={handleSendEmail} disabled={loading || templateLoading}>
                 {loading ? (
                   'Envoi...'
                 ) : (
@@ -406,6 +441,7 @@ const DestructionMatieres: React.FC = () => {
                   </>
                 )}
               </button>
+              {templateLoading && <span className="pill">Préférences PDF…</span>}
             </div>
           </div>
 
@@ -612,27 +648,6 @@ const PhotoUpload = ({
     )}
   </div>
 );
-
-async function loadImageBase64(url: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    const img = new window.Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(img, 0, 0);
-        resolve(canvas.toDataURL('image/png'));
-      } else {
-        resolve(null);
-      }
-    };
-    img.onerror = () => resolve(null);
-    img.src = url;
-  });
-}
 
 async function fileToCompressedBase64(file: File, maxWidth = 1400, quality = 0.75): Promise<string | null> {
   return new Promise((resolve) => {

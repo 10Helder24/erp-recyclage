@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Calendar as CalendarIcon,
   User,
-  Check,
   X,
   ChevronLeft,
   ChevronRight,
@@ -12,16 +11,25 @@ import {
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import toast from 'react-hot-toast';
-import { format, startOfDay } from 'date-fns';
+import { format, startOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addDays, getISOWeek } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { jsPDF } from 'jspdf';
 
-import { Api } from '../lib/api';
+import { Api, type PdfTemplateConfig } from '../lib/api';
 import { MONTHS, getMonthDays, isDateWeekend, isHoliday, calculateBusinessDays } from '../utils/dates';
 import type { CantonCode } from '../utils/dates';
-import type { Leave, LeaveBalance, LeaveRequestPayload, LeaveStatus, LeaveType, EmployeeSummary } from '../types/leaves';
+import type {
+  Leave,
+  LeaveBalance,
+  LeaveRequestPayload,
+  LeaveType,
+  EmployeeSummary,
+  LeaveWorkflowStep
+} from '../types/leaves';
 import type { Employee } from '../types/employees';
 import { useAuth } from '../hooks/useAuth';
+import { usePdfTemplate } from '../hooks/usePdfTemplate';
+import { getFooterLines, getTemplateColors, resolveTemplateImage } from '../utils/pdfTemplate';
 
 const TYPE_COLORS: Record<LeaveType, string> = {
   vacances: 'rgba(59, 130, 246, 0.18)',
@@ -53,13 +61,23 @@ const TYPE_PDF_COLORS: Record<LeaveType, [number, number, number]> = {
   armee: [64, 64, 64]
 };
 
-const STATUS_TAG: Record<LeaveStatus, string> = {
-  en_attente: 'pending',
-  approuve: 'approved',
-  refuse: 'rejected'
-};
-
 const PRIMARY_PDF_TYPES: LeaveType[] = ['vacances', 'heures_sup', 'armee'];
+const WORKFLOW_SEQUENCE: LeaveWorkflowStep[] = ['manager', 'hr', 'director', 'completed'];
+const WORKFLOW_LABELS: Record<LeaveWorkflowStep, string> = {
+  manager: 'Manager',
+  hr: 'RH',
+  director: 'Direction',
+  completed: 'Terminé'
+};
+type WorkflowVisualState = 'pending' | 'active' | 'done' | 'rejected';
+const DEFAULT_MIN_STAFF = 2;
+const DEPARTMENT_MIN_STAFF: Record<string, number> = {
+  Exploitation: 3,
+  Production: 4
+};
+type WeekRange = { start: Date; end: Date; label: string };
+type CapacityAlert = { department: string; label: string; available: number; required: number };
+type SimulationAbsence = { start: string; end: string; department?: string };
 
 type PeriodForm = { type: LeaveType; start_date: string; end_date: string };
 
@@ -106,10 +124,18 @@ const CANTON_OPTIONS: Array<{ code: CantonCode; label: string }> = [
 ];
 
 const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
-  const { user, hasRole } = useAuth();
+  const { user, hasRole, hasPermission } = useAuth();
+  const { config: leaveTemplate } = usePdfTemplate('leave');
   const isAdmin = hasRole('admin');
-  const isManager = hasRole('admin') || hasRole('manager');
-  const availableTabs = useMemo<LeaveTab[]>(() => (isManager ? ['calendrier', 'demandes', 'soldes'] : ['calendrier', 'soldes']), [isManager]);
+  const canReviewManager = hasRole('manager') || hasPermission('approve_leave_manager');
+  const canReviewHr = hasPermission('approve_leave_hr');
+  const canReviewDirector = isAdmin || hasPermission('approve_leave_director');
+  const canAccessRequests = canReviewManager || canReviewHr || canReviewDirector;
+  const canSeeAllEmployees = isAdmin || canReviewHr || canReviewDirector;
+  const availableTabs = useMemo<LeaveTab[]>(
+    () => (canAccessRequests ? ['calendrier', 'demandes', 'soldes'] : ['calendrier', 'soldes']),
+    [canAccessRequests]
+  );
   const initialSafeTab = availableTabs.includes(initialTab) ? initialTab : availableTabs[0];
   const [activeTab, setActiveTab] = useState<LeaveTab>(initialSafeTab);
   const [currentDate, setCurrentDate] = useState(() => new Date());
@@ -121,10 +147,29 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showSignModal, setShowSignModal] = useState(false);
   const [selectedLeave, setSelectedLeave] = useState<Leave | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<Leave[] | null>(null);
+  const [workflowModal, setWorkflowModal] = useState<{
+    group: Leave[];
+    action: 'approve' | 'reject';
+    step: LeaveWorkflowStep;
+  } | null>(null);
+  const [workflowComment, setWorkflowComment] = useState('');
+  const [signatureComment, setSignatureComment] = useState('');
   const [newLeave, setNewLeave] = useState<NewLeaveForm>(createDefaultFormState);
   const [selectedCanton, setSelectedCanton] = useState<CantonCode>('VD');
   const [managerFilter, setManagerFilter] = useState<string>('all');
   const [departmentFilter, setDepartmentFilter] = useState<string>('all');
+  const weekRanges = useMemo(() => generateWeekRanges(currentDate), [currentDate]);
+  const [showSimulationModal, setShowSimulationModal] = useState(false);
+  const [simulationConfig, setSimulationConfig] = useState<{
+    department: string;
+    headcount: number;
+    absences: SimulationAbsence[];
+  }>({
+    department: 'all',
+    headcount: 0,
+    absences: []
+  });
   const groupedPendingLeaves = useMemo(() => {
     const map = new Map<string, Leave[]>();
     pendingLeaves.forEach((leave) => {
@@ -138,16 +183,49 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     });
     return Array.from(map.values());
   }, [pendingLeaves]);
-
+  const getWorkflowStep = useCallback((leave: Leave): LeaveWorkflowStep => leave.workflow_step ?? 'manager', []);
+  const getStageDecision = (leave: Leave, step: LeaveWorkflowStep) => {
+    if (step === 'manager') return leave.manager_status ?? null;
+    if (step === 'hr') return leave.hr_status ?? null;
+    if (step === 'director') return leave.director_status ?? null;
+    return leave.status === 'approuve' ? 'approved' : leave.status === 'refuse' ? 'rejected' : null;
+  };
+  const getWorkflowStageState = useCallback(
+    (group: Leave[], step: LeaveWorkflowStep): WorkflowVisualState => {
+      const leave = group[0];
+      if (!leave) return 'pending';
+      if (step === 'completed') {
+        if (leave.workflow_step === 'completed') {
+          if (leave.status === 'approuve') return 'done';
+          if (leave.status === 'refuse') return 'rejected';
+        }
+        return 'pending';
+      }
+      const decision = getStageDecision(leave, step);
+      if (decision === 'approved') return 'done';
+      if (decision === 'rejected') return 'rejected';
+      if (getWorkflowStep(leave) === step) return 'active';
+      const stepIndex = WORKFLOW_SEQUENCE.indexOf(step);
+      const currentIndex = WORKFLOW_SEQUENCE.indexOf(getWorkflowStep(leave));
+      if (currentIndex > stepIndex) return 'done';
+      return 'pending';
+    },
+    [getWorkflowStep]
+  );
+  const getGroupLeaves = useCallback(
+    (leave: Leave) =>
+      leave.request_group_id ? pendingLeaves.filter((candidate) => candidate.request_group_id === leave.request_group_id) : [leave],
+    [pendingLeaves]
+  );
 
   const currentEmployee = useMemo(
     () => employees.find((employee) => employee.email?.toLowerCase() === user?.email?.toLowerCase()),
     [employees, user?.email]
   );
   const departmentScope = useMemo(() => {
-    if (isAdmin) return null;
+    if (canSeeAllEmployees) return null;
     return currentEmployee?.department ?? null;
-  }, [isAdmin, currentEmployee]);
+  }, [canSeeAllEmployees, currentEmployee]);
   const scopedEmployees = useMemo(() => {
     if (!departmentScope) {
       return employees;
@@ -156,7 +234,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
   }, [employees, departmentScope]);
 
   const managerOptions = useMemo(() => {
-    const source = isManager ? employees : scopedEmployees;
+    const source = canSeeAllEmployees ? employees : scopedEmployees;
     const options = new Set<string>();
     source.forEach((employee) => {
       if (employee.manager_name) {
@@ -164,10 +242,10 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
       }
     });
     return Array.from(options).sort((a, b) => a.localeCompare(b));
-  }, [employees, scopedEmployees, isManager]);
+  }, [employees, scopedEmployees, canSeeAllEmployees]);
 
   const departmentOptions = useMemo(() => {
-    const source = isManager ? employees : scopedEmployees;
+    const source = canSeeAllEmployees ? employees : scopedEmployees;
     const options = new Set<string>();
     source.forEach((employee) => {
       if (employee.department) {
@@ -175,7 +253,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
       }
     });
     return Array.from(options).sort((a, b) => a.localeCompare(b));
-  }, [employees, scopedEmployees, isManager]);
+  }, [employees, scopedEmployees, canSeeAllEmployees]);
 
   const resolveEmployeeMeta = useCallback(
     (leave: Leave) => {
@@ -190,8 +268,8 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     [employees]
   );
 
-  const effectiveDepartmentFilter = isAdmin ? departmentFilter : departmentScope ?? 'all';
-  const effectiveManagerFilter = isAdmin ? managerFilter : currentEmployee?.manager_name ?? 'all';
+  const effectiveDepartmentFilter = canSeeAllEmployees ? departmentFilter : departmentScope ?? 'all';
+  const effectiveManagerFilter = canSeeAllEmployees ? managerFilter : currentEmployee?.manager_name ?? 'all';
 
   const matchesFilters = useCallback(
     (leave: Leave) => {
@@ -219,10 +297,49 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     [effectiveDepartmentFilter, effectiveManagerFilter, resolveEmployeeMeta]
   );
 
-  const filteredPendingGroups = useMemo(
-    () => groupedPendingLeaves.filter((group) => group.length > 0 && matchesFilters(group[0])),
-    [groupedPendingLeaves, matchesFilters]
+  const shouldDisplayGroup = useCallback(
+    (group: Leave[]) => {
+      if (!group.length) {
+        return false;
+      }
+      const step = getWorkflowStep(group[0]);
+      if (step === 'manager') {
+        return canReviewManager && matchesFilters(group[0]);
+      }
+      if (step === 'hr') {
+        return canReviewHr;
+      }
+      if (step === 'director') {
+        return canReviewDirector;
+      }
+      return false;
+    },
+    [canReviewManager, canReviewHr, canReviewDirector, matchesFilters, getWorkflowStep]
   );
+
+  const filteredPendingGroups = useMemo(
+    () => groupedPendingLeaves.filter((group) => shouldDisplayGroup(group)),
+    [groupedPendingLeaves, shouldDisplayGroup]
+  );
+
+  const canActOnGroup = useCallback(
+    (group: Leave[]) => {
+      if (!group.length) return false;
+      const step = getWorkflowStep(group[0]);
+      if (step === 'manager') {
+        return canReviewManager && matchesFilters(group[0]);
+      }
+      if (step === 'hr') {
+        return canReviewHr;
+      }
+      if (step === 'director') {
+        return canReviewDirector;
+      }
+      return false;
+    },
+    [canReviewManager, canReviewHr, canReviewDirector, matchesFilters, getWorkflowStep]
+  );
+
 
   const overlappingPendingLeaves = useMemo(() => {
     const conflictIds = new Set<string>();
@@ -292,10 +409,85 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     [scopedEmployees, employeesWithApprovedLeaves]
   );
   const displayEmployees = filteredEmployees;
-  const displayBalances = useMemo(
-    () => (isManager ? leaveBalances : leaveBalances.filter((balance) => balance.employee?.id === currentEmployee?.id)),
-    [leaveBalances, isManager, currentEmployee?.id]
-  );
+  const weeklyCapacityAlerts = useMemo<CapacityAlert[]>(() => {
+    if (!canAccessRequests) {
+      return [];
+    }
+    const alerts: CapacityAlert[] = [];
+    const departments = Array.from(
+      new Set(employees.map((employee) => employee.department).filter((dept): dept is string => Boolean(dept)))
+    );
+    if (departments.length === 0) {
+      return alerts;
+    }
+    weekRanges.forEach((range) => {
+      departments.forEach((department) => {
+        const deptEmployees = employees.filter((employee) => employee.department === department);
+        if (!deptEmployees.length) {
+          return;
+        }
+        const minStaff = DEPARTMENT_MIN_STAFF[department] ?? DEFAULT_MIN_STAFF;
+        const unavailableEmployees = new Set(
+          approvedCalendarLeaves
+            .filter(
+              (leave) =>
+                overlapsRange(leave, range.start, range.end) && resolveEmployeeMeta(leave).department === department
+            )
+            .map((leave) => leave.employee_id)
+        );
+        const available = deptEmployees.length - unavailableEmployees.size;
+        if (available < minStaff) {
+          alerts.push({
+            department,
+            label: range.label,
+            available,
+            required: minStaff
+          });
+        }
+      });
+    });
+    return alerts;
+  }, [canAccessRequests, weekRanges, employees, approvedCalendarLeaves, resolveEmployeeMeta]);
+
+  const simulationResults = useMemo(() => {
+    if (!canAccessRequests) {
+      return [];
+    }
+    const department = simulationConfig.department && simulationConfig.department !== 'all' ? simulationConfig.department : departmentOptions[0];
+    if (!department) {
+      return [];
+    }
+    const departmentEmployees = employees.filter((employee) => employee.department === department);
+    const baseHeadcount = simulationConfig.headcount || departmentEmployees.length || 0;
+    const minStaff = DEPARTMENT_MIN_STAFF[department] ?? DEFAULT_MIN_STAFF;
+    const customAbsences = simulationConfig.absences.filter((absence) => !absence.department || absence.department === department);
+    return weekRanges.map((range) => {
+      const unavailableEmployees = new Set(
+        approvedCalendarLeaves
+          .filter((leave) => resolveEmployeeMeta(leave).department === department && overlapsRange(leave, range.start, range.end))
+          .map((leave) => leave.employee_id)
+      );
+      const customCount = customAbsences.filter(
+        (absence) => absence.start && absence.end && intervalsOverlap(absence.start, absence.end, range.start, range.end)
+      ).length;
+      const available = baseHeadcount - unavailableEmployees.size - customCount;
+      return {
+        label: range.label,
+        available,
+        required: minStaff
+      };
+    });
+  }, [canAccessRequests, simulationConfig, weekRanges, employees, approvedCalendarLeaves, resolveEmployeeMeta, departmentOptions]);
+  const displayBalances = useMemo(() => {
+    if (canSeeAllEmployees) {
+      return leaveBalances;
+    }
+    if (canReviewManager) {
+      const scopedIds = new Set(scopedEmployees.map((employee) => employee.id));
+      return leaveBalances.filter((balance) => scopedIds.has(balance.employee_id));
+    }
+    return leaveBalances.filter((balance) => balance.employee?.id === currentEmployee?.id);
+  }, [leaveBalances, canSeeAllEmployees, canReviewManager, scopedEmployees, currentEmployee?.id]);
   const showEmptyCalendarMessage = approvedCalendarLeaves.length === 0 || displayEmployees.length === 0;
   const [showFullMobileCalendar, setShowFullMobileCalendar] = useState(false);
 
@@ -306,7 +498,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
       const start = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0];
       const end = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
 
-      const pendingPromise = isManager ? Api.fetchPendingLeaves() : Promise.resolve([] as Leave[]);
+      const pendingPromise = canAccessRequests ? Api.fetchPendingLeaves() : Promise.resolve([] as Leave[]);
       const [employeesRes, pendingRes, balancesRes, calendarRes] = await Promise.all([
         Api.fetchEmployees(),
         pendingPromise,
@@ -314,7 +506,8 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
         Api.fetchCalendarLeaves({ start, end })
       ]);
 
-      setEmployees(employeesRes ?? []);
+      const sortedEmployees = (employeesRes ?? []).sort((a, b) => a.last_name.localeCompare(b.last_name));
+      setEmployees(sortedEmployees);
       setPendingLeaves(pendingRes ?? []);
       setLeaveBalances(balancesRes ?? []);
       setCalendarLeaves(calendarRes ?? []);
@@ -324,7 +517,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     } finally {
       setLoading(false);
     }
-  }, [currentDate, isManager]);
+  }, [currentDate, canAccessRequests]);
 
   useEffect(() => {
     loadData();
@@ -433,14 +626,33 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
   }, [currentEmployee, user?.email]);
 
   useEffect(() => {
-    if (!isAdmin) {
+    if (!canSeeAllEmployees) {
       setDepartmentFilter(departmentScope ?? 'all');
       setManagerFilter(currentEmployee?.manager_name ?? 'all');
     }
-  }, [departmentScope, currentEmployee?.manager_name, isAdmin]);
+  }, [departmentScope, currentEmployee?.manager_name, canSeeAllEmployees]);
 
-  const openSignModal = (leave: Leave) => {
-    setSelectedLeave(leave);
+  useEffect(() => {
+    if (!employees.length) return;
+    let departmentValue = simulationConfig.department;
+    if (!departmentValue || departmentValue === 'all') {
+      departmentValue = departmentOptions[0] || 'all';
+    }
+    const targetDept = departmentValue === 'all' ? null : departmentValue;
+    const count = targetDept
+      ? employees.filter((employee) => employee.department === targetDept).length
+      : employees.length;
+    setSimulationConfig((prev) => ({
+      ...prev,
+      department: departmentValue,
+      headcount: count
+    }));
+  }, [employees, simulationConfig.department, departmentOptions]);
+
+  const openSignModal = (group: Leave[]) => {
+    setSelectedGroup(group);
+    setSelectedLeave(group[0]);
+    setSignatureComment('');
     setShowSignModal(true);
     requestAnimationFrame(() => managerSignatureRef.current?.clear());
   };
@@ -448,7 +660,52 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
   const closeSignModal = () => {
     setShowSignModal(false);
     setSelectedLeave(null);
+    setSelectedGroup(null);
+    setSignatureComment('');
     managerSignatureRef.current?.clear();
+  };
+
+  const handleSimulationDepartmentChange = (department: string) => {
+    setSimulationConfig((prev) => ({
+      ...prev,
+      department
+    }));
+  };
+
+  const addSimulationAbsence = () => {
+    setSimulationConfig((prev) => ({
+      ...prev,
+      absences: [...prev.absences, { start: '', end: '', department: prev.department }]
+    }));
+  };
+
+  const updateSimulationAbsence = (index: number, field: 'start' | 'end' | 'department', value: string) => {
+    setSimulationConfig((prev) => {
+      const absences = [...prev.absences];
+      absences[index] = { ...absences[index], [field]: value };
+      return { ...prev, absences };
+    });
+  };
+
+  const removeSimulationAbsence = (index: number) => {
+    setSimulationConfig((prev) => ({
+      ...prev,
+      absences: prev.absences.filter((_, idx) => idx !== index)
+    }));
+  };
+
+  const resetSimulation = () => {
+    setSimulationConfig({
+      department: departmentOptions[0] || 'all',
+      headcount: departmentOptions[0]
+        ? employees.filter((employee) => employee.department === departmentOptions[0]).length
+        : employees.length,
+      absences: []
+    });
+  };
+
+  const changeMonth = (delta: number) => {
+    setCurrentDate((prev) => new Date(prev.getFullYear(), prev.getMonth() + delta, 1));
   };
 
   const handleNewLeaveSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -512,26 +769,13 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     }
   };
 
-  const handleRequestAction = async (leave: Leave, action: LeaveStatus) => {
-    if (!matchesFilters(leave)) {
-      toast.error("Cette demande appartient à un autre secteur");
+  const handleDeleteLeave = async (leaveToDelete: Leave) => {
+    const group = getGroupLeaves(leaveToDelete);
+    if (getWorkflowStep(group[0]) !== 'manager') {
+      toast.error('Suppression impossible après validation manager');
       return;
     }
-    if (action === 'approuve') {
-      openSignModal(leave);
-      return;
-    }
-    try {
-      await Api.updateLeaveStatus(leave.id, action);
-      toast.success('Statut mis à jour');
-      await loadData();
-    } catch (error) {
-      toast.error((error as Error).message || 'Action impossible');
-    }
-  };
-
-const handleDeleteLeave = async (leaveToDelete: Leave) => {
-    if (!matchesFilters(leaveToDelete)) {
+    if (!matchesFilters(leaveToDelete) || !canReviewManager) {
       toast.error("Cette demande appartient à un autre secteur");
       return;
     }
@@ -547,36 +791,71 @@ const handleDeleteLeave = async (leaveToDelete: Leave) => {
     }
   };
 
-const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
-    if (!selectedLeave || !matchesFilters(selectedLeave)) {
-      toast.error("Cette demande n'appartient pas à votre périmètre");
+  const handleWorkflowAction = (group: Leave[], action: 'approve' | 'reject') => {
+    if (!group.length) return;
+    if (!canActOnGroup(group)) {
+      toast.error('Action non autorisée pour ce flux');
+      return;
+    }
+    const step = getWorkflowStep(group[0]);
+    if (step === 'director' && action === 'approve') {
+      openSignModal(group);
+      return;
+    }
+    setWorkflowModal({ group, action, step });
+    setWorkflowComment('');
+  };
+
+  const closeWorkflowDecisionModal = () => {
+    setWorkflowModal(null);
+    setWorkflowComment('');
+  };
+
+  const submitWorkflowDecision = async () => {
+    if (!workflowModal) return;
+    try {
+      await Api.updateLeaveWorkflow(workflowModal.group[0].id, {
+        decision: workflowModal.action,
+        comment: workflowComment || undefined
+      });
+      toast.success(workflowModal.action === 'approve' ? 'Étape validée' : 'Demande refusée');
+      closeWorkflowDecisionModal();
+      await loadData();
+    } catch (error) {
+      toast.error((error as Error).message || 'Action impossible');
+    }
+  };
+
+  const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
+    if (!selectedGroup || !selectedGroup.length || !selectedLeave) {
+      toast.error('Aucune demande sélectionnée');
       return;
     }
     if (!managerSignatureRef.current || managerSignatureRef.current.isEmpty()) {
-      toast.error('Signature manager requise');
+      toast.error('Signature direction requise');
       return;
     }
 
     try {
       const signature = managerSignatureRef.current.toDataURL();
-      const groupedLeaves =
-        selectedLeave.request_group_id != null
-          ? pendingLeaves.filter((leave) => leave.request_group_id === selectedLeave.request_group_id)
-          : [selectedLeave];
-
-      await Promise.all(groupedLeaves.map((leave) => Api.updateLeaveStatus(leave.id, 'approuve', signature)));
-      const pdfDocument = await generatePDF(
-        groupedLeaves[0],
+      await Api.updateLeaveWorkflow(selectedGroup[0].id, {
+        decision: 'approve',
         signature,
-        groupedLeaves.map((leave) => ({
+        comment: signatureComment || undefined
+      });
+      const pdfDocument = await generatePDF(
+        selectedGroup[0],
+        signature,
+        selectedGroup.map((leave) => ({
           type: leave.type,
           start_date: leave.start_date,
           end_date: leave.end_date
         })),
-        groupedLeaves[0].signature ?? ''
+        selectedGroup[0].signature ?? '',
+        leaveTemplate || undefined
       );
       await Api.notifyVacationApproval({
-        leaveIds: groupedLeaves.map((leave) => leave.id),
+        leaveIds: selectedGroup.map((leave) => leave.id),
         canton: holidayCanton,
         pdfBase64: pdfDocument.base64,
         pdfFilename: pdfDocument.filename
@@ -617,15 +896,53 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
           </p>
         </div>
         <div className="page-actions">
-          <button type="button" className="btn btn-outline">
-            Exporter
-          </button>
-          <button type="button" className="btn btn-primary" onClick={openAddModal}>
-            <Plus size={18} />
-            Nouvelle demande
-          </button>
+          <div className="page-actions__filters">
+            <button type="button" className="btn btn-outline" onClick={() => changeMonth(-1)} aria-label="Mois précédent">
+              <ChevronLeft size={16} />
+            </button>
+            <span className="page-actions__current-month">{MONTHS[currentDate.getMonth()]} {currentDate.getFullYear()}</span>
+            <button type="button" className="btn btn-outline" onClick={() => changeMonth(1)} aria-label="Mois suivant">
+              <ChevronRight size={16} />
+            </button>
+          </div>
+          {currentEmployee && (
+            <button type="button" className="btn btn-primary" onClick={openAddModal}>
+              <Plus size={18} />
+              Nouvelle demande
+            </button>
+          )}
+          {canAccessRequests && (
+            <button type="button" className="btn btn-outline" onClick={() => setShowSimulationModal(true)}>
+              Simuler une absence
+            </button>
+          )}
         </div>
       </div>
+
+      {canAccessRequests && weeklyCapacityAlerts.length > 0 && (
+        <div className="team-alerts">
+          <div className="team-alerts__header">
+            <div>
+              <strong>Alertes charge équipes</strong>
+              <p>{weeklyCapacityAlerts.length} alerte(s) détectée(s) sur la période</p>
+            </div>
+          </div>
+          <div className="team-alerts__grid">
+            {weeklyCapacityAlerts.map((alert) => (
+              <div key={`${alert.department}-${alert.label}`} className="team-alert-card">
+                <div className="team-alert-card__meta">
+                  <span className="team-alert-card__department">{alert.department}</span>
+                  <span className="team-alert-card__label">{alert.label}</span>
+                </div>
+                <p className="team-alert-card__status">
+                  Disponibles : <strong>{alert.available}</strong> / {alert.required} requis
+                </p>
+                <p className="team-alert-card__hint">Renforcez l’équipe ou ajustez les congés sur cette semaine.</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="tab-nav">
@@ -831,9 +1148,9 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
               </div>
             )}
 
-            {isManager && activeTab === 'demandes' && (
+            {canAccessRequests && activeTab === 'demandes' && (
               <div className="requests-list">
-                {isAdmin ? (
+                {canSeeAllEmployees ? (
                   <div className="request-filters">
                     <label className="request-filter">
                       <span>Département</span>
@@ -864,7 +1181,8 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
                   <div className="request-filter note">
                     <span>Filtre appliqué</span>
                     <p>
-                      Département : <strong>{user?.department || 'N/A'}</strong> · Responsable : <strong>{user?.manager_name || 'N/A'}</strong>
+                      Département : <strong>{currentEmployee?.department || 'N/A'}</strong> · Responsable :{' '}
+                      <strong>{currentEmployee?.manager_name || 'N/A'}</strong>
                     </p>
                   </div>
                 )}
@@ -879,56 +1197,74 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
                   const leave = group[0];
                   const conflictLeave = group.find((period) => conflictIds.has(period.id));
                   const conflictInfo = conflictLeave ? conflictDetails.get(conflictLeave.id) : null;
+                  const currentStep = getWorkflowStep(leave);
+                  const canAct = canActOnGroup(group);
                   return (
                     <div key={leave.request_group_id ?? leave.id} className="request-card">
-                    <div className="request-card-info">
-                      <div className="avatar">
-                        <User size={20} />
+                      <div className="request-card-info">
+                        <div className="avatar">
+                          <User size={20} />
+                        </div>
+                        <div>
+                          <strong>
+                            {leave.employee?.first_name} {leave.employee?.last_name}
+                          </strong>
+                          <p className="page-subtitle" style={{ margin: 0 }}>
+                            {leave.employee?.email || 'Sans email'}
+                          </p>
+                          <div className="request-periods" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                            {group.map((period) => (
+                              <span key={period.id} className="tag">
+                                {TYPE_LABELS[period.type]}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <strong>
-                          {leave.employee?.first_name} {leave.employee?.last_name}
-                        </strong>
-                        <p className="page-subtitle" style={{ margin: 0 }}>
-                          {leave.employee?.email || 'Sans email'}
-                        </p>
-                        <div className="request-periods" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
-                          {group.map((period) => (
-                            <span key={period.id} className={`tag ${STATUS_TAG[period.status]}`}>
-                              {TYPE_LABELS[period.type]}
+                      <div className="request-workflow">
+                        {WORKFLOW_SEQUENCE.map((step) => {
+                          const state = getWorkflowStageState(group, step);
+                          return (
+                            <span key={step} className={`workflow-chip workflow-chip--${state}`}>
+                              {WORKFLOW_LABELS[step]}
                             </span>
-                          ))}
+                          );
+                        })}
+                      </div>
+                      <div className="request-card-periods" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {group.map((period) => (
+                          <div key={period.id} className="request-card-period" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <CalendarIcon size={16} />
+                            <span>
+                              {TYPE_LABELS[period.type]} · {formatRange(period)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      {conflictInfo && (
+                        <div className="conflict-alert">
+                          ⚠️ Conflit potentiel : un autre {conflictInfo.role?.toLowerCase() || 'employé'} du département{' '}
+                          {conflictInfo.department || 'inconnu'} demande ces dates.
                         </div>
+                      )}
+                      <div className="request-card-actions">
+                        {canAct && (
+                          <>
+                            <button type="button" className="btn btn-outline danger" onClick={() => handleWorkflowAction(group, 'reject')}>
+                              Refuser
+                            </button>
+                            <button type="button" className="btn btn-primary" onClick={() => handleWorkflowAction(group, 'approve')}>
+                              {currentStep === 'director' ? 'Valider & signer' : 'Valider'}
+                            </button>
+                          </>
+                        )}
+                        {canReviewManager && currentStep === 'manager' && (
+                          <button type="button" className="icon-button warn" onClick={() => handleDeleteLeave(leave)} aria-label="Supprimer">
+                            <AlertTriangle size={18} />
+                          </button>
+                        )}
                       </div>
                     </div>
-                    <div className="request-card-periods" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {group.map((period) => (
-                        <div key={period.id} className="request-card-period" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <CalendarIcon size={16} />
-                          <span>
-                            {TYPE_LABELS[period.type]} · {formatRange(period)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                    {conflictInfo && (
-                      <div className="conflict-alert">
-                        ⚠️ Conflit potentiel : un autre {conflictInfo.role?.toLowerCase() || 'employé'} du département{' '}
-                        {conflictInfo.department || 'inconnu'} demande ces dates.
-                      </div>
-                    )}
-                    <div className="request-card-actions">
-                      <button type="button" className="icon-button approve" onClick={() => handleRequestAction(leave, 'approuve')}>
-                        <Check size={18} />
-                      </button>
-                      <button type="button" className="icon-button reject" onClick={() => handleRequestAction(leave, 'refuse')}>
-                        <X size={18} />
-                      </button>
-                      <button type="button" className="icon-button warn" onClick={() => handleDeleteLeave(leave)}>
-                        <AlertTriangle size={18} />
-                      </button>
-                    </div>
-                  </div>
                   );
                 })}
               </div>
@@ -967,11 +1303,7 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
           <form className="form-grid" onSubmit={handleNewLeaveSubmit}>
             <div className="input-group">
               <label>Employé existant</label>
-              <select
-                value={newLeave.employee_id}
-                onChange={(event) => handleEmployeeSelect(event.target.value)}
-                disabled={!isManager}
-              >
+              <select value={newLeave.employee_id} onChange={(event) => handleEmployeeSelect(event.target.value)} disabled={!canSeeAllEmployees}>
                 <option value="">Sélectionner</option>
                 {scopedEmployees.map((employee) => (
                   <option key={employee.id} value={employee.id}>
@@ -1095,13 +1427,145 @@ const submitApprovalWithSignature = async (holidayCanton: CantonCode) => {
         </Modal>
       )}
 
+      {showSimulationModal && (
+        <Modal title="Simulation d'absence" onClose={() => setShowSimulationModal(false)}>
+          <div className="simulation-grid">
+            <div className="input-group">
+              <label>Département</label>
+              <select value={simulationConfig.department} onChange={(event) => handleSimulationDepartmentChange(event.target.value)}>
+                {departmentOptions.length === 0 && <option value="all">Tous</option>}
+                {departmentOptions.map((dept) => (
+                  <option key={dept} value={dept}>
+                    {dept}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="input-group">
+              <label>Effectif considéré</label>
+              <input
+                type="number"
+                min={0}
+                value={simulationConfig.headcount}
+                onChange={(event) =>
+                  setSimulationConfig((prev) => ({
+                    ...prev,
+                    headcount: Number(event.target.value)
+                  }))
+                }
+              />
+            </div>
+          </div>
+          <div className="simulation-absences">
+            <div className="simulation-absences__header">
+              <strong>Absences fictives</strong>
+              <button type="button" className="btn btn-outline" onClick={addSimulationAbsence}>
+                Ajouter
+              </button>
+            </div>
+            {simulationConfig.absences.length === 0 && <p className="muted-text">Aucune absence ajoutée pour l’instant.</p>}
+            {simulationConfig.absences.map((absence, index) => (
+              <div key={index} className="simulation-absence-row">
+                <input
+                  type="date"
+                  value={absence.start}
+                  onChange={(event) => updateSimulationAbsence(index, 'start', event.target.value)}
+                />
+                <input
+                  type="date"
+                  value={absence.end}
+                  onChange={(event) => updateSimulationAbsence(index, 'end', event.target.value)}
+                />
+                <button type="button" className="icon-button warn" onClick={() => removeSimulationAbsence(index)} aria-label="Supprimer">
+                  <AlertTriangle size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="simulation-results">
+            <h4>Impact hebdomadaire</h4>
+            {simulationResults.length === 0 ? (
+              <p className="muted-text">Sélectionnez un département pour voir la simulation.</p>
+            ) : (
+              <table className="simulation-table">
+                <thead>
+                  <tr>
+                    <th>Semaine</th>
+                    <th>Disponible (simulé)</th>
+                    <th>Minimum requis</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {simulationResults.map((result) => (
+                    <tr key={result.label} className={result.available < result.required ? 'critical' : ''}>
+                      <td>{result.label}</td>
+                      <td>{result.available}</td>
+                      <td>{result.required}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div className="modal-actions">
+            <button type="button" className="btn btn-outline" onClick={resetSimulation}>
+              Réinitialiser
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => setShowSimulationModal(false)}>
+              Fermer
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {workflowModal && (
+        <Modal
+          title={
+            workflowModal.action === 'approve'
+              ? `Valider - étape ${WORKFLOW_LABELS[workflowModal.step]}`
+              : `Refuser - étape ${WORKFLOW_LABELS[workflowModal.step]}`
+          }
+          onClose={closeWorkflowDecisionModal}
+        >
+          <p className="modal-intro">
+            {workflowModal.group[0].employee?.first_name} {workflowModal.group[0].employee?.last_name} ·{' '}
+            {workflowModal.group.map((leave) => formatRange(leave)).join(' / ')}
+          </p>
+          <div className="input-group">
+            <label>Commentaire (optionnel)</label>
+            <textarea
+              rows={3}
+              value={workflowComment}
+              onChange={(event) => setWorkflowComment(event.target.value)}
+              placeholder="Ajouter un retour visible par les étapes précédentes"
+            />
+          </div>
+          <div className="modal-actions">
+            <button type="button" className="btn btn-outline" onClick={closeWorkflowDecisionModal}>
+              Annuler
+            </button>
+            <button
+              type="button"
+              className={workflowModal.action === 'approve' ? 'btn btn-primary' : 'btn btn-outline danger'}
+              onClick={submitWorkflowDecision}
+            >
+              {workflowModal.action === 'approve' ? 'Valider' : 'Refuser'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {showSignModal && selectedLeave && (
-        <Modal title="Signature manager" onClose={closeSignModal}>
+        <Modal title="Signature direction" onClose={closeSignModal}>
           <div className="input-group">
             <label>Signature</label>
             <div className="signature-pad" style={{ height: 180 }}>
               <SignatureCanvas ref={(ref) => (managerSignatureRef.current = ref)} canvasProps={{ className: 'signature-canvas' }} />
             </div>
+          </div>
+          <div className="input-group">
+            <label>Commentaire</label>
+            <textarea rows={2} value={signatureComment} onChange={(event) => setSignatureComment(event.target.value)} placeholder="Ajouter une remarque (optionnel)" />
           </div>
           <div className="modal-actions">
             <button type="button" className="btn btn-outline" onClick={closeSignModal}>
@@ -1152,12 +1616,54 @@ async function generatePDF(
   leave: Leave,
   managerSignature: string,
   periods: { type: string; start_date: string; end_date: string }[] = [],
-  employeeSignature: string = ''
+  employeeSignature: string = '',
+  template?: PdfTemplateConfig
 ): Promise<{ doc: jsPDF; base64: string; filename: string }> {
   const doc = new jsPDF('p', 'mm', [148, 210]);
   const pageWidth = 148;
+  const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 8;
-  let y = 10;
+  const headerHeight = 18;
+  const { primary, accent } = getTemplateColors(template, {
+    primary: [15, 23, 42],
+    accent: [59, 130, 246]
+  });
+  const footerLines = getFooterLines(template, ['Retripa Crissier S.A.', 'Workflow congés']);
+  const [headerLogo, footerLogo] = await Promise.all([
+    resolveTemplateImage(template?.headerLogo, '/logo-retripa.png'),
+    resolveTemplateImage(template?.footerLogo, undefined)
+  ]);
+
+  const drawHeader = () => {
+    doc.setFillColor(...primary);
+    doc.rect(0, 0, pageWidth, headerHeight, 'F');
+    if (headerLogo) {
+      doc.addImage(headerLogo, 'PNG', margin, 4, 38, 8, undefined, 'FAST');
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(255, 255, 255);
+    doc.text(template?.title || 'VACANCES ET CONGÉS', pageWidth / 2, 9, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.text(template?.subtitle || format(new Date(), 'dd.MM.yyyy'), pageWidth - margin, 12, { align: 'right' });
+    doc.setTextColor(0, 0, 0);
+  };
+
+  const drawFooter = () => {
+    const footerTop = pageHeight - 15;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    footerLines.forEach((line, idx) => {
+      doc.text(line, margin, footerTop + idx * 3.5);
+    });
+    if (footerLogo) {
+      doc.addImage(footerLogo, 'PNG', pageWidth - margin - 14, footerTop - 4, 14, 10, undefined, 'FAST');
+    }
+  };
+
+  drawHeader();
+  let y = headerHeight + 4;
   const normalizedPeriods =
     periods.length > 0
       ? periods.slice(0, 3)
@@ -1169,19 +1675,6 @@ async function generatePDF(
           }
         ];
 
-  const logoUrl = `${window.location.origin}/logo-retripa.png`;
-  try {
-    const logoBase64 = await loadImageAsBase64(logoUrl);
-    if (logoBase64) {
-      doc.addImage(logoBase64, 'PNG', margin, y, 48, 4);
-    }
-  } catch (error) {
-    console.warn('Logo indisponible', error);
-  }
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.text('VACANCES ET CONGES', pageWidth / 2, y + 4, { align: 'center' });
   const year =
     normalizedPeriods[0]?.start_date && normalizedPeriods[0].start_date !== ''
       ? new Date(normalizedPeriods[0].start_date).getFullYear()
@@ -1202,7 +1695,7 @@ async function generatePDF(
   for (let i = 0; i < 3; i++) {
     const period = normalizedPeriods[i];
     if (period && period.start_date && period.end_date) {
-      const color = TYPE_PDF_COLORS[(period.type as LeaveType) || 'vacances'] || [0, 176, 240];
+      const color = TYPE_PDF_COLORS[(period.type as LeaveType) || 'vacances'] || [accent[0], accent[1], accent[2]];
       doc.setFillColor(...color);
       doc.rect(margin, y, pageWidth - 2 * margin, 7, 'F');
       doc.setTextColor(255, 255, 255);
@@ -1265,21 +1758,43 @@ async function generatePDF(
     doc.addImage(managerSignature, 'PNG', pageWidth / 2 + margin / 2, y - 10, 40, 10);
   }
 
+  drawFooter();
   const filename = `demande-${leave.employee?.last_name ?? leave.id}.pdf`;
   const base64 = doc.output('datauristring').split(',')[1] ?? '';
   return { doc, base64, filename };
 }
 
-async function loadImageAsBase64(url: string): Promise<string> {
-  const response = await fetch(url);
-  const blob = await response.blob();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result?.toString() ?? '');
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
+const generateWeekRanges = (referenceDate: Date): WeekRange[] => {
+  const monthStart = startOfMonth(referenceDate);
+  const monthEnd = endOfMonth(referenceDate);
+  let cursor = startOfWeek(monthStart, { weekStartsOn: 1 });
+  const last = endOfWeek(monthEnd, { weekStartsOn: 1 });
+  const ranges: WeekRange[] = [];
+  while (cursor <= last) {
+    const weekStart = cursor;
+    const weekEnd = endOfWeek(cursor, { weekStartsOn: 1 });
+    const isoWeek = getISOWeek(weekStart).toString().padStart(2, '0');
+    const label = `S${isoWeek} (${format(weekStart, 'dd MMM', { locale: fr })} – ${format(weekEnd, 'dd MMM', {
+      locale: fr
+    })})`;
+    ranges.push({ start: weekStart, end: weekEnd, label });
+    cursor = addDays(weekEnd, 1);
+  }
+  return ranges;
+};
+
+const overlapsRange = (leave: Leave, rangeStart: Date, rangeEnd: Date) => {
+  const leaveStart = startOfDay(new Date(leave.start_date));
+  const leaveEnd = startOfDay(new Date(leave.end_date));
+  return leaveStart <= rangeEnd && leaveEnd >= rangeStart;
+};
+
+const intervalsOverlap = (start: string, end: string, rangeStart: Date, rangeEnd: Date) => {
+  if (!start || !end) return false;
+  const intervalStart = startOfDay(new Date(start));
+  const intervalEnd = startOfDay(new Date(end));
+  return intervalStart <= rangeEnd && intervalEnd >= rangeStart;
+};
 
 export default LeavePage;
 

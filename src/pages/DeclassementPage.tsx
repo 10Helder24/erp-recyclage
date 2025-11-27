@@ -3,8 +3,10 @@ import { jsPDF } from 'jspdf';
 import toast from 'react-hot-toast';
 import { Plus, Trash2, Upload, FileDown, Send } from 'lucide-react';
 
-import { Api } from '../lib/api';
+import { Api, type PdfTemplateConfig } from '../lib/api';
+import { usePdfTemplate } from '../hooks/usePdfTemplate';
 import { openPdfPreview } from '../utils/pdfPreview';
+import { getFooterLines, getTemplateColors, resolveTemplateImage } from '../utils/pdfTemplate';
 
 type DeclassementEntry = {
   id: string;
@@ -33,6 +35,7 @@ const DeclassementPage = () => {
   const [entries, setEntries] = useState<DeclassementEntry[]>([createEntry()]);
   const [photos, setPhotos] = useState<File[]>([]);
   const [loading, setLoading] = useState(false);
+  const { config: templateConfig, loading: templateLoading } = usePdfTemplate('declassement');
 
   const formattedDate = useMemo(() => {
     try {
@@ -111,7 +114,7 @@ const DeclassementPage = () => {
     if (!pdfInput) return;
 
     try {
-      const pdf = await buildPdf(pdfInput);
+      const pdf = await buildPdf(pdfInput, templateConfig || undefined);
       openPdfPreview(pdf);
     } catch (error) {
       toast.error((error as Error).message || 'Impossible de générer le PDF');
@@ -124,7 +127,7 @@ const DeclassementPage = () => {
 
     setLoading(true);
     try {
-      const pdf = await buildPdf(pdfInput);
+      const pdf = await buildPdf(pdfInput, templateConfig || undefined);
 
       await Api.sendDeclassement({
         dateTime,
@@ -165,11 +168,11 @@ const DeclassementPage = () => {
               <p>Enregistrez vos déclassements, joignez des photos et envoyez le rapport par email.</p>
             </div>
             <div className="page-actions">
-              <button type="button" className="btn btn-outline" onClick={handlePreview} disabled={loading}>
+              <button type="button" className="btn btn-outline" onClick={handlePreview} disabled={loading || templateLoading}>
                 <FileDown size={16} />
                 Prévisualiser PDF
               </button>
-              <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={loading}>
+              <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={loading || templateLoading}>
                 {loading ? (
                   'Envoi...'
                 ) : (
@@ -179,6 +182,7 @@ const DeclassementPage = () => {
                   </>
                 )}
               </button>
+              {templateLoading && <span className="pill">Préférences PDF…</span>}
             </div>
           </div>
 
@@ -286,7 +290,7 @@ async function buildPdf({
   entries: DeclassementEntry[];
   generalNotes: string;
   photos: File[];
-}): Promise<{ doc: jsPDF; base64: string; filename: string }> {
+}, template?: PdfTemplateConfig): Promise<{ doc: jsPDF; base64: string; filename: string }> {
   const doc = new jsPDF({
     unit: 'mm',
     format: 'a4',
@@ -297,6 +301,17 @@ async function buildPdf({
   const margin = 15;
   const innerWidth = pageWidthValue - margin * 2;
   let y = margin;
+
+  const fallbackFooterLines = [
+    'Retripa Crissier S.A.',
+    'Chemin de Mongevon 11 – 1023 Crissier',
+    'T +41 21 637 66 66    info@retripa.ch    www.retripa.ch'
+  ];
+  const { accent: accentColor, primary: primaryColor } = getTemplateColors(template, {
+    primary: [0, 0, 0],
+    accent: [30, 64, 175]
+  });
+  const footerLines = getFooterLines(template, fallbackFooterLines);
 
   const ensureSpace = (needed: number, footerLogo: string | null) => {
     if (y + needed > pageHeight - margin - 30) {
@@ -320,7 +335,7 @@ async function buildPdf({
     let innerY = y + 8;
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
-    doc.setTextColor(30, 64, 175);
+    doc.setTextColor(...accentColor);
     doc.text('Client', margin + 6, innerY);
     innerY += 6;
 
@@ -339,7 +354,7 @@ async function buildPdf({
     ensureSpace(12, footerLogo);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
-    doc.setTextColor(30, 64, 175);
+    doc.setTextColor(...accentColor);
     doc.text(label, margin, y);
     doc.setTextColor(17, 24, 39);
     y += 6;
@@ -347,8 +362,8 @@ async function buildPdf({
 
   // Header band with logos
   const [headerLogo, footerLogo] = await Promise.all([
-    loadAssetDataUrl('/retripa-ln.jpg'),
-    loadAssetDataUrl('/sgs.png')
+    resolveTemplateImage(template?.headerLogo, '/retripa-ln.jpg'),
+    resolveTemplateImage(template?.footerLogo, '/sgs.png')
   ]);
 
   const drawFooter = (logo: string | null) => {
@@ -360,10 +375,9 @@ async function buildPdf({
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
     doc.setTextColor(17, 24, 39);
-    doc.text('Retripa Crissier S.A.', margin, footerTextTop);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Chemin de Mongevon 11 – 1023 Crissier', margin, footerTextTop + 5);
-    doc.text('T +41 21 637 66 66    info@retripa.ch    www.retripa.ch', margin, footerTextTop + 10);
+    footerLines.forEach((line, index) => {
+      doc.text(line, margin, footerTextTop + index * 5);
+    });
 
     if (logo) {
       const logoSize = 16;
@@ -379,7 +393,7 @@ async function buildPdf({
   };
 
   const headerHeight = 32;
-  doc.setFillColor(0, 0, 0); // Noir pur pour correspondre au logo
+  doc.setFillColor(...primaryColor);
   doc.rect(0, 0, pageWidthValue, headerHeight, 'F');
 
   if (headerLogo) {
@@ -389,10 +403,17 @@ async function buildPdf({
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
-  doc.text('Déclassement de matières', pageWidthValue - margin, 14, { align: 'right' });
+  doc.text(template?.title || 'Déclassement de matières', pageWidthValue - margin, 14, { align: 'right' });
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(11);
-  doc.text(dateLabel, pageWidthValue - margin, 22, { align: 'right' });
+  if (template?.subtitle) {
+    doc.setFontSize(11);
+    doc.text(template.subtitle, pageWidthValue - margin, 21, { align: 'right' });
+    doc.setFontSize(10);
+    doc.text(dateLabel, pageWidthValue - margin, 27, { align: 'right' });
+  } else {
+    doc.setFontSize(11);
+    doc.text(dateLabel, pageWidthValue - margin, 22, { align: 'right' });
+  }
   doc.setTextColor(17, 24, 39);
   y = headerHeight + 8;
 
@@ -545,26 +566,6 @@ function getSwissDateTimeInputValue(date = new Date()): string {
   }, {});
 
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
-}
-
-async function loadAssetDataUrl(path: string): Promise<string | null> {
-  try {
-    const response = await fetch(`${window.location.origin}${path}`);
-    if (!response.ok) return null;
-    const blob = await response.blob();
-    return await blobToDataUrl(blob);
-  } catch {
-    return null;
-  }
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
 }
 
 async function fileToCompressedDataUrl(file: File, maxWidth = 1400, quality = 0.75): Promise<string> {

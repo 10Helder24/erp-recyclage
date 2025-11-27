@@ -1,5 +1,7 @@
 ﻿export type LeaveType = 'vacances' | 'maladie' | 'accident' | 'deces' | 'formation' | 'heures_sup' | 'armee';
 export type LeaveStatus = 'en_attente' | 'approuve' | 'refuse';
+export type LeaveWorkflowStep = 'manager' | 'hr' | 'director' | 'completed';
+export type LeaveWorkflowDecision = 'approved' | 'rejected' | null;
 
 export interface Leave {
   id: string;
@@ -19,6 +21,19 @@ export interface Leave {
   army_start_date?: string | null;
   army_end_date?: string | null;
   army_reference?: string | null;
+  workflow_step?: LeaveWorkflowStep;
+  manager_status?: LeaveWorkflowDecision;
+  hr_status?: LeaveWorkflowDecision;
+  director_status?: LeaveWorkflowDecision;
+  manager_decision_at?: string | null;
+  hr_decision_at?: string | null;
+  director_decision_at?: string | null;
+  manager_decision_by?: string | null;
+  hr_decision_by?: string | null;
+  director_decision_by?: string | null;
+  manager_comment?: string | null;
+  hr_comment?: string | null;
+  director_comment?: string | null;
 }
 
 export interface EmployeeSummary {

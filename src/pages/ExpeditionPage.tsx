@@ -4,8 +4,10 @@ import toast from 'react-hot-toast';
 import { FileDown, Send, Eye } from 'lucide-react';
 
 import { getHolidayName, isHoliday } from '../utils/dates';
-import { Api } from '../lib/api';
+import { Api, type PdfTemplateConfig } from '../lib/api';
+import { usePdfTemplate } from '../hooks/usePdfTemplate';
 import { openPdfPreview } from '../utils/pdfPreview';
+import { getFooterLines, getTemplateColors, resolveTemplateImage } from '../utils/pdfTemplate';
 
 type CellValue = {
   qty: string;
@@ -76,6 +78,7 @@ const ExpeditionPage = () => {
   const [rows, setRows] = useState<ExpeditionRow[]>(() => DEFAULT_ROWS.map((row) => ({ ...row })));
   const [data, setData] = useState<Record<string, Record<string, CellValue[]>>>({});
   const [loading, setLoading] = useState(false);
+  const { config: templateConfig } = usePdfTemplate('expedition');
 
   const weekDays = useMemo(() => {
     const base = new Date(weekStart);
@@ -177,41 +180,73 @@ const ExpeditionPage = () => {
     setRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, label: value } : row)));
   };
 
-  const buildExpeditionPdf = () => {
+  const buildExpeditionPdf = async (template?: PdfTemplateConfig) => {
     const doc = new jsPDF('l', 'mm', 'a4');
     const margin = 5;
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
     const currentWeekNumber = weekDays.length ? getIsoWeekNumber(weekDays[0]) : null;
+    const { primary, accent } = getTemplateColors(template, {
+      primary: [0, 100, 0],
+      accent: [0, 100, 200]
+    });
+    const footerLines = getFooterLines(template, ['Retripa Crissier S.A.', 'Logistique Expéditions']);
+    const [headerLogo, footerLogo] = await Promise.all([
+      resolveTemplateImage(template?.headerLogo, '/retripa-ln.jpg'),
+      resolveTemplateImage(template?.footerLogo, '/sgs.png')
+    ]);
 
-    // Header - Green band
-    doc.setFillColor(0, 100, 0); // Dark green
-    doc.rect(0, 0, pageWidth, 10, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.setTextColor(255, 255, 255);
-    const weekLabel = currentWeekNumber ? ` S.${String(currentWeekNumber).padStart(2, '0')}` : '';
-    const dateRangeText = `RETRIPA CRISSIER SA${weekLabel} du ${weekDays[0].getDate().toString().padStart(2, '0')}.${(weekDays[0].getMonth() + 1).toString().padStart(2, '0')} au ${weekDays[weekDays.length - 1].getDate().toString().padStart(2, '0')}.${(weekDays[weekDays.length - 1].getMonth() + 1).toString().padStart(2, '0')}.${weekDays[0].getFullYear()}`;
-    doc.text(dateRangeText, pageWidth / 2, 7, { align: 'center' });
+    const drawHeader = () => {
+      doc.setFillColor(...primary);
+      doc.rect(0, 0, pageWidth, 12, 'F');
+      if (headerLogo) {
+        doc.addImage(headerLogo, 'PNG', margin, 1.5, 32, 9, undefined, 'FAST');
+      }
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.setTextColor(255, 255, 255);
+      doc.text(template?.title || 'Expéditions hebdomadaires', pageWidth / 2, 6, { align: 'center' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      const weekLabel = currentWeekNumber ? `S.${String(currentWeekNumber).padStart(2, '0')}` : '';
+      const rangeText = template?.subtitle
+        ? template.subtitle
+        : `du ${weekDays[0].toLocaleDateString('fr-CH')} au ${
+            weekDays[weekDays.length - 1].toLocaleDateString('fr-CH')
+          }`;
+      doc.text(`${rangeText} · ${weekLabel}`, pageWidth - margin, 6, { align: 'right' });
+      doc.setTextColor(0, 0, 0);
+    };
+
+    const drawFooter = () => {
+      const footerTop = pageHeight - 12;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      footerLines.forEach((line, idx) => {
+        doc.text(line, margin, footerTop + idx * 4);
+      });
+      if (footerLogo) {
+        doc.addImage(footerLogo, 'PNG', pageWidth - margin - 16, footerTop - 2, 16, 12, undefined, 'FAST');
+      }
+    };
+
+    drawHeader();
 
     let y = 15;
-    const rowHeight = 8; // Increased to accommodate two slots
+    const rowHeight = 8;
     const leftColWidth = 50;
     const dayColWidth = (pageWidth - margin * 2 - leftColWidth) / weekDays.length;
-    const qtyColWidth = dayColWidth * 0.25; // Small column for quantity (25%)
-    const transporterColWidth = dayColWidth * 0.75; // Large column for transporter (75%)
-    const slotHeight = rowHeight / 2; // Each slot takes half the row height
+    const qtyColWidth = dayColWidth * 0.25;
+    const transporterColWidth = dayColWidth * 0.75;
+    const slotHeight = rowHeight / 2;
 
-    // Column headers
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
-    // Left column - EXPEDITIONS (blue)
-    doc.setFillColor(0, 100, 200); // Blue
+    doc.setFillColor(...accent);
     doc.rect(margin, y, leftColWidth, rowHeight, 'F');
     doc.setTextColor(255, 255, 255);
     doc.text('EXPEDITIONS', margin + leftColWidth / 2, y + rowHeight / 2 + 1.5, { align: 'center' });
 
-    // Day columns
     let x = margin + leftColWidth;
     weekDays.forEach((day) => {
       const dayKey = toInputValue(day);
@@ -219,71 +254,53 @@ const ExpeditionPage = () => {
       const dayName = headerFormatter.format(day);
       const dayNum = day.getDate().toString().padStart(2, '0');
 
-      doc.setFillColor(200, 0, 0); // Red background for all day headers
+      doc.setFillColor(accent[0], accent[1], accent[2]);
       doc.rect(x, y, dayColWidth, rowHeight, 'F');
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(8);
       doc.text(`${dayName} ${dayNum}`, x + dayColWidth / 2, y + rowHeight / 2 + 0.5, { align: 'center' });
       if (isHolidayDay) {
         doc.setFontSize(7);
-        doc.text('Ferié', x + dayColWidth / 2, y + rowHeight / 2 + 2.5, { align: 'center' });
+        doc.text('Férié', x + dayColWidth / 2, y + rowHeight / 2 + 2.5, { align: 'center' });
       }
       x += dayColWidth;
     });
 
     y += rowHeight;
-
-    // Data rows
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6);
     doc.setDrawColor(0, 0, 0);
     doc.setLineWidth(0.1);
 
-    rows.forEach((row, rowIndex) => {
-      // Left column - row label
+    rows.forEach((row) => {
       doc.setFillColor(255, 255, 255);
       doc.rect(margin, y, leftColWidth, rowHeight, 'FD');
       doc.setTextColor(0, 0, 0);
       doc.setFontSize(7);
       doc.text(row.label, margin + 2, y + rowHeight / 2 + 1.5);
 
-      // Day columns
       x = margin + leftColWidth;
       weekDays.forEach((day) => {
         const dayKey = toInputValue(day);
         const isHolidayDay = Boolean(holidays[dayKey]?.isHoliday);
         const slots = ensureCellArray(row.id, dayKey);
 
-        // Draw cell background
-        if (isHolidayDay) {
-          doc.setFillColor(240, 200, 200); // Light red for holiday cells
-        } else {
-          doc.setFillColor(255, 255, 255);
-        }
+        doc.setFillColor(isHolidayDay ? 255 : 245, isHolidayDay ? 228 : 247, isHolidayDay ? 225 : 250);
         doc.rect(x, y, dayColWidth, rowHeight, 'FD');
-
-        // Draw vertical separator between qty and transporter columns
         doc.setDrawColor(0, 0, 0);
         doc.line(x + qtyColWidth, y, x + qtyColWidth, y + rowHeight);
-
-        // Draw horizontal separator between the two slots
         doc.line(x, y + slotHeight, x + dayColWidth, y + slotHeight);
 
-        // Draw content for each slot
         slots.forEach((slot, slotIndex) => {
           const slotY = y + slotIndex * slotHeight;
-          
-          // Quantity column (small)
           if (slot.qty) {
             doc.setTextColor(0, 0, 0);
             doc.text(slot.qty, x + qtyColWidth / 2, slotY + slotHeight / 2 + 1, { align: 'center' });
           }
-
-          // Transporter column (large)
           if (slot.note) {
             doc.setTextColor(0, 0, 0);
-            doc.text(slot.note, x + qtyColWidth + 1, slotY + slotHeight / 2 + 1, { 
-              maxWidth: transporterColWidth - 2 
+            doc.text(slot.note, x + qtyColWidth + 1, slotY + slotHeight / 2 + 1, {
+              maxWidth: transporterColWidth - 2
             });
           }
         });
@@ -294,15 +311,21 @@ const ExpeditionPage = () => {
       y += rowHeight;
     });
 
+    drawFooter();
+
     const base64 = doc.output('datauristring').split(',')[1];
-    const filename = `Expeditions_${weekDays[0].getDate().toString().padStart(2, '0')}.${(weekDays[0].getMonth() + 1).toString().padStart(2, '0')}.${weekDays[0].getFullYear()}.pdf`;
+    const filename = `Expeditions_${weekDays[0].getDate().toString().padStart(2, '0')}.${(
+      weekDays[0].getMonth() + 1
+    )
+      .toString()
+      .padStart(2, '0')}.${weekDays[0].getFullYear()}.pdf`;
 
     return { doc, base64, filename };
   };
 
-  const handlePreview = () => {
+  const handlePreview = async () => {
     try {
-      const pdf = buildExpeditionPdf();
+      const pdf = await buildExpeditionPdf(templateConfig || undefined);
       openPdfPreview(pdf);
     } catch (error) {
       toast.error((error as Error).message || 'Impossible de générer le PDF');
@@ -312,7 +335,7 @@ const ExpeditionPage = () => {
   const handleSendEmail = async () => {
     setLoading(true);
     try {
-      const pdf = buildExpeditionPdf();
+      const pdf = await buildExpeditionPdf(templateConfig || undefined);
       const dateRangeText = `du ${weekDays[0].getDate().toString().padStart(2, '0')}.${(weekDays[0].getMonth() + 1).toString().padStart(2, '0')} au ${weekDays[weekDays.length - 1].getDate().toString().padStart(2, '0')}.${(weekDays[weekDays.length - 1].getMonth() + 1).toString().padStart(2, '0')}.${weekDays[0].getFullYear()}`;
 
       await Api.sendExpedition({

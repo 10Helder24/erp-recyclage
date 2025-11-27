@@ -7,6 +7,7 @@ export interface AuthUser {
   role: UserRole;
   department: string | null;
   manager_name: string | null;
+  permissions: string[];
   created_at?: string | null;
 }
 

@@ -3,8 +3,10 @@ import { Download, Send, FileText } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import toast from 'react-hot-toast';
 
-import { Api } from '../lib/api';
+import { Api, type PdfTemplateConfig } from '../lib/api';
 import { openPdfPreview } from '../utils/pdfPreview';
+import { usePdfTemplate } from '../hooks/usePdfTemplate';
+import { getFooterLines, getTemplateColors, resolveTemplateImage } from '../utils/pdfTemplate';
 
 interface SortingSheetProps {
   user: any;
@@ -131,6 +133,7 @@ const clientReturns = [
 export default function CDTSheets({ user, signOut }: SortingSheetProps) {
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
+  const { config: templateConfig, loading: templateLoading } = usePdfTemplate('cdt');
   const currentDate = useMemo(
     () =>
       new Date().toLocaleDateString('fr-FR', {
@@ -159,14 +162,18 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
     }));
   };
 
-  const handleDownload = (data: Record<string, string>, dateLabel: string) => {
-    const pdf = buildCDTPdf(data, dateLabel);
-    pdf.doc.save(pdf.filename);
+  const handleDownload = async (data: Record<string, string>, dateLabel: string) => {
+    try {
+      const pdf = await buildCDTPdf(data, dateLabel, templateConfig || undefined);
+      pdf.doc.save(pdf.filename);
+    } catch (error) {
+      toast.error((error as Error).message || 'Impossible de générer le PDF');
+    }
   };
 
-  const handlePreview = (data: Record<string, string>, dateLabel: string) => {
+  const handlePreview = async (data: Record<string, string>, dateLabel: string) => {
     try {
-      const pdf = buildCDTPdf(data, dateLabel);
+      const pdf = await buildCDTPdf(data, dateLabel, templateConfig || undefined);
       openPdfPreview({ doc: pdf.doc as unknown as jsPDF, filename: pdf.filename });
     } catch (error) {
       toast.error((error as Error).message || 'Impossible de générer le PDF');
@@ -176,7 +183,7 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
   const handleSendEmail = async (data: Record<string, string>, dateLabel: string) => {
     setLoading(true);
     try {
-      const pdf = buildCDTPdf(data, dateLabel);
+      const pdf = await buildCDTPdf(data, dateLabel, templateConfig || undefined);
       await Api.sendCDT({
         dateLabel,
         formData: data,
@@ -208,19 +215,23 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
               <button
                 onClick={() => handlePreview(formData, currentDate)}
                 className="btn btn-outline"
-                disabled={loading}
+                disabled={loading || templateLoading}
               >
                 <FileText size={18} />
                 Prévisualiser PDF
               </button>
-              <button onClick={() => handleDownload(formData, currentDate)} className="btn btn-outline">
+              <button
+                onClick={() => handleDownload(formData, currentDate)}
+                className="btn btn-outline"
+                disabled={templateLoading}
+              >
                 <Download size={18} />
                 Télécharger PDF
               </button>
               <button
                 onClick={() => handleSendEmail(formData, currentDate)}
                 className="btn btn-primary"
-                disabled={loading}
+                disabled={loading || templateLoading}
               >
                 {loading ? (
                   'Envoi...'
@@ -231,6 +242,7 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
                   </>
                 )}
               </button>
+              {templateLoading && <span className="pill">Préférences PDF…</span>}
             </div>
           </div>
 
@@ -337,19 +349,50 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
   );
 }
 
-function buildCDTPdf(data: Record<string, string>, currentDateLabel: string) {
+async function buildCDTPdf(data: Record<string, string>, currentDateLabel: string, template?: PdfTemplateConfig) {
   const doc = new jsPDF('l', 'mm', 'a4');
   const margin = 10;
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
+  let y = margin + 12;
+  const { primary, accent } = getTemplateColors(template, {
+    primary: [15, 23, 42],
+    accent: [59, 130, 246]
+  });
+  const footerLines = getFooterLines(template, ['Retripa Crissier S.A.', 'Chemin de Mongevon 11 – 1023 Crissier']);
+  const [headerLogo, footerLogo] = await Promise.all([
+    resolveTemplateImage(template?.headerLogo),
+    resolveTemplateImage(template?.footerLogo)
+  ]);
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.setTextColor('#4b5d16');
-  doc.text('Centre de tri', margin, margin + 2);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor('#111');
-  doc.text(`Relevé du: ${currentDateLabel}`, pageWidth / 2, margin + 2, { align: 'center' });
+  const drawHeader = () => {
+    doc.setFillColor(...primary);
+    doc.rect(0, 0, pageWidth, 14, 'F');
+    if (headerLogo) {
+      doc.addImage(headerLogo, 'PNG', margin, 2, 32, 10, undefined, 'FAST');
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(255, 255, 255);
+    doc.text(template?.title || 'Centre de tri', pageWidth / 2, 8, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.text(template?.subtitle || `Relevé du: ${currentDateLabel}`, pageWidth - margin, 8, { align: 'right' });
+    doc.setTextColor('#111');
+  };
+
+  const drawFooter = () => {
+    const footerTop = pageHeight - 12;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    footerLines.forEach((line, index) => {
+      doc.text(line, margin, footerTop + index * 4);
+    });
+    if (footerLogo) {
+      doc.addImage(footerLogo, 'PNG', pageWidth - margin - 18, footerTop - 2, 18, 10, undefined, 'FAST');
+    }
+  };
+
+  drawHeader();
 
   const headers = ['Type de bennes', '7m3', '10m3', '20m3', '36m3', '24m3 compacteur', 'en benne', 'en vrac estimé', 'A vider sur site'];
 
@@ -359,15 +402,14 @@ function buildCDTPdf(data: Record<string, string>, currentDateLabel: string) {
   const widthScale = availableWidth / totalBaseWidth;
   const columnsWidth = baseWidths.map((value) => value * widthScale);
   const rowHeight = 5;
-  let y = margin + 12;
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
   let x = margin;
   headers.forEach((header, idx) => {
-    doc.setFillColor(230, 230, 230);
+    doc.setFillColor(...accent);
     doc.rect(x, y, columnsWidth[idx], rowHeight + 1, 'F');
-    doc.setTextColor(0);
+    doc.setTextColor(255, 255, 255);
     doc.text(header, x + 1.5, y + rowHeight / 2 + 1.5);
     x += columnsWidth[idx];
   });
@@ -431,6 +473,8 @@ function buildCDTPdf(data: Record<string, string>, currentDateLabel: string) {
     doc.text(`${data[item.name] || '-'}`, pageWidth - margin - 2, y, { align: 'right' });
     y += 5;
   });
+  drawFooter();
+
   const filename = `centre-de-tri_${new Date().toISOString().slice(0, 10)}.pdf`;
   const base64 = doc.output('datauristring').split(',')[1] ?? '';
   return { doc, base64, filename };

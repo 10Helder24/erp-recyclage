@@ -4,8 +4,10 @@ import toast from 'react-hot-toast';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 
-import { Api } from '../lib/api';
+import { Api, type PdfTemplateConfig } from '../lib/api';
+import { usePdfTemplate } from '../hooks/usePdfTemplate';
 import { openPdfPreview } from '../utils/pdfPreview';
+import { getFooterLines, getTemplateColors, resolveTemplateImage } from '../utils/pdfTemplate';
 
 // Types temporaires - TODO: Déplacer vers types/ si nécessaire
 interface Article {
@@ -86,6 +88,10 @@ interface InventorySheetProps {
 
 export function InventorySheet({ articles, user, signOut }: InventorySheetProps) {
   const [activeTab, setActiveTab] = useState('plastiquebb');
+  const [previousSnapshot, setPreviousSnapshot] = useState<InventorySnapshot | null>(null);
+  const [historyEntries, setHistoryEntries] = useState<
+    Array<{ key: string; label: string; created_at: string; data: InventorySnapshot }>
+  >([]);
 
   const HALLE_DEFAULT_ROWS: HalleRow[] = [
     { matiere: 'PET broyé', bb: 0, palette: 0 },
@@ -246,6 +252,7 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
       });
     }
   }, [reportDate]);
+  const { config: templateConfig } = usePdfTemplate('inventory');
 
   // Fonction pour sauvegarder toutes les données
   const saveAllData = async () => {
@@ -292,13 +299,15 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
       const currentDate = new Date();
       const month = currentDate.getMonth() + 1;
       const year = currentDate.getFullYear();
+      const currentKey = `inventory_${year}_${month}`;
+      const prevDate = new Date(year, month - 2, 1);
+      const prevKey = `inventory_${prevDate.getFullYear()}_${prevDate.getMonth() + 1}`;
 
       // TODO: Charger depuis l'API backend si nécessaire
       // Pour l'instant, on charge depuis localStorage
       {
         // Si pas de données Supabase, essayer le localStorage
-        const key = `inventory_${year}_${month}`;
-        const savedData = localStorage.getItem(key);
+        const savedData = localStorage.getItem(currentKey);
 
         if (savedData) {
           const data = JSON.parse(savedData);
@@ -313,6 +322,61 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
         } else {
           setHalleData(HALLE_DEFAULT_ROWS);
         }
+        const prevDataRaw = localStorage.getItem(prevKey);
+        if (prevDataRaw) {
+          try {
+            const parsed = JSON.parse(prevDataRaw);
+            setPreviousSnapshot({
+              halle: normalizeHalleData(parsed.halle),
+              plastiqueB: parsed.plastique_balles || [],
+              cdt: parsed.cdt || [],
+              papier: parsed.papier || [],
+              machines: parsed.machines || [],
+              autres: parsed.autres || autresData,
+              containers: parsed.containers || [],
+              bags: parsed.bags || []
+            });
+          } catch (error) {
+            console.warn('Historique précédent illisible', error);
+            setPreviousSnapshot(null);
+          }
+        } else {
+          setPreviousSnapshot(null);
+        }
+
+        const entries: Array<{ key: string; label: string; created_at: string; data: InventorySnapshot }> = [];
+        Object.keys(localStorage)
+          .filter((key) => key.startsWith('inventory_'))
+          .forEach((key) => {
+            try {
+              const [_, yearStr, monthStr] = key.match(/^inventory_(\d{4})_(\d{1,2})$/) ?? [];
+              if (!yearStr || !monthStr) return;
+              const raw = localStorage.getItem(key);
+              if (!raw) return;
+              const parsed = JSON.parse(raw);
+              const label = `${monthStr.padStart(2, '0')}/${yearStr}`;
+              entries.push({
+                key,
+                label,
+                created_at: parsed.created_at || new Date().toISOString(),
+                data: {
+                  halle: normalizeHalleData(parsed.halle),
+                  plastiqueB: parsed.plastique_balles || [],
+                  cdt: parsed.cdt || [],
+                  papier: parsed.papier || [],
+                  machines: parsed.machines || [],
+                  autres: parsed.autres || autresData,
+                  containers: parsed.containers || [],
+                  bags: parsed.bags || []
+                }
+              });
+            } catch (error) {
+              console.warn('Impossible de lire un historique', key, error);
+            }
+          });
+        setHistoryEntries(
+          entries.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 12)
+        );
       }
     } catch (error) {
       console.error('Erreur lors du chargement des données:', error);
@@ -383,6 +447,17 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
     setMachineData(newData);
   };
 
+  const applySnapshot = (snapshot: InventorySnapshot) => {
+    setHalleData(normalizeHalleData(snapshot.halle));
+    setPlastiqueBData(snapshot.plastiqueB || []);
+    setCdtData(snapshot.cdt || []);
+    setPapierData(snapshot.papier || []);
+    setMachineData(snapshot.machines || []);
+    setAutresData(snapshot.autres || autresData);
+    setContainersData(snapshot.containers || []);
+    setBagsData(snapshot.bags || []);
+  };
+
   const getSnapshot = (): InventorySnapshot => ({
     halle: halleData,
     plastiqueB: plastiqueBData,
@@ -394,14 +469,63 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
     bags: bagsData
   });
 
-  const handleDownloadPdf = () => {
-    const pdf = buildInventoryPdf(reportDateLabel, getSnapshot());
-    pdf.doc.save(pdf.filename);
+  const handleDownloadPdf = async () => {
+    try {
+      const pdf = await buildInventoryPdf(reportDateLabel, getSnapshot(), templateConfig || undefined);
+      pdf.doc.save(pdf.filename);
+    } catch (error) {
+      toast.error((error as Error).message || 'Impossible de générer le PDF');
+    }
+  };
+  const aggregateSnapshot = (snapshot: InventorySnapshot | null) => {
+    if (!snapshot) return null;
+    const halleTotal = snapshot.halle?.reduce((sum, row) => sum + (Number(row.bb) || 0), 0) ?? 0;
+    const plastiqueTotal = snapshot.plastiqueB?.reduce((sum, row) => sum + (Number(row.balles) || 0), 0) ?? 0;
+    const cdtTotal = snapshot.cdt?.reduce((sum, row) => sum + (Number(row.m3) || 0), 0) ?? 0;
+    const diesel = snapshot.autres?.diesel?.litres ?? 0;
+    const adBlue = snapshot.autres?.adBlue?.litres ?? 0;
+    return {
+      halle: halleTotal,
+      plastique: plastiqueTotal,
+      cdt: cdtTotal,
+      diesel,
+      adBlue
+    };
   };
 
-  const handlePreviewPdf = () => {
+  const variationAlerts = useMemo(() => {
+    const current = aggregateSnapshot(getSnapshot());
+    const previous = aggregateSnapshot(previousSnapshot);
+    if (!current || !previous) return [];
+    const entries: Array<{ key: string; label: string; current: number; previous: number; percent: number | null }> = [];
+    const labels: Record<string, string> = {
+      halle: 'Plastique en BB',
+      plastique: 'Plastique en balles',
+      cdt: 'CDT (m³)',
+      diesel: 'Diesel (L)',
+      adBlue: 'AdBlue (L)'
+    };
+    Object.keys(current).forEach((key) => {
+      const currValue = current[key as keyof typeof current] ?? 0;
+      const prevValue = previous[key as keyof typeof previous] ?? 0;
+      const diff = currValue - prevValue;
+      const percent = prevValue === 0 ? null : (diff / prevValue) * 100;
+      if (Math.abs(diff) >= 10 || (percent !== null && Math.abs(percent) >= 15)) {
+        entries.push({
+          key,
+          label: labels[key] || key,
+          current: currValue,
+          previous: prevValue,
+          percent
+        });
+      }
+    });
+    return entries;
+  }, [previousSnapshot, halleData, plastiqueBData, cdtData, autresData]);
+
+  const handlePreviewPdf = async () => {
     try {
-      const pdf = buildInventoryPdf(reportDateLabel, getSnapshot());
+      const pdf = await buildInventoryPdf(reportDateLabel, getSnapshot(), templateConfig || undefined);
       openPdfPreview({ doc: pdf.doc as unknown as jsPDF, filename: pdf.filename });
     } catch (error) {
       toast.error((error as Error).message || 'Impossible de générer le PDF');
@@ -419,7 +543,7 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
   const handleSendEmail = async () => {
     setIsSending(true);
     try {
-      const pdf = buildInventoryPdf(reportDateLabel, getSnapshot());
+      const pdf = await buildInventoryPdf(reportDateLabel, getSnapshot(), templateConfig || undefined);
       const excel = buildInventoryExcelBase64(reportDateLabel, getSnapshot());
       await Api.sendInventorySheet({
         dateLabel: reportDateLabel,
@@ -445,6 +569,14 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
     } catch (error) {
       console.error('Erreur lors de la déconnexion:', error);
     }
+  };
+
+  const handleRestoreHistory = (entry: { label: string; data: InventorySnapshot }) => {
+    if (!window.confirm(`Remplacer les valeurs actuelles par l’historique ${entry.label} ?`)) {
+      return;
+    }
+    applySnapshot(entry.data);
+    toast.success(`Historique ${entry.label} chargé`);
   };
 
   return (
@@ -516,6 +648,52 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
           </div>
 
           <div className="destruction-card__body">
+            {variationAlerts.length > 0 && (
+              <div className="inventory-alerts">
+                <div className="inventory-alerts__header">
+                  <strong>Variations importantes vs mois précédent</strong>
+                  <p>Les valeurs ci-dessous dépassent ±15% ou ±10 unités.</p>
+                </div>
+                <div className="inventory-alerts__grid">
+                  {variationAlerts.map((alert) => (
+                    <div key={alert.key} className="inventory-alert-card">
+                      <span className="inventory-alert-card__label">{alert.label}</span>
+                      <div className="inventory-alert-card__values">
+                        <span>Actuel : <strong>{alert.current}</strong></span>
+                        <span>Précédent : {alert.previous}</span>
+                      </div>
+                      <p className={alert.current > alert.previous ? 'up' : 'down'}>
+                        {alert.current > alert.previous ? '▲' : '▼'}{' '}
+                        {alert.percent === null ? `${alert.current - alert.previous}` : `${alert.percent.toFixed(1)} %`}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {historyEntries.length > 0 && (
+              <div className="inventory-history">
+                <div className="inventory-history__header">
+                  <strong>Historique des relevés</strong>
+                  <span>{historyEntries.length} entrées</span>
+                </div>
+                <div className="inventory-history__list">
+                  {historyEntries.map((entry) => (
+                    <div key={entry.key} className="inventory-history-item">
+                      <div>
+                        <span className="inventory-history-item__label">{entry.label}</span>
+                        <small>{new Date(entry.created_at).toLocaleDateString('fr-FR')}</small>
+                      </div>
+                      <button type="button" className="btn btn-outline" onClick={() => handleRestoreHistory(entry)}>
+                        Charger
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Navigation des onglets */}
             <div className="tab-nav">
               <button
@@ -1678,35 +1856,74 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
   );
 }
 
-function buildInventoryPdf(dateLabel: string, snapshot: InventorySnapshot) {
+async function buildInventoryPdf(dateLabel: string, snapshot: InventorySnapshot, template?: PdfTemplateConfig) {
   const doc = new jsPDF('p', 'mm', 'a4');
   const margin = 10;
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
-  let y = margin + 6;
-
+  const headerHeight = 18;
   const safeDate = dateLabel.replace(/[^0-9a-zA-Z-_]/g, '_');
+  const { primary, accent } = getTemplateColors(template, {
+    primary: [15, 23, 42],
+    accent: [56, 189, 248]
+  });
+  const footerLines = getFooterLines(template, [
+    'Retripa Crissier S.A.',
+    'Chemin de Mongevon 11 – 1023 Crissier',
+    'T +41 21 637 66 66    info@retripa.ch    www.retripa.ch'
+  ]);
+  const [headerLogo, footerLogo] = await Promise.all([
+    resolveTemplateImage(template?.headerLogo, '/retripa-ln.jpg'),
+    resolveTemplateImage(template?.footerLogo, '/sgs.png')
+  ]);
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16);
-  doc.text('Feuille d\'inventaire - Centre de tri', margin, y);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-  doc.text(dateLabel, margin, y + 6);
-  y += 14;
+  const drawHeader = () => {
+    doc.setFillColor(...primary);
+    doc.rect(0, 0, pageWidth, headerHeight, 'F');
+    if (headerLogo) {
+      doc.addImage(headerLogo, 'PNG', margin, 3, 30, 12, undefined, 'FAST');
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(255, 255, 255);
+    doc.text(template?.title || "Feuille d'inventaire - Centre de tri", pageWidth / 2, 8, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(template?.subtitle || dateLabel, pageWidth - margin, 13, { align: 'right' });
+    doc.setTextColor(17, 24, 39);
+  };
+
+  const drawFooter = () => {
+    const footerTop = pageHeight - 18;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    footerLines.forEach((line, idx) => {
+      doc.text(line, margin, footerTop + idx * 4);
+    });
+    if (footerLogo) {
+      doc.addImage(footerLogo, 'PNG', pageWidth - margin - 16, footerTop - 2, 16, 16, undefined, 'FAST');
+    }
+  };
+
+  drawHeader();
+  let y = headerHeight + margin;
 
   const ensureSpace = (needed: number) => {
     if (y + needed > pageHeight - margin) {
+      drawFooter();
       doc.addPage();
-      y = margin + 6;
+      drawHeader();
+      y = headerHeight + margin;
     }
   };
 
   const addTable = (title: string, headers: string[], rows: Array<Array<string | number>>) => {
     ensureSpace(12);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.text(title, margin, y);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(...accent);
+  doc.text(title, margin, y);
+  doc.setTextColor(17, 24, 39);
     y += 6;
 
     const colWidth = (pageWidth - margin * 2) / headers.length;
@@ -1716,14 +1933,15 @@ function buildInventoryPdf(dateLabel: string, snapshot: InventorySnapshot) {
     doc.setFontSize(9);
     headers.forEach((header, idx) => {
       const x = margin + idx * colWidth;
-      doc.setFillColor(233, 233, 233);
+      doc.setFillColor(accent[0], accent[1], accent[2]);
       doc.rect(x, y, colWidth, rowHeight, 'F');
-      doc.setTextColor(0);
+      doc.setTextColor(255, 255, 255);
       doc.text(header, x + 1.5, y + rowHeight / 2 + 1.5);
     });
     y += rowHeight;
 
     doc.setFont('helvetica', 'normal');
+    doc.setTextColor(17, 24, 39);
     rows.forEach((row) => {
       ensureSpace(rowHeight);
       row.forEach((cell, idx) => {
@@ -1764,6 +1982,8 @@ function buildInventoryPdf(dateLabel: string, snapshot: InventorySnapshot) {
     snapshot.containers.map((row) => [row.type, row.quantite, row.location])
   );
   addTable('Sacs', ['Type', 'Quantité', 'Localisation'], snapshot.bags.map((row) => [row.type, row.quantite, row.location]));
+
+  drawFooter();
 
   const filename = `inventaire_${safeDate}.pdf`;
   const base64 = doc.output('datauristring').split(',')[1] ?? '';
