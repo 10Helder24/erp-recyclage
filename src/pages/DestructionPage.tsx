@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import { Api, type PdfTemplateConfig } from '../lib/api';
 import { usePdfTemplate } from '../hooks/usePdfTemplate';
 import { openPdfPreview } from '../utils/pdfPreview';
-import { getFooterLines, getTemplateColors, resolveTemplateImage } from '../utils/pdfTemplate';
+import { getFooterLines, getZonePalette, hexToRgb, resolveTemplateImage } from '../utils/pdfTemplate';
 
 const LOGO_URL = '/logo-retripa.png';
 const SGS_URL = '/sgs.png';
@@ -133,9 +133,17 @@ const DestructionMatieres: React.FC = () => {
     const pageWidth = 210;
     const pageHeight = doc.internal.pageSize.getHeight();
     const margin = 15;
-    const { primary, accent } = getTemplateColors(template, {
-      primary: [0, 70, 32],
-      accent: [0, 100, 0]
+    const headerPalette = getZonePalette(template, 'header', {
+      background: hexToRgb(template?.primaryColor, [0, 70, 32]),
+      text: [255, 255, 255]
+    });
+    const bodyPalette = getZonePalette(template, 'body', {
+      text: hexToRgb(template?.primaryColor, [0, 0, 0]),
+      title: hexToRgb(template?.accentColor, [0, 176, 80])
+    });
+    const highlightPalette = getZonePalette(template, 'highlight', {
+      background: hexToRgb(template?.accentColor, [200, 255, 200]),
+      text: hexToRgb(template?.primaryColor, [0, 0, 0])
     });
     const footerLines = getFooterLines(template, [
       'Retripa Crissier S.A.',
@@ -150,27 +158,29 @@ const DestructionMatieres: React.FC = () => {
     const inscriptionDate = formatDateLong(dateDestruction || new Date().toISOString().slice(0, 10));
 
     const drawHeader = () => {
-      doc.setFillColor(...primary);
+      doc.setFillColor(...headerPalette.background);
       doc.rect(0, 0, pageWidth, 22, 'F');
       if (headerLogo) {
         doc.addImage(headerLogo, 'PNG', margin, 4, 45, 14, undefined, 'FAST');
       }
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(14);
-      doc.setTextColor(255, 255, 255);
+      doc.setTextColor(...headerPalette.text);
       doc.text(template?.title || 'CERTIFICAT DE DESTRUCTION', pageWidth - margin, 12, { align: 'right' });
       doc.setFont('helvetica', 'normal');
       if (template?.subtitle) {
         doc.setFontSize(10);
+        doc.setTextColor(...headerPalette.subtitle);
         doc.text(template.subtitle, pageWidth - margin, 18, { align: 'right' });
       }
-      doc.setTextColor(0, 0, 0);
+      doc.setTextColor(...bodyPalette.text);
     };
 
     const drawFooter = () => {
       const footerTop = pageHeight - 18;
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
+      doc.setTextColor(...bodyPalette.text);
       footerLines.forEach((line, index) => {
         doc.text(line, margin, footerTop + index * 4);
       });
@@ -190,18 +200,16 @@ const DestructionMatieres: React.FC = () => {
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(24);
-    doc.setTextColor(...accent);
+    doc.setTextColor(...bodyPalette.title);
     doc.text(template?.customTexts?.title || 'CERTIFICAT DE DESTRUCTION', pageWidth / 2, 60, { align: 'center' });
-    doc.setTextColor(0, 0, 0);
+    doc.setTextColor(...bodyPalette.text);
 
     doc.setFontSize(11);
-    doc.text(
-      template?.subtitle ||
-        "Le présent certificat justifie que Retripa Crissier SA a appliqué toutes les procédures nécessaires pour assurer la totale destruction de la marchandise énoncée ci-dessous.",
-      pageWidth / 2,
-      70,
-      { align: 'center', maxWidth: 180 }
-    );
+    const bodyParagraph =
+      template?.customTexts?.body ||
+      "Le présent certificat justifie que Retripa Crissier SA a appliqué toutes les procédures nécessaires pour assurer la totale destruction de la marchandise énoncée ci-dessous.";
+
+    doc.text(bodyParagraph, pageWidth / 2, 70, { align: 'center', maxWidth: 180 });
 
     let y = 87;
     doc.setFontSize(11);
@@ -239,11 +247,13 @@ const DestructionMatieres: React.FC = () => {
 
     // Tableau marches
     y += 15;
-    doc.setFillColor(accent[0], accent[1], accent[2]);
+    doc.setFillColor(...highlightPalette.background);
     doc.rect(margin, y, 180, 10, 'F');
     doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...highlightPalette.text);
     doc.text('Description de la marchandise détruite', margin + 2, y + 7);
     doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...bodyPalette.text);
 
     const drawDiagonal = (x1: number, y1: number, x2: number, y2: number) => {
       doc.setDrawColor(150, 150, 150);
@@ -276,10 +286,10 @@ const DestructionMatieres: React.FC = () => {
 
     const ySign = y + 25;
     doc.setFont('helvetica', 'bold');
-    doc.setTextColor(...accent);
+    doc.setTextColor(...bodyPalette.title);
     doc.text('RETRIPA CRISSIER SA', margin, ySign + 10);
     doc.setFont('helvetica', 'normal');
-    doc.setTextColor(0, 0, 0);
+    doc.setTextColor(...bodyPalette.text);
     doc.text(`Nom : ${nomAgent}`, margin, ySign + 20);
     doc.text('Signature :', margin, ySign + 30);
     if (signatureImage) {

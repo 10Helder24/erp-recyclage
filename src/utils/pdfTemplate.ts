@@ -72,3 +72,53 @@ export const getTemplateColors = (
 export const getFooterLines = (template?: PdfTemplateConfig | null, fallback: string[] = []) =>
   template?.footerText?.split('\n').filter(Boolean) ?? fallback;
 
+export type ZonePaletteOptions = {
+  background?: RgbTuple;
+  text?: RgbTuple;
+  title?: RgbTuple;
+  subtitle?: RgbTuple;
+  border?: RgbTuple;
+};
+
+export type ZonePalette = {
+  background: RgbTuple;
+  text: RgbTuple;
+  title: RgbTuple;
+  subtitle: RgbTuple;
+  border: RgbTuple;
+};
+
+const resolveZoneColor = (
+  value?: string | null,
+  fallback?: RgbTuple,
+  defaultValue: RgbTuple = [15, 23, 42]
+) => hexToRgb(value, fallback ?? defaultValue);
+
+export const getZonePalette = (
+  template: PdfTemplateConfig | null | undefined,
+  zone: 'header' | 'body' | 'highlight',
+  defaults?: ZonePaletteOptions
+): ZonePalette => {
+  const zoneConfig = template?.zones?.[zone];
+  const background = resolveZoneColor(zoneConfig?.backgroundColor, defaults?.background);
+  const text = resolveZoneColor(zoneConfig?.textColor, defaults?.text, [255, 255, 255]);
+  const title = resolveZoneColor(
+    zoneConfig?.titleColor,
+    defaults?.title,
+    zone === 'header' ? text : resolveZoneColor(zoneConfig?.textColor, defaults?.text, [34, 197, 94])
+  );
+  const subtitle = resolveZoneColor(
+    zoneConfig?.subtitleColor,
+    defaults?.subtitle,
+    zone === 'header' ? text : title
+  );
+  const border = resolveZoneColor(zoneConfig?.borderColor, defaults?.border, text);
+  return {
+    background,
+    text,
+    title,
+    subtitle,
+    border
+  };
+};
+

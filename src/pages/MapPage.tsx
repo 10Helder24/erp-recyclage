@@ -7,6 +7,7 @@ import jsPDF from 'jspdf';
 import toast from 'react-hot-toast';
 
 import { Api, type MapUserLocation, type MapVehicle, type MapRoute, type MapUserLocationHistory } from '../lib/api';
+import { format } from 'date-fns';
 import { useAuth } from '../hooks/useAuth';
 
 const DEFAULT_POSITION: [number, number] = [46.548452466797585, 6.572221457669403];
@@ -88,6 +89,7 @@ export const MapPage = () => {
   const [showPendingOnly, setShowPendingOnly] = useState(false);
   const [centerOverride, setCenterOverride] = useState<[number, number] | null>(null);
   const [highlightedCustomer, setHighlightedCustomer] = useState<{ id?: string; name?: string } | null>(null);
+  const [clusterTimestamp, setClusterTimestamp] = useState<number | null>(null);
   
   // Mode rejeu
   const [replayMode, setReplayMode] = useState(false);
@@ -157,6 +159,15 @@ export const MapPage = () => {
               }
         );
         setUserLocations(data);
+        if (data.length > 0) {
+          const latestUpdate = data
+            .map((loc) => new Date(loc.last_update).getTime())
+            .filter((time) => !Number.isNaN(time))
+            .sort((a, b) => b - a)[0];
+          setClusterTimestamp(latestUpdate || Date.now());
+        } else {
+          setClusterTimestamp(null);
+        }
         // Ne construire les options de filtre que pour les managers/admins
         if (!isUser && !payload.department && !payload.role && !payload.manager) {
           buildFilterOptions(data);
@@ -484,11 +495,19 @@ export const MapPage = () => {
     if (isUser) return []; // Les users ne voient pas les alertes de regroupement
     const alerts: Array<{ user1: string; user2: string; distance: number }> = [];
     const PROXIMITY_THRESHOLD = 100; // mètres
+    const STALE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
+    const now = Date.now();
 
-    for (let i = 0; i < userLocations.length; i++) {
-      for (let j = i + 1; j < userLocations.length; j++) {
-        const loc1 = userLocations[i];
-        const loc2 = userLocations[j];
+    const freshLocations = userLocations.filter((loc) => {
+      const updatedAt = new Date(loc.last_update).getTime();
+      if (Number.isNaN(updatedAt)) return false;
+      return now - updatedAt <= STALE_THRESHOLD_MS;
+    });
+
+    for (let i = 0; i < freshLocations.length; i++) {
+      for (let j = i + 1; j < freshLocations.length; j++) {
+        const loc1 = freshLocations[i];
+        const loc2 = freshLocations[j];
         const distance = calculateDistance(loc1.latitude, loc1.longitude, loc2.latitude, loc2.longitude);
         if (distance < PROXIMITY_THRESHOLD) {
           alerts.push({
@@ -633,7 +652,10 @@ export const MapPage = () => {
             <div className="map-alert map-alert--proximity">
               <UsersIcon size={18} />
               <div>
-                <strong>Regroupement détecté ({proximityAlerts.length})</strong>
+                <strong>
+                  Regroupement détecté ({proximityAlerts.length}) ·{' '}
+                  {clusterTimestamp ? format(new Date(clusterTimestamp), 'dd.MM.yyyy HH:mm') : format(new Date(), 'dd.MM.yyyy HH:mm')}
+                </strong>
                 <ul>
                   {proximityAlerts.map((alert, idx) => (
                     <li key={idx}>

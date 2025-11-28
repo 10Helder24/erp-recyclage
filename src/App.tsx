@@ -95,20 +95,32 @@ const NAV_SECTIONS: NavSection[] = [
   },
   {
     type: 'group',
-    id: 'gestion',
-    label: 'Gestion',
+    id: 'logistique',
+    label: 'Logistique',
     children: [
       { id: 'map', label: 'Carte', requiresManager: true, requiresPermissions: ['view_map'] },
-      { id: 'customers', label: 'Clients', requiresManager: true, requiresPermissions: ['view_customers'] },
       { id: 'interventions', label: 'Interventions', requiresManager: true, requiresPermissions: ['view_interventions'] },
       { id: 'vehicles', label: 'Véhicules', requiresManager: true, requiresPermissions: ['view_vehicles'] },
       { id: 'routes', label: 'Routes & Tournées', requiresManager: true, requiresPermissions: ['view_routes'] },
-      { id: 'logistics', label: 'Tableau logistique', requiresManager: true, requiresPermissions: ['view_routes'] },
-      { id: 'pdfTemplates', label: 'Templates PDF', requiresManager: true, requiresPermissions: ['edit_pdf_templates'] }
+      { id: 'logistics', label: 'Tableau logistique', requiresManager: true, requiresPermissions: ['view_routes'] }
     ]
   },
-  { type: 'link', id: 'alerts', label: 'Alertes sécurité', pill: 'Nouveau' },
-  { type: 'link', id: 'adminUsers', label: 'Utilisateurs', requiresAdmin: true }
+  {
+    type: 'group',
+    id: 'gestion',
+    label: 'Gestion',
+    children: [{ id: 'customers', label: 'Clients', requiresManager: true, requiresPermissions: ['view_customers'] }]
+  },
+  {
+    type: 'group',
+    id: 'parametres',
+    label: 'Paramètres',
+    children: [
+      { id: 'pdfTemplates', label: 'Templates PDF', requiresAdmin: true },
+      { id: 'adminUsers', label: 'Utilisateurs', requiresAdmin: true },
+      { id: 'alerts', label: 'Alertes sécurité', requiresAdmin: true, pill: 'Nouveau' }
+    ]
+  }
 ];
 
 const App = () => {
@@ -170,7 +182,28 @@ const App = () => {
 
   const handleGeolocationSuccess = useCallback((position: GeolocationPosition) => {
     const coords: [number, number] = [position.coords.latitude, position.coords.longitude];
-    Api.updateCurrentLocation({ latitude: coords[0], longitude: coords[1] }).catch((error) => console.error(error));
+    Api.updateCurrentLocation({ latitude: coords[0], longitude: coords[1] })
+      .then(() => {
+        window.localStorage.setItem('geoConsent', 'granted');
+      })
+      .catch((error) => {
+        if (error instanceof Error) {
+          try {
+            const parsed = JSON.parse(error.message);
+            if (parsed?.message?.toLowerCase().includes('employé introuvable')) {
+              console.info('Géolocalisation ignorée : aucun employé associé');
+              return;
+            }
+          } catch {
+            // ignore JSON parse errors
+          }
+          if (error.message.toLowerCase().includes('employé introuvable')) {
+            console.info('Géolocalisation ignorée : aucun employé associé');
+            return;
+          }
+        }
+        console.error(error);
+      });
   }, []);
 
   const handleEnableGeolocation = useCallback((skipPrompt?: boolean) => {
@@ -223,7 +256,7 @@ const App = () => {
       }
       return section;
     }).filter((section) => (section.type === 'group' ? section.children.length > 0 : canDisplayLink(section)));
-  }, [hasRole]);
+  }, [hasRole, hasPermission]);
 
   const closeSidebarOnMobile = () => {
     if (typeof window !== 'undefined' && window.innerWidth < 769) {

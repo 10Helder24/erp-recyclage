@@ -226,6 +226,48 @@
   gap: 16px;
 }
 
+.template-zones-section {
+  margin-top: 24px;
+}
+
+.template-zone-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.template-zone-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.45);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.template-zone-card h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: #f1f5f9;
+}
+
+.template-zone-card p {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.template-color-field .input-with-button {
+  align-items: stretch;
+}
+
+.template-color-field .color-input {
+  width: 56px;
+  height: 44px;
+  flex-shrink: 0;
+}
+
 .input-with-button {
   display: flex;
   gap: 12px;

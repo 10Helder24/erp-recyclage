@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import { Api, type PdfTemplateConfig } from '../lib/api';
 import { openPdfPreview } from '../utils/pdfPreview';
 import { usePdfTemplate } from '../hooks/usePdfTemplate';
-import { getFooterLines, getTemplateColors, resolveTemplateImage } from '../utils/pdfTemplate';
+import { getFooterLines, getZonePalette, hexToRgb, resolveTemplateImage } from '../utils/pdfTemplate';
 
 interface SortingSheetProps {
   user: any;
@@ -355,9 +355,17 @@ async function buildCDTPdf(data: Record<string, string>, currentDateLabel: strin
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   let y = margin + 12;
-  const { primary, accent } = getTemplateColors(template, {
-    primary: [15, 23, 42],
-    accent: [59, 130, 246]
+  const headerPalette = getZonePalette(template, 'header', {
+    background: hexToRgb(template?.primaryColor, [15, 23, 42]),
+    text: [255, 255, 255]
+  });
+  const bodyPalette = getZonePalette(template, 'body', {
+    text: hexToRgb(template?.primaryColor, [17, 24, 39]),
+    title: hexToRgb(template?.accentColor, [59, 130, 246])
+  });
+  const highlightPalette = getZonePalette(template, 'highlight', {
+    background: hexToRgb(template?.accentColor, [59, 130, 246]),
+    text: [255, 255, 255]
   });
   const footerLines = getFooterLines(template, ['Retripa Crissier S.A.', 'Chemin de Mongevon 11 – 1023 Crissier']);
   const [headerLogo, footerLogo] = await Promise.all([
@@ -365,19 +373,28 @@ async function buildCDTPdf(data: Record<string, string>, currentDateLabel: strin
     resolveTemplateImage(template?.footerLogo)
   ]);
 
+  const createdAtLabel = new Date().toLocaleString('fr-CH', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
   const drawHeader = () => {
-    doc.setFillColor(...primary);
+    doc.setFillColor(...headerPalette.background);
     doc.rect(0, 0, pageWidth, 14, 'F');
     if (headerLogo) {
       doc.addImage(headerLogo, 'PNG', margin, 2, 32, 10, undefined, 'FAST');
     }
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
-    doc.setTextColor(255, 255, 255);
-    doc.text(template?.title || 'Centre de tri', pageWidth / 2, 8, { align: 'center' });
+    doc.setTextColor(...headerPalette.text);
+    const baseTitle = template?.title || 'Centre de tri';
+    doc.text(`${baseTitle} - ${createdAtLabel}`, pageWidth / 2, 8, { align: 'center' });
     doc.setFont('helvetica', 'normal');
     doc.text(template?.subtitle || `Relevé du: ${currentDateLabel}`, pageWidth - margin, 8, { align: 'right' });
-    doc.setTextColor('#111');
+    doc.setTextColor(...bodyPalette.text);
   };
 
   const drawFooter = () => {
@@ -394,6 +411,16 @@ async function buildCDTPdf(data: Record<string, string>, currentDateLabel: strin
 
   drawHeader();
 
+  if (template?.customTexts?.body) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(...bodyPalette.text);
+    const bodyLines = doc.splitTextToSize(template.customTexts.body, pageWidth - 2 * margin);
+    doc.text(bodyLines, margin, y - 4);
+    const extraSpacing = Math.max(bodyLines.length * 2 - 2, 0);
+    y += extraSpacing;
+  }
+
   const headers = ['Type de bennes', '7m3', '10m3', '20m3', '36m3', '24m3 compacteur', 'en benne', 'en vrac estimé', 'A vider sur site'];
 
   const baseWidths = [58, 16, 16, 16, 16, 26, 16, 24, 24];
@@ -407,9 +434,9 @@ async function buildCDTPdf(data: Record<string, string>, currentDateLabel: strin
   doc.setFontSize(8);
   let x = margin;
   headers.forEach((header, idx) => {
-    doc.setFillColor(...accent);
+    doc.setFillColor(...highlightPalette.background);
     doc.rect(x, y, columnsWidth[idx], rowHeight + 1, 'F');
-    doc.setTextColor(255, 255, 255);
+    doc.setTextColor(...highlightPalette.text);
     doc.text(header, x + 1.5, y + rowHeight / 2 + 1.5);
     x += columnsWidth[idx];
   });
@@ -417,6 +444,7 @@ async function buildCDTPdf(data: Record<string, string>, currentDateLabel: strin
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
+  doc.setTextColor(...bodyPalette.text);
 
   const columnXPositions: number[] = [margin];
   columnsWidth.forEach((width, idx) => {
@@ -457,15 +485,17 @@ async function buildCDTPdf(data: Record<string, string>, currentDateLabel: strin
   doc.line(margin, y, columnXPositions[columnXPositions.length - 1], y);
   doc.line(margin, y + tableNaturalHeight * scaleFactor, columnXPositions[columnXPositions.length - 1], y + tableNaturalHeight * scaleFactor);
   y = y + tableNaturalHeight * scaleFactor + 5;
-  doc.setFillColor(214, 223, 235);
+  doc.setFillColor(...highlightPalette.background);
   doc.rect(margin, y, pageWidth - 2 * margin, 7, 'F');
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
+  doc.setTextColor(...highlightPalette.text);
   doc.text('Retour matériel client', margin + 2, y + 4.5);
   y += 9;
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
+  doc.setTextColor(...bodyPalette.text);
   clientReturns.forEach((item) => {
     doc.setDrawColor(210);
     doc.rect(margin, y - 3, pageWidth - 2 * margin, 5);

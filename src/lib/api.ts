@@ -127,6 +127,20 @@ export type RouteOptimizationResponse = {
   trafficNotes: string[];
 };
 
+export type PdfTemplateZoneConfig = {
+  backgroundColor?: string | null;
+  textColor?: string | null;
+  titleColor?: string | null;
+  subtitleColor?: string | null;
+  borderColor?: string | null;
+};
+
+export type PdfTemplateZones = {
+  header?: PdfTemplateZoneConfig;
+  body?: PdfTemplateZoneConfig;
+  highlight?: PdfTemplateZoneConfig;
+};
+
 export type PdfTemplateConfig = {
   headerLogo?: string | null;
   footerLogo?: string | null;
@@ -136,6 +150,7 @@ export type PdfTemplateConfig = {
   subtitle?: string | null;
   footerText?: string | null;
   customTexts?: Record<string, string>;
+  zones?: PdfTemplateZones;
 };
 
 export type PdfTemplate = {

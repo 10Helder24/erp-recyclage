@@ -7,7 +7,7 @@ import * as XLSX from 'xlsx';
 import { Api, type PdfTemplateConfig } from '../lib/api';
 import { usePdfTemplate } from '../hooks/usePdfTemplate';
 import { openPdfPreview } from '../utils/pdfPreview';
-import { getFooterLines, getTemplateColors, resolveTemplateImage } from '../utils/pdfTemplate';
+import { getFooterLines, getZonePalette, hexToRgb, resolveTemplateImage } from '../utils/pdfTemplate';
 
 // Types temporaires - TODO: Déplacer vers types/ si nécessaire
 interface Article {
@@ -1863,9 +1863,17 @@ async function buildInventoryPdf(dateLabel: string, snapshot: InventorySnapshot,
   const pageHeight = doc.internal.pageSize.getHeight();
   const headerHeight = 18;
   const safeDate = dateLabel.replace(/[^0-9a-zA-Z-_]/g, '_');
-  const { primary, accent } = getTemplateColors(template, {
-    primary: [15, 23, 42],
-    accent: [56, 189, 248]
+  const headerPalette = getZonePalette(template, 'header', {
+    background: hexToRgb(template?.primaryColor, [15, 23, 42]),
+    text: [255, 255, 255]
+  });
+  const bodyPalette = getZonePalette(template, 'body', {
+    text: hexToRgb(template?.primaryColor, [17, 24, 39]),
+    title: hexToRgb(template?.accentColor, [14, 165, 233])
+  });
+  const highlightPalette = getZonePalette(template, 'highlight', {
+    background: hexToRgb(template?.accentColor, [224, 242, 254]),
+    text: hexToRgb(template?.primaryColor, [17, 24, 39])
   });
   const footerLines = getFooterLines(template, [
     'Retripa Crissier S.A.',
@@ -1878,25 +1886,26 @@ async function buildInventoryPdf(dateLabel: string, snapshot: InventorySnapshot,
   ]);
 
   const drawHeader = () => {
-    doc.setFillColor(...primary);
+    doc.setFillColor(...headerPalette.background);
     doc.rect(0, 0, pageWidth, headerHeight, 'F');
     if (headerLogo) {
       doc.addImage(headerLogo, 'PNG', margin, 3, 30, 12, undefined, 'FAST');
     }
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
-    doc.setTextColor(255, 255, 255);
+    doc.setTextColor(...headerPalette.text);
     doc.text(template?.title || "Feuille d'inventaire - Centre de tri", pageWidth / 2, 8, { align: 'center' });
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.text(template?.subtitle || dateLabel, pageWidth - margin, 13, { align: 'right' });
-    doc.setTextColor(17, 24, 39);
+    doc.setTextColor(...bodyPalette.text);
   };
 
   const drawFooter = () => {
     const footerTop = pageHeight - 18;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
+    doc.setTextColor(...bodyPalette.text);
     footerLines.forEach((line, idx) => {
       doc.text(line, margin, footerTop + idx * 4);
     });
@@ -1919,11 +1928,11 @@ async function buildInventoryPdf(dateLabel: string, snapshot: InventorySnapshot,
 
   const addTable = (title: string, headers: string[], rows: Array<Array<string | number>>) => {
     ensureSpace(12);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(12);
-  doc.setTextColor(...accent);
-  doc.text(title, margin, y);
-  doc.setTextColor(17, 24, 39);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(...bodyPalette.title);
+    doc.text(title, margin, y);
+    doc.setTextColor(...bodyPalette.text);
     y += 6;
 
     const colWidth = (pageWidth - margin * 2) / headers.length;
@@ -1933,15 +1942,15 @@ async function buildInventoryPdf(dateLabel: string, snapshot: InventorySnapshot,
     doc.setFontSize(9);
     headers.forEach((header, idx) => {
       const x = margin + idx * colWidth;
-      doc.setFillColor(accent[0], accent[1], accent[2]);
+      doc.setFillColor(...highlightPalette.background);
       doc.rect(x, y, colWidth, rowHeight, 'F');
-      doc.setTextColor(255, 255, 255);
+      doc.setTextColor(...highlightPalette.text);
       doc.text(header, x + 1.5, y + rowHeight / 2 + 1.5);
     });
     y += rowHeight;
 
     doc.setFont('helvetica', 'normal');
-    doc.setTextColor(17, 24, 39);
+    doc.setTextColor(...bodyPalette.text);
     rows.forEach((row) => {
       ensureSpace(rowHeight);
       row.forEach((cell, idx) => {

@@ -6,7 +6,7 @@ import { Plus, Trash2, Upload, FileDown, Send } from 'lucide-react';
 import { Api, type PdfTemplateConfig } from '../lib/api';
 import { usePdfTemplate } from '../hooks/usePdfTemplate';
 import { openPdfPreview } from '../utils/pdfPreview';
-import { getFooterLines, getTemplateColors, resolveTemplateImage } from '../utils/pdfTemplate';
+import { getFooterLines, getZonePalette, hexToRgb, resolveTemplateImage } from '../utils/pdfTemplate';
 
 type DeclassementEntry = {
   id: string;
@@ -307,9 +307,18 @@ async function buildPdf({
     'Chemin de Mongevon 11 – 1023 Crissier',
     'T +41 21 637 66 66    info@retripa.ch    www.retripa.ch'
   ];
-  const { accent: accentColor, primary: primaryColor } = getTemplateColors(template, {
-    primary: [0, 0, 0],
-    accent: [30, 64, 175]
+  const headerPalette = getZonePalette(template, 'header', {
+    background: hexToRgb(template?.primaryColor, [0, 0, 0]),
+    text: [255, 255, 255],
+    subtitle: [209, 213, 219]
+  });
+  const bodyPalette = getZonePalette(template, 'body', {
+    text: hexToRgb(template?.primaryColor, [17, 24, 39]),
+    title: hexToRgb(template?.accentColor, [30, 64, 175])
+  });
+  const highlightPalette = getZonePalette(template, 'highlight', {
+    background: hexToRgb(template?.accentColor, [224, 242, 254]),
+    text: hexToRgb(template?.primaryColor, [15, 23, 42])
   });
   const footerLines = getFooterLines(template, fallbackFooterLines);
 
@@ -329,19 +338,20 @@ async function buildPdf({
     ];
     const blockHeight = 24 + lines.length * 6;
     ensureSpace(blockHeight + 8, footerLogo);
-    doc.setDrawColor(148, 163, 184);
-    doc.roundedRect(margin, y, innerWidth, blockHeight, 3, 3);
+    doc.setDrawColor(...highlightPalette.border);
+    doc.setFillColor(...highlightPalette.background);
+    doc.roundedRect(margin, y, innerWidth, blockHeight, 3, 3, 'FD');
 
     let innerY = y + 8;
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
-    doc.setTextColor(...accentColor);
+    doc.setTextColor(...bodyPalette.title);
     doc.text('Client', margin + 6, innerY);
     innerY += 6;
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
-    doc.setTextColor(17, 24, 39);
+    doc.setTextColor(...bodyPalette.text);
     lines.forEach((line) => {
       doc.text(line, margin + 6, innerY + 4);
       innerY += 6;
@@ -354,9 +364,9 @@ async function buildPdf({
     ensureSpace(12, footerLogo);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
-    doc.setTextColor(...accentColor);
+    doc.setTextColor(...bodyPalette.title);
     doc.text(label, margin, y);
-    doc.setTextColor(17, 24, 39);
+    doc.setTextColor(...bodyPalette.text);
     y += 6;
   };
 
@@ -374,7 +384,7 @@ async function buildPdf({
     const footerTextTop = footerTop + 5;
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
-    doc.setTextColor(17, 24, 39);
+    doc.setTextColor(...bodyPalette.text);
     footerLines.forEach((line, index) => {
       doc.text(line, margin, footerTextTop + index * 5);
     });
@@ -393,28 +403,31 @@ async function buildPdf({
   };
 
   const headerHeight = 32;
-  doc.setFillColor(...primaryColor);
+  doc.setFillColor(...headerPalette.background);
   doc.rect(0, 0, pageWidthValue, headerHeight, 'F');
 
   if (headerLogo) {
     doc.addImage(headerLogo, 'JPEG', margin, 6, 42, 18, undefined, 'FAST');
   }
 
-  doc.setTextColor(255, 255, 255);
+  doc.setTextColor(...headerPalette.text);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
   doc.text(template?.title || 'Déclassement de matières', pageWidthValue - margin, 14, { align: 'right' });
   doc.setFont('helvetica', 'normal');
   if (template?.subtitle) {
     doc.setFontSize(11);
+    doc.setTextColor(...headerPalette.subtitle);
     doc.text(template.subtitle, pageWidthValue - margin, 21, { align: 'right' });
     doc.setFontSize(10);
+    doc.setTextColor(...headerPalette.subtitle);
     doc.text(dateLabel, pageWidthValue - margin, 27, { align: 'right' });
   } else {
     doc.setFontSize(11);
+    doc.setTextColor(...headerPalette.subtitle);
     doc.text(dateLabel, pageWidthValue - margin, 22, { align: 'right' });
   }
-  doc.setTextColor(17, 24, 39);
+  doc.setTextColor(...bodyPalette.text);
   y = headerHeight + 8;
 
   // Client section
@@ -447,8 +460,10 @@ async function buildPdf({
     contentHeight += 6; // padding bottom
 
     ensureSpace(contentHeight + 6, footerLogo);
-    doc.setDrawColor(148, 163, 184);
-    doc.roundedRect(entryX, y, entryWidth, contentHeight, 3, 3);
+    doc.setDrawColor(...highlightPalette.border);
+    doc.setFillColor(...highlightPalette.background);
+    doc.roundedRect(entryX, y, entryWidth, contentHeight, 3, 3, 'FD');
+    doc.setTextColor(...bodyPalette.text);
     let innerY = y + 6;
 
     doc.setFont('helvetica', 'bold');
@@ -489,8 +504,9 @@ async function buildPdf({
     const lines = doc.splitTextToSize(generalNotes, innerWidth - 4);
     const notesHeight = lines.length * 5 + 12;
     ensureSpace(notesHeight, footerLogo);
-    doc.setDrawColor(209, 213, 219);
-    doc.roundedRect(margin, y, innerWidth, notesHeight, 3, 3);
+    doc.setDrawColor(...highlightPalette.border);
+    doc.setFillColor(...highlightPalette.background);
+    doc.roundedRect(margin, y, innerWidth, notesHeight, 3, 3, 'FD');
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
     doc.text(lines, margin + 4, y + 8);

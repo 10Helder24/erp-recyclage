@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { Loader2, Images, Upload, Save, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-import { Api, type PdfTemplate, type PdfTemplateConfig } from '../lib/api';
+import {
+  Api,
+  type PdfTemplate,
+  type PdfTemplateConfig,
+  type PdfTemplateZoneConfig
+} from '../lib/api';
 
 const MODULE_LABELS: Record<string, string> = {
   declassement: 'Déclassement de matières',
@@ -13,6 +18,25 @@ const MODULE_LABELS: Record<string, string> = {
   expedition: 'Expéditions'
 };
 
+const ZONE_LABELS: Record<'header' | 'body' | 'highlight', string> = {
+  header: 'Zone 1 · En-tête',
+  body: 'Zone 2 · Corps / textes',
+  highlight: 'Zone 3 · Surbrillance / tableaux'
+};
+
+const ZONE_FIELDS: Array<{
+  field: keyof PdfTemplateZoneConfig;
+  label: string;
+  placeholder: string;
+}> = [
+  { field: 'backgroundColor', label: 'Fond', placeholder: '#0f172a' },
+  { field: 'textColor', label: 'Texte', placeholder: '#ffffff' },
+  { field: 'titleColor', label: 'Titre / accent', placeholder: '#22c55e' },
+  { field: 'subtitleColor', label: 'Sous-titre', placeholder: '#94a3b8' }
+];
+
+const ZONE_KEYS: Array<'header' | 'body' | 'highlight'> = ['header', 'body', 'highlight'];
+
 const EMPTY_CONFIG: PdfTemplateConfig = {
   headerLogo: '',
   footerLogo: '',
@@ -21,7 +45,8 @@ const EMPTY_CONFIG: PdfTemplateConfig = {
   primaryColor: '',
   accentColor: '',
   footerText: '',
-  customTexts: {}
+  customTexts: {},
+  zones: {}
 };
 
 const PdfTemplatesPage = () => {
@@ -36,12 +61,17 @@ const PdfTemplatesPage = () => {
       setLoading(true);
       const data = await Api.fetchPdfTemplates();
       setTemplates(data);
-      if (!selectedModule && data.length > 0) {
-        setSelectedModule(data[0].module);
+      if (!selectedModule) {
+        const firstModule = Object.keys(MODULE_LABELS)[0];
+        setSelectedModule(firstModule || null);
       }
     } catch (error) {
       console.error(error);
       toast.error('Impossible de charger les templates');
+      if (!selectedModule) {
+        const firstModule = Object.keys(MODULE_LABELS)[0];
+        setSelectedModule(firstModule || null);
+      }
     } finally {
       setLoading(false);
     }
@@ -57,13 +87,17 @@ const PdfTemplatesPage = () => {
   );
 
   useEffect(() => {
-    if (currentTemplate) {
-      setForm({
-        ...EMPTY_CONFIG,
-        ...currentTemplate.config
-      });
+    if (selectedModule) {
+      if (currentTemplate) {
+        setForm({
+          ...EMPTY_CONFIG,
+          ...currentTemplate.config
+        });
+      } else {
+        setForm(EMPTY_CONFIG);
+      }
     }
-  }, [currentTemplate]);
+  }, [currentTemplate, selectedModule]);
 
   const handleInputChange = (field: keyof PdfTemplateConfig, value: string) => {
     setForm((prev) => ({
@@ -78,6 +112,19 @@ const PdfTemplatesPage = () => {
       customTexts: {
         ...(prev.customTexts || {}),
         [key]: value
+      }
+    }));
+  };
+
+  const handleZoneColorChange = (zone: 'header' | 'body' | 'highlight', field: keyof PdfTemplateZoneConfig, value: string) => {
+    setForm((prev) => ({
+      ...prev,
+      zones: {
+        ...(prev.zones || {}),
+        [zone]: {
+          ...(prev.zones?.[zone] || {}),
+          [field]: value
+        }
       }
     }));
   };
@@ -139,6 +186,16 @@ const PdfTemplatesPage = () => {
       </div>
 
       <div className="destruction-card">
+        {templates.length === 0 && !loading ? (
+          <div style={{ textAlign: 'center', padding: '32px' }}>
+            <p style={{ color: '#94a3b8', marginBottom: '16px' }}>
+              Aucun template personnalisé. Les valeurs par défaut sont utilisées.
+            </p>
+            <p style={{ fontSize: '0.9rem', color: '#64748b' }}>
+              Sélectionnez un module ci-dessous pour personnaliser son template PDF.
+            </p>
+          </div>
+        ) : null}
         <div className="templates-grid">
           {Object.keys(MODULE_LABELS).map((module) => {
             const template = templates.find((tpl) => tpl.module === module);
@@ -171,9 +228,13 @@ const PdfTemplatesPage = () => {
           <div className="destruction-card__header">
             <div>
               <h2>{MODULE_LABELS[selectedModule] || selectedModule}</h2>
-              <p>Logo, couleurs et textes utilisés par le PDF.</p>
+              <p>
+                {currentTemplate?.updated_at
+                  ? `Dernière modification le ${new Date(currentTemplate.updated_at).toLocaleDateString('fr-CH')}`
+                  : 'Personnalisez le template PDF pour ce module'}
+              </p>
             </div>
-            <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving}>
+            <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving || !selectedModule}>
               {saving ? (
                 <>
                   <Loader2 className="spinner" size={16} />
@@ -193,7 +254,13 @@ const PdfTemplatesPage = () => {
               <label className="destruction-field">
                 <span>Logo entête</span>
                 <div className="input-with-button">
-                  <input type="text" className="destruction-input" value={form.headerLogo || ''} onChange={(e) => handleInputChange('headerLogo', e.target.value)} placeholder="DataURL ou URL publique" />
+                  <input
+                    type="text"
+                    className="destruction-input"
+                    value={form.headerLogo || ''}
+                    onChange={(e) => handleInputChange('headerLogo', e.target.value)}
+                    placeholder="DataURL ou URL publique"
+                  />
                   <label className="btn btn-outline">
                     <Upload size={16} />
                     Importer
@@ -205,7 +272,13 @@ const PdfTemplatesPage = () => {
               <label className="destruction-field">
                 <span>Logo pied de page</span>
                 <div className="input-with-button">
-                  <input type="text" className="destruction-input" value={form.footerLogo || ''} onChange={(e) => handleInputChange('footerLogo', e.target.value)} placeholder="DataURL ou URL publique" />
+                  <input
+                    type="text"
+                    className="destruction-input"
+                    value={form.footerLogo || ''}
+                    onChange={(e) => handleInputChange('footerLogo', e.target.value)}
+                    placeholder="DataURL ou URL publique"
+                  />
                   <label className="btn btn-outline">
                     <Upload size={16} />
                     Importer
@@ -223,18 +296,6 @@ const PdfTemplatesPage = () => {
                 <span>Sous-titre</span>
                 <input type="text" className="destruction-input" value={form.subtitle || ''} onChange={(e) => handleInputChange('subtitle', e.target.value)} />
               </label>
-            </div>
-
-            <div className="template-form__column">
-              <label className="destruction-field">
-                <span>Couleur principale</span>
-                <input type="color" className="color-input" value={form.primaryColor || '#0f172a'} onChange={(e) => handleInputChange('primaryColor', e.target.value)} />
-              </label>
-
-              <label className="destruction-field">
-                <span>Couleur accent</span>
-                <input type="color" className="color-input" value={form.accentColor || '#38bdf8'} onChange={(e) => handleInputChange('accentColor', e.target.value)} />
-              </label>
 
               <label className="destruction-field">
                 <span>Texte pied de page</span>
@@ -245,8 +306,61 @@ const PdfTemplatesPage = () => {
                 <span>Texte supplémentaire</span>
                 <textarea className="destruction-input" rows={3} value={form.customTexts?.extra || ''} onChange={(e) => handleCustomTextChange('extra', e.target.value)} placeholder="Texte affiché dans certaines sections" />
               </label>
+
+              <label className="destruction-field">
+                <span>Texte zone 2 (corps du document)</span>
+                <textarea
+                  className="destruction-input"
+                  rows={4}
+                  value={form.customTexts?.body || ''}
+                  onChange={(e) => handleCustomTextChange('body', e.target.value)}
+                  placeholder="Texte affiché dans la zone 2 (par défaut : paragraphe standard)."
+                />
+              </label>
             </div>
           </div>
+
+        <div className="template-zones-section">
+          <div className="destruction-section__header" style={{ marginBottom: 12 }}>
+            <div>
+              <h3>Couleurs par zones</h3>
+              <p>Personnalisez les couleurs de l’en-tête, du contenu et des encadrés pour chaque module PDF.</p>
+            </div>
+          </div>
+          <div className="template-zone-grid">
+            {ZONE_KEYS.map((zoneKey) => (
+              <div key={zoneKey} className="template-zone-card">
+                <h4>{ZONE_LABELS[zoneKey]}</h4>
+                <p>Fond, texte et accents utilisés dans cette zone.</p>
+                {ZONE_FIELDS.map(({ field, label, placeholder }) => {
+                  const value = form.zones?.[zoneKey]?.[field] || '';
+                  const colorInputValue = value || '#000000';
+                  return (
+                    <label key={field} className="destruction-field template-color-field">
+                      <span>{label}</span>
+                      <div className="input-with-button">
+                        <input
+                          type="color"
+                          className="color-input"
+                          style={{ width: 56, flexShrink: 0 }}
+                          value={colorInputValue}
+                          onChange={(e) => handleZoneColorChange(zoneKey, field, e.target.value)}
+                        />
+                        <input
+                          type="text"
+                          className="destruction-input"
+                          value={value}
+                          placeholder={placeholder}
+                          onChange={(e) => handleZoneColorChange(zoneKey, field, e.target.value)}
+                        />
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
         </div>
       )}
     </section>

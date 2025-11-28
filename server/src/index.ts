@@ -320,6 +320,20 @@ type OptimizationLeg = {
   duration: number; // seconds
 };
 
+type PdfTemplateZoneConfig = {
+  backgroundColor?: string | null;
+  textColor?: string | null;
+  titleColor?: string | null;
+  subtitleColor?: string | null;
+  borderColor?: string | null;
+};
+
+type PdfTemplateZones = {
+  header?: PdfTemplateZoneConfig;
+  body?: PdfTemplateZoneConfig;
+  highlight?: PdfTemplateZoneConfig;
+};
+
 type PdfTemplateConfig = {
   headerLogo?: string | null;
   footerLogo?: string | null;
@@ -329,6 +343,7 @@ type PdfTemplateConfig = {
   subtitle?: string | null;
   footerText?: string | null;
   customTexts?: Record<string, string>;
+  zones?: PdfTemplateZones;
 };
 
 type PdfTemplateRow = {
@@ -346,39 +361,125 @@ const DEFAULT_PDF_TEMPLATES: Record<string, PdfTemplateConfig> = {
     subtitle: 'Rapport de tri',
     primaryColor: '#000000',
     accentColor: '#0ea5e9',
-    footerText: 'Retripa SA · Service Qualité'
+    footerText: 'Retripa SA · Service Qualité',
+    zones: {
+      header: {
+        backgroundColor: '#000000',
+        textColor: '#ffffff',
+        subtitleColor: '#d1d5db'
+      },
+      body: {
+        textColor: '#111827',
+        titleColor: '#1d4ed8'
+      },
+      highlight: {
+        backgroundColor: '#e0f2fe',
+        textColor: '#0f172a'
+      }
+    }
   },
   destruction: {
     title: 'Destruction de documents',
     subtitle: 'Certificat d’intervention',
     primaryColor: '#0f172a',
     accentColor: '#04b6d9',
-    footerText: 'Confidentiel - usage interne'
+    footerText: 'Confidentiel - usage interne',
+    zones: {
+      header: {
+        backgroundColor: '#0f172a',
+        textColor: '#ffffff',
+        subtitleColor: '#8dd3f3'
+      },
+      body: {
+        textColor: '#111827',
+        titleColor: '#22c55e'
+      },
+      highlight: {
+        backgroundColor: '#bbf7d0',
+        textColor: '#0f172a'
+      }
+    }
   },
   leave: {
     title: 'Demande de congé',
     subtitle: 'Workflow digital',
     primaryColor: '#0f172a',
     accentColor: '#38bdf8',
-    footerText: 'Validée électroniquement'
+    footerText: 'Validée électroniquement',
+    zones: {
+      header: {
+        backgroundColor: '#0f172a',
+        textColor: '#ffffff'
+      },
+      body: {
+        textColor: '#111827',
+        titleColor: '#0ea5e9'
+      },
+      highlight: {
+        backgroundColor: '#e2e8f0',
+        textColor: '#0f172a'
+      }
+    }
   },
   cdt: {
     title: 'Centre de tri - CDT',
     subtitle: 'Feuille de suivi',
     primaryColor: '#0f172a',
-    accentColor: '#22d3ee'
+    accentColor: '#22d3ee',
+    zones: {
+      header: {
+        backgroundColor: '#0f172a',
+        textColor: '#ffffff'
+      },
+      body: {
+        textColor: '#0f172a',
+        titleColor: '#22d3ee'
+      },
+      highlight: {
+        backgroundColor: '#22d3ee',
+        textColor: '#ffffff'
+      }
+    }
   },
   inventory: {
     title: 'Inventaire Halle',
     subtitle: 'Export PDF',
     primaryColor: '#0f172a',
-    accentColor: '#0ea5e9'
+    accentColor: '#0ea5e9',
+    zones: {
+      header: {
+        backgroundColor: '#0f172a',
+        textColor: '#ffffff'
+      },
+      body: {
+        textColor: '#0f172a',
+        titleColor: '#0ea5e9'
+      },
+      highlight: {
+        backgroundColor: '#e0f2fe',
+        textColor: '#0f172a'
+      }
+    }
   },
   expedition: {
     title: 'Expéditions',
     subtitle: 'Plan de chargement',
     primaryColor: '#0f172a',
-    accentColor: '#0ea5e9'
+    accentColor: '#0ea5e9',
+    zones: {
+      header: {
+        backgroundColor: '#0f172a',
+        textColor: '#ffffff'
+      },
+      body: {
+        textColor: '#0f172a',
+        titleColor: '#0ea5e9'
+      },
+      highlight: {
+        backgroundColor: '#f3f4f6',
+        textColor: '#0f172a'
+      }
+    }
   }
 };
 
@@ -517,10 +618,48 @@ const buildOsrmOptimization = async (
   return buildSuggestionFromLegs(orderedStops, trip.legs || [], routeDate, startTime);
 };
 
-const mergeTemplateConfig = (module: string, config?: PdfTemplateConfig | null): PdfTemplateConfig => ({
-  ...(DEFAULT_PDF_TEMPLATES[module] || {}),
-  ...(config || {})
-});
+const mergeZoneConfig = (
+  base?: PdfTemplateZoneConfig,
+  override?: PdfTemplateZoneConfig
+): PdfTemplateZoneConfig | undefined => {
+  if (!base && !override) {
+    return undefined;
+  }
+  return {
+    ...(base || {}),
+    ...(override || {})
+  };
+};
+
+const mergeZones = (
+  base?: PdfTemplateZones,
+  override?: PdfTemplateZones
+): PdfTemplateZones | undefined => {
+  if (!base && !override) {
+    return undefined;
+  }
+  const mergedKeys = new Set<string>([
+    ...Object.keys(base || {}),
+    ...Object.keys(override || {})
+  ]);
+  const zones: PdfTemplateZones = {};
+  mergedKeys.forEach((key) => {
+    const zoneKey = key as keyof PdfTemplateZones;
+    zones[zoneKey] = mergeZoneConfig(base?.[zoneKey], override?.[zoneKey]);
+  });
+  return zones;
+};
+
+const mergeTemplateConfig = (module: string, config?: PdfTemplateConfig | null): PdfTemplateConfig => {
+  const base = DEFAULT_PDF_TEMPLATES[module] || {};
+  const override = config || {};
+  const merged: PdfTemplateConfig = {
+    ...base,
+    ...override
+  };
+  merged.zones = mergeZones(base.zones, override.zones);
+  return merged;
+};
 
 const getPdfTemplate = async (module: string): Promise<PdfTemplateRow> => {
   const rows = await run<
