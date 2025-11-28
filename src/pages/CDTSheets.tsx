@@ -210,10 +210,10 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
   };
 
   return (
-    <section className="destruction-page">
+    <section className="destruction-page cdt-page">
       <div className="destruction-wrapper">
         <div className="destruction-card">
-          <div className="destruction-card__header">
+          <div className="destruction-card__header cdt-header">
             <div>
               <p className="eyebrow">Inventaires</p>
               <h1>Centre de tri</h1>
@@ -256,7 +256,7 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
 
           <div className="destruction-card__body">
 
-            <section className="destruction-section">
+            <section className="destruction-section cdt-bins-section">
               <div className="destruction-section__header">
                 <h2>Types de bennes</h2>
               </div>

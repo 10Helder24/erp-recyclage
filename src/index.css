@@ -655,6 +655,11 @@ button {
   padding: 40px 48px;
 }
 
+/* Réduction du padding main-content pour CDT - cibler directement */
+main.main-content:has(.cdt-page) {
+  padding: 0 !important;
+}
+
 .mobile-topbar {
   display: none;
 }
@@ -828,6 +833,16 @@ button {
   min-width: 1000px;
 }
 
+/* Tableau CDT desktop - version ultra-compacte pour tenir sur un écran */
+.cdt-table-wrapper .calendar-table th,
+.cdt-table-wrapper .calendar-table td {
+  padding: 1px 3px !important;
+  border-bottom: 1px solid var(--divider);
+  text-align: center;
+  font-size: 0.65rem !important;
+  line-height: 1.1 !important;
+}
+
 .calendar-table th,
 .calendar-table td {
   padding: 10px;
@@ -849,12 +864,69 @@ button {
 .cdt-table-wrapper .calendar-table td.sticky {
   background: #fff;
   box-shadow: 2px 0 4px rgba(0, 0, 0, 0.05);
-  min-width: 180px;
+  min-width: 120px !important;
+  font-size: 0.6rem !important;
+  padding: 1px 4px !important;
+  line-height: 1.1 !important;
 }
 
 .cdt-table-wrapper .calendar-table thead th.sticky {
   background: #f8fafc;
   z-index: 3;
+}
+
+/* Inputs ultra-compacts dans le tableau CDT desktop */
+.cdt-table-wrapper .calendar-table .destruction-input {
+  padding: 1px 3px !important;
+  font-size: 0.6rem !important;
+  border-radius: 3px !important;
+  min-height: 18px !important;
+  height: 18px !important;
+  text-align: center;
+  border-width: 1px;
+  line-height: 1 !important;
+}
+
+/* Réduction maximale de la hauteur des lignes du tableau CDT */
+.cdt-table-wrapper .calendar-table tbody tr {
+  height: 22px !important;
+}
+
+/* Alternance de couleurs pour améliorer la lisibilité */
+.cdt-table-wrapper .calendar-table tbody tr:nth-child(even) {
+  background-color: #f8fafc !important;
+}
+
+.cdt-table-wrapper .calendar-table tbody tr:nth-child(odd) {
+  background-color: #ffffff !important;
+}
+
+.cdt-table-wrapper .calendar-table tbody tr:hover {
+  background-color: #f1f5f9 !important;
+}
+
+.cdt-table-wrapper .calendar-table thead th {
+  padding: 3px 3px !important;
+  font-size: 0.6rem !important;
+  font-weight: 600;
+  line-height: 1.1 !important;
+  height: 24px !important;
+}
+
+/* Réduction maximale des espacements pour la section CDT */
+.destruction-section.cdt-bins-section {
+  padding: 6px !important;
+}
+
+.destruction-section.cdt-bins-section .destruction-section__header {
+  margin-bottom: 4px !important;
+}
+
+.destruction-section.cdt-bins-section .destruction-section__header h2 {
+  font-size: 0.8rem !important;
+  margin-bottom: 0 !important;
+  font-weight: 600;
+  line-height: 1.2 !important;
 }
 
 .calendar-table thead th {
@@ -2593,6 +2665,24 @@ button {
   margin: 0 auto;
 }
 
+/* Réduction maximale des espaces autour pour CDT - éliminer tous les espaces inutiles */
+.cdt-page {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.cdt-page .destruction-wrapper {
+  margin: 0 !important;
+  padding: 0 !important;
+  max-width: 100% !important;
+}
+
+.cdt-page .destruction-card {
+  margin: 0 !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+}
+
 .destruction-card {
   background: var(--card-bg);
   border-radius: 28px;
@@ -2622,6 +2712,53 @@ button {
   display: flex;
   flex-direction: column;
   gap: 24px;
+}
+
+/* Réduction maximale du header et body pour la page CDT */
+.cdt-page {
+  padding: 8px 0 !important;
+}
+
+.cdt-page .destruction-card__header.cdt-header {
+  padding: 8px 16px 0 !important;
+  gap: 6px !important;
+}
+
+.cdt-page .destruction-card__header.cdt-header h1 {
+  font-size: 1.1rem !important;
+  margin: 0 !important;
+  line-height: 1.2 !important;
+}
+
+.cdt-page .destruction-card__header.cdt-header p {
+  font-size: 0.75rem !important;
+  margin: 0 !important;
+  line-height: 1.2 !important;
+}
+
+.cdt-page .destruction-card__header.cdt-header .eyebrow {
+  font-size: 0.7rem !important;
+  margin-bottom: 2px !important;
+}
+
+.cdt-page .destruction-card__body {
+  padding: 8px 16px 16px !important;
+  gap: 8px !important;
+}
+
+.cdt-page .cdt-actions {
+  gap: 6px !important;
+}
+
+.cdt-page .cdt-actions .btn {
+  padding: 6px 10px !important;
+  font-size: 0.75rem !important;
+  min-height: 28px !important;
+}
+
+.cdt-page .cdt-actions .btn svg {
+  width: 14px !important;
+  height: 14px !important;
 }
 
 .destruction-section {
