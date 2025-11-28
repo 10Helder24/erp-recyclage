@@ -830,7 +830,8 @@ main.main-content:has(.cdt-page) {
 }
 
 .cdt-table-wrapper .calendar-table {
-  min-width: 1000px;
+  width: 100%;
+  table-layout: fixed;
 }
 
 /* Tableau CDT desktop - version ultra-compacte pour tenir sur un écran */
@@ -864,11 +865,30 @@ main.main-content:has(.cdt-page) {
 .cdt-table-wrapper .calendar-table td.sticky {
   background: #fff;
   box-shadow: 2px 0 4px rgba(0, 0, 0, 0.05);
+  width: 18% !important;
   min-width: 120px !important;
   font-size: 0.6rem !important;
   padding: 1px 4px !important;
   line-height: 1.1 !important;
 }
+
+/* Largeurs fixes pour les colonnes de données CDT */
+.cdt-table-wrapper .calendar-table th:nth-child(2),
+.cdt-table-wrapper .calendar-table td:nth-child(2) { width: 10%; } /* 7m3 */
+.cdt-table-wrapper .calendar-table th:nth-child(3),
+.cdt-table-wrapper .calendar-table td:nth-child(3) { width: 10%; } /* 10m3 */
+.cdt-table-wrapper .calendar-table th:nth-child(4),
+.cdt-table-wrapper .calendar-table td:nth-child(4) { width: 10%; } /* 20m3 */
+.cdt-table-wrapper .calendar-table th:nth-child(5),
+.cdt-table-wrapper .calendar-table td:nth-child(5) { width: 10%; } /* 36m3 */
+.cdt-table-wrapper .calendar-table th:nth-child(6),
+.cdt-table-wrapper .calendar-table td:nth-child(6) { width: 12%; } /* 24m3 compacteur */
+.cdt-table-wrapper .calendar-table th:nth-child(7),
+.cdt-table-wrapper .calendar-table td:nth-child(7) { width: 10%; } /* en benne */
+.cdt-table-wrapper .calendar-table th:nth-child(8),
+.cdt-table-wrapper .calendar-table td:nth-child(8) { width: 10%; } /* en vrac estimé */
+.cdt-table-wrapper .calendar-table th:nth-child(9),
+.cdt-table-wrapper .calendar-table td:nth-child(9) { width: 10%; } /* A vider sur site */
 
 .cdt-table-wrapper .calendar-table thead th.sticky {
   background: #f8fafc;
@@ -2483,6 +2503,24 @@ main.main-content:has(.cdt-page) {
     margin-top: calc(90px + env(safe-area-inset-top, 0));
   }
 
+  /* CDT - S'assurer que le tableau ne passe pas derrière le menu hamburger */
+  .cdt-page .cdt-table-wrapper {
+    padding-left: 60px !important;
+    margin-left: 0 !important;
+  }
+
+  .cdt-page .cdt-table-wrapper .calendar-table th:first-child,
+  .cdt-page .cdt-table-wrapper .calendar-table td:first-child {
+    left: 60px !important;
+    z-index: 5 !important;
+  }
+
+  .cdt-page .cdt-table-wrapper .calendar-table th:not(:first-child),
+  .cdt-page .cdt-table-wrapper .calendar-table td:not(:first-child) {
+    position: relative;
+    z-index: 1;
+  }
+
   .mobile-topbar {
     display: flex;
     align-items: center;
@@ -3465,6 +3503,8 @@ main.main-content:has(.cdt-page) {
   .cdt-table-wrapper {
     margin: 0 -16px;
     padding: 0 16px;
+    padding-left: 60px !important; /* Espace pour le menu hamburger */
+    overflow-x: auto;
   }
 
   .cdt-table-wrapper .calendar-table {
@@ -3482,15 +3522,22 @@ main.main-content:has(.cdt-page) {
   .cdt-table-wrapper .calendar-table td:first-child {
     min-width: 140px;
     position: sticky;
-    left: 0;
+    left: 60px !important; /* Position après le menu hamburger */
     background: #fff;
-    z-index: 1;
+    z-index: 5 !important; /* Au-dessus du contenu mais sous le menu */
     box-shadow: 2px 0 4px rgba(0, 0, 0, 0.05);
   }
 
   .cdt-table-wrapper .calendar-table th:first-child {
     background: #f8fafc;
-    z-index: 2;
+    z-index: 6 !important;
+  }
+
+  /* S'assurer que les colonnes m3 ne passent pas derrière le menu */
+  .cdt-table-wrapper .calendar-table th:not(:first-child),
+  .cdt-table-wrapper .calendar-table td:not(:first-child) {
+    position: relative;
+    z-index: 1;
   }
 
   /* CDTSheets - Vue mobile en cartes */
