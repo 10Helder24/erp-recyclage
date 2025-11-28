@@ -132,6 +132,7 @@ const clientReturns = [
 
 export default function CDTSheets({ user, signOut }: SortingSheetProps) {
   const [formData, setFormData] = useState<Record<string, string>>({});
+  const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
   const { config: templateConfig, loading: templateLoading } = usePdfTemplate('cdt');
   const currentDate = useMemo(
@@ -159,6 +160,13 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
     setFormData(prev => ({
       ...prev,
       [name]: value
+    }));
+  };
+
+  const toggleCard = (name: string) => {
+    setExpandedCards(prev => ({
+      ...prev,
+      [name]: !prev[name]
     }));
   };
 
@@ -292,34 +300,49 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
 
               {/* Vue mobile - Cartes */}
               <div className="cdt-mobile-cards">
-                {binTypes.map((item, index) => (
-                  <div key={index} className="cdt-mobile-card">
-                    <h3 className="cdt-mobile-card-title">{item.name}</h3>
-                    <div className="cdt-mobile-card-fields">
-                      {[
-                        { key: '7m3', label: '7m3' },
-                        { key: '10m3', label: '10m3' },
-                        { key: '20m3', label: '20m3' },
-                        { key: '36m3', label: '36m3' },
-                        { key: '24m3', label: '24m3 compacteur' },
-                        { key: 'benne', label: 'en benne' },
-                        { key: 'vrac', label: 'en vrac estimé' },
-                        { key: 'vider', label: 'A vider sur site' }
-                      ].map(({ key, label }) => (
-                        <div key={key} className="cdt-mobile-field">
-                          <label className="cdt-mobile-field-label">{label}</label>
-                          <input
-                            type="text"
-                            className="destruction-input"
-                            value={formData[`${item.name}_${key}`] || ''}
-                            onChange={(e) => handleInputChange(`${item.name}_${key}`, e.target.value)}
-                            placeholder="-"
-                          />
+                {binTypes.map((item, index) => {
+                  const isExpanded = !!expandedCards[item.name];
+                  return (
+                    <div key={index} className={`cdt-mobile-card ${isExpanded ? 'is-open' : 'is-collapsed'}`}>
+                      <button
+                        type="button"
+                        className="cdt-mobile-card-toggle"
+                        onClick={() => toggleCard(item.name)}
+                        aria-expanded={isExpanded}
+                      >
+                        <span className="cdt-mobile-card-title">{item.name}</span>
+                        <span className="cdt-mobile-card-indicator" aria-hidden="true">
+                          {isExpanded ? '−' : '+'}
+                        </span>
+                      </button>
+                      {isExpanded && (
+                        <div className="cdt-mobile-card-fields">
+                          {[
+                            { key: '7m3', label: '7m3' },
+                            { key: '10m3', label: '10m3' },
+                            { key: '20m3', label: '20m3' },
+                            { key: '36m3', label: '36m3' },
+                            { key: '24m3', label: '24m3 compacteur' },
+                            { key: 'benne', label: 'en benne' },
+                            { key: 'vrac', label: 'en vrac estimé' },
+                            { key: 'vider', label: 'A vider sur site' }
+                          ].map(({ key, label }) => (
+                            <div key={key} className="cdt-mobile-field">
+                              <label className="cdt-mobile-field-label">{label}</label>
+                              <input
+                                type="text"
+                                className="destruction-input"
+                                value={formData[`${item.name}_${key}`] || ''}
+                                onChange={(e) => handleInputChange(`${item.name}_${key}`, e.target.value)}
+                                placeholder="-"
+                              />
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
 

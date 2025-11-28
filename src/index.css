@@ -3371,16 +3371,42 @@ button {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   }
 
+  .cdt-mobile-card-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .cdt-mobile-card-toggle:focus-visible {
+    outline: 2px solid var(--primary);
+    border-radius: 8px;
+  }
+
   .cdt-mobile-card-title {
     font-size: 1rem;
     font-weight: 600;
     color: #0f172a;
-    margin: 0 0 16px 0;
-    padding-bottom: 12px;
-    border-bottom: 2px solid #e2e8f0;
+    margin: 0;
+    padding: 0;
+  }
+
+  .cdt-mobile-card-indicator {
+    font-size: 1.5rem;
+    font-weight: 400;
+    color: #0f172a;
+    line-height: 1;
+    padding-left: 8px;
   }
 
   .cdt-mobile-card-fields {
+    margin-top: 16px;
     display: grid;
     grid-template-columns: 1fr;
     gap: 12px;
