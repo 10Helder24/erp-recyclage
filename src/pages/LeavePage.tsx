@@ -455,33 +455,104 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
 
   // Récupérer les demandes en attente pour le mois de simulation (uniquement pour les managers)
   const pendingLeavesForSimulation = useMemo(() => {
-    if (!canReviewManager || !simulationConfig.department || simulationConfig.department === 'all') {
+    if (!canReviewManager) {
       return [];
     }
+    
+    // Déterminer le département à utiliser pour le filtre
+    let targetDepartment: string | null = null;
+    if (simulationConfig.department && simulationConfig.department !== 'all') {
+      targetDepartment = simulationConfig.department;
+    } else if (departmentScope) {
+      // Si aucun département sélectionné mais le manager est limité à un département
+      targetDepartment = departmentScope;
+    } else {
+      // Si "all" est sélectionné et le manager peut voir tous les départements
+      // On inclut toutes les demandes en attente
+    }
+    
     const monthStart = startOfMonth(simulationDate);
     const monthEnd = endOfMonth(simulationDate);
+    
     return pendingLeaves.filter((leave) => {
       const meta = resolveEmployeeMeta(leave);
-      // Filtrer par département du manager
-      if (meta.department !== simulationConfig.department) {
+      
+      // Filtrer par département du manager (si limité) et département sélectionné
+      if (targetDepartment && meta.department !== targetDepartment) {
         return false;
       }
-      // Vérifier que la demande est dans le mois de simulation
-      const leaveStart = new Date(leave.start_date);
-      const leaveEnd = new Date(leave.end_date);
-      return (leaveStart >= monthStart && leaveStart <= monthEnd) || (leaveEnd >= monthStart && leaveEnd <= monthEnd) || (leaveStart <= monthStart && leaveEnd >= monthEnd);
+      
+      // Si le manager est limité à un département, vérifier aussi ce filtre
+      if (departmentScope && meta.department !== departmentScope) {
+        return false;
+      }
+      
+      // Vérifier que la demande chevauche le mois de simulation
+      // Normaliser les dates à minuit pour éviter les problèmes de fuseau horaire
+      const leaveStart = startOfDay(new Date(leave.start_date));
+      const leaveEnd = startOfDay(new Date(leave.end_date));
+      const normalizedMonthStart = startOfDay(monthStart);
+      const normalizedMonthEnd = startOfDay(monthEnd);
+      
+      // La demande doit chevaucher le mois de simulation
+      return (
+        (leaveStart >= normalizedMonthStart && leaveStart <= normalizedMonthEnd) ||
+        (leaveEnd >= normalizedMonthStart && leaveEnd <= normalizedMonthEnd) ||
+        (leaveStart <= normalizedMonthStart && leaveEnd >= normalizedMonthEnd)
+      );
     });
-  }, [canReviewManager, pendingLeaves, simulationConfig.department, simulationDate, resolveEmployeeMeta]);
+  }, [canReviewManager, pendingLeaves, simulationConfig.department, simulationDate, departmentScope, resolveEmployeeMeta]);
 
   // Convertir les demandes en attente en absences fictives
   const pendingAbsencesForSimulation = useMemo(() => {
-    return pendingLeavesForSimulation.map((leave) => ({
-      start: leave.start_date,
-      end: leave.end_date,
-      department: resolveEmployeeMeta(leave).department,
-      fromPending: true,
-      leaveId: leave.id
-    }));
+    return pendingLeavesForSimulation.map((leave) => {
+      // Extraire la date au format YYYY-MM-DD directement depuis la string
+      // PostgreSQL renvoie les dates au format "YYYY-MM-DD" ou "YYYY-MM-DDTHH:mm:ss.sssZ"
+      // On doit extraire uniquement la partie date sans conversion qui pourrait causer un décalage
+      // Extraire directement les dates depuis les strings SANS AUCUNE conversion
+      // PostgreSQL renvoie les dates au format "YYYY-MM-DD" (type date)
+      // On prend directement les 10 premiers caractères pour éviter tout problème
+      const getDateString = (dateStr: string | undefined): string => {
+        if (!dateStr) return '';
+        // Si c'est déjà au format YYYY-MM-DD (10 caractères), le retourner tel quel
+        if (dateStr.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+          return dateStr.substring(0, 10);
+        }
+        // Si la date contient 'T', prendre la partie avant 'T'
+        if (dateStr.includes('T')) {
+          const datePart = dateStr.split('T')[0];
+          return datePart.length >= 10 ? datePart.substring(0, 10) : datePart;
+        }
+        // Si la date contient un espace, prendre la partie avant l'espace
+        if (dateStr.includes(' ')) {
+          const datePart = dateStr.split(' ')[0];
+          return datePart.length >= 10 ? datePart.substring(0, 10) : datePart;
+        }
+        return '';
+      };
+      
+      // Utiliser directement les strings de dates sans aucune conversion
+      // Les dates arrivent maintenant directement au format YYYY-MM-DD depuis le backend
+      let start = getDateString(leave.start_date);
+      let end = getDateString(leave.end_date);
+      
+      // Vérifier que les dates sont dans le bon ordre (start <= end)
+      // Si ce n'est pas le cas, les inverser (problème de données)
+      if (start && end && start > end) {
+        // Les dates sont inversées, on les corrige
+        const temp = start;
+        start = end;
+        end = temp;
+      }
+      
+      return {
+        start,
+        end,
+        department: resolveEmployeeMeta(leave).department,
+        fromPending: true,
+        leaveId: leave.id
+      };
+    });
   }, [pendingLeavesForSimulation, resolveEmployeeMeta]);
 
   const simulationResults = useMemo(() => {
@@ -771,6 +842,22 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
       return;
     }
 
+    // Valider que toutes les périodes ont des dates valides (fin >= début)
+    const invalidPeriods = newLeave.periods.filter(
+      (p) => p.start_date && p.end_date && p.start_date > p.end_date
+    );
+    if (invalidPeriods.length > 0) {
+      toast.error('La date de fin doit être postérieure ou égale à la date de début pour toutes les périodes.');
+      return;
+    }
+    
+    if (newLeave.army_start_date && newLeave.army_end_date) {
+      if (newLeave.army_start_date > newLeave.army_end_date) {
+        toast.error('La date de fin (Armée / PC) doit être postérieure ou égale à la date de début.');
+        return;
+      }
+    }
+    
     const periods = newLeave.periods.filter((p) => p.start_date && p.end_date);
     if (newLeave.army_start_date && newLeave.army_end_date) {
       periods.push({
@@ -813,6 +900,13 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     } catch (error) {
       toast.error((error as Error).message || 'Erreur lors de la création');
     }
+  };
+
+  const handleRemovePeriod = (index: number) => {
+    setNewLeave((prev) => ({
+      ...prev,
+      periods: prev.periods.filter((_, i) => i !== index)
+    }));
   };
 
   const handleDeleteLeave = async (leaveToDelete: Leave) => {
@@ -915,10 +1009,21 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     }
   };
 
-  const formatRange = (leave: Leave) =>
-    `${format(new Date(leave.start_date), 'dd MMM', { locale: fr })} – ${format(new Date(leave.end_date), 'dd MMM', {
+  const formatRange = (leave: Leave) => {
+    // Parser les dates en évitant les problèmes de fuseau horaire
+    // Si la date est au format "YYYY-MM-DD", ajouter "T00:00:00" pour forcer l'interprétation en heure locale
+    const parseDateForDisplay = (dateStr: string): Date => {
+      if (dateStr.includes('T')) {
+        return new Date(dateStr);
+      }
+      // Si c'est juste une date, ajouter l'heure pour éviter le décalage UTC
+      return new Date(dateStr + 'T12:00:00');
+    };
+    
+    return `${format(parseDateForDisplay(leave.start_date), 'dd MMM', { locale: fr })} – ${format(parseDateForDisplay(leave.end_date), 'dd MMM', {
       locale: fr
     })}`;
+  };
 
   const mobileEmployeeSummaries = useMemo(() => {
     if (!isCompactLayout) {
@@ -1380,7 +1485,16 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
                 <input
                   type="date"
                   value={newLeave.army_start_date}
-                  onChange={(event) => setNewLeave((prev) => ({ ...prev, army_start_date: event.target.value }))}
+                  max={newLeave.army_end_date || undefined}
+                  onChange={(event) => {
+                    const newStartDate = event.target.value;
+                    // Si la date de début est après la date de fin, réinitialiser la date de fin
+                    if (newStartDate && newLeave.army_end_date && newStartDate > newLeave.army_end_date) {
+                      setNewLeave((prev) => ({ ...prev, army_start_date: newStartDate, army_end_date: '' }));
+                    } else {
+                      setNewLeave((prev) => ({ ...prev, army_start_date: newStartDate }));
+                    }
+                  }}
                 />
               </div>
               <div className="input-group">
@@ -1388,14 +1502,34 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
                 <input
                   type="date"
                   value={newLeave.army_end_date}
-                  onChange={(event) => setNewLeave((prev) => ({ ...prev, army_end_date: event.target.value }))}
+                  min={newLeave.army_start_date || undefined}
+                  onChange={(event) => {
+                    const newEndDate = event.target.value;
+                    // Valider que la date de fin n'est pas antérieure à la date de début
+                    if (newEndDate && newLeave.army_start_date && newEndDate < newLeave.army_start_date) {
+                      toast.error('La date de fin ne peut pas être antérieure à la date de début');
+                      return;
+                    }
+                    setNewLeave((prev) => ({ ...prev, army_end_date: newEndDate }));
+                  }}
                 />
               </div>
             </div>
 
             {newLeave.periods.map((period, index) => (
               <div key={index} className="period-card">
-                <strong>Période {index + 1}</strong>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <strong>Période {index + 1}</strong>
+                  {newLeave.periods.length > 1 && (
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-small"
+                      onClick={() => handleRemovePeriod(index)}
+                    >
+                      Supprimer
+                    </button>
+                  )}
+                </div>
                 <div className="period-grid">
                   <div className="input-group">
                     <label>Type</label>
@@ -1419,9 +1553,14 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
                     <input
                       type="date"
                       value={period.start_date}
+                      max={period.end_date || undefined}
                       onChange={(event) => {
                         const periods = [...newLeave.periods];
                         periods[index].start_date = event.target.value;
+                        // Si la date de début est après la date de fin, réinitialiser la date de fin
+                        if (event.target.value && periods[index].end_date && event.target.value > periods[index].end_date) {
+                          periods[index].end_date = '';
+                        }
                         setNewLeave((prev) => ({ ...prev, periods }));
                       }}
                     />
@@ -1431,9 +1570,16 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
                     <input
                       type="date"
                       value={period.end_date}
+                      min={period.start_date || undefined}
                       onChange={(event) => {
                         const periods = [...newLeave.periods];
-                        periods[index].end_date = event.target.value;
+                        const newEndDate = event.target.value;
+                        // Valider que la date de fin n'est pas antérieure à la date de début
+                        if (newEndDate && periods[index].start_date && newEndDate < periods[index].start_date) {
+                          toast.error('La date de fin ne peut pas être antérieure à la date de début');
+                          return;
+                        }
+                        periods[index].end_date = newEndDate;
                         setNewLeave((prev) => ({ ...prev, periods }));
                       }}
                     />
@@ -1914,35 +2060,50 @@ async function generatePDF(
 }
 
 const generateWeekRanges = (referenceDate: Date): WeekRange[] => {
-  const monthStart = startOfMonth(referenceDate);
-  const monthEnd = endOfMonth(referenceDate);
-  let cursor = startOfWeek(monthStart, { weekStartsOn: 1 });
-  const last = endOfWeek(monthEnd, { weekStartsOn: 1 });
+  const monthStart = startOfDay(startOfMonth(referenceDate));
+  const monthEnd = startOfDay(endOfMonth(referenceDate));
+  let cursor = startOfDay(startOfWeek(monthStart, { weekStartsOn: 1 }));
+  const last = startOfDay(endOfWeek(monthEnd, { weekStartsOn: 1 }));
   const ranges: WeekRange[] = [];
   while (cursor <= last) {
-    const weekStart = cursor;
-    const weekEnd = endOfWeek(cursor, { weekStartsOn: 1 });
+    const weekStart = startOfDay(cursor);
+    const weekEnd = startOfDay(endOfWeek(cursor, { weekStartsOn: 1 }));
     const isoWeek = getISOWeek(weekStart).toString().padStart(2, '0');
     const label = `S${isoWeek} (${format(weekStart, 'dd MMM', { locale: fr })} – ${format(weekEnd, 'dd MMM', {
       locale: fr
     })})`;
     ranges.push({ start: weekStart, end: weekEnd, label });
-    cursor = addDays(weekEnd, 1);
+    cursor = startOfDay(addDays(weekEnd, 1));
   }
   return ranges;
 };
 
 const overlapsRange = (leave: Leave, rangeStart: Date, rangeEnd: Date) => {
-  const leaveStart = startOfDay(new Date(leave.start_date));
-  const leaveEnd = startOfDay(new Date(leave.end_date));
-  return leaveStart <= rangeEnd && leaveEnd >= rangeStart;
+  // Extraire la partie date uniquement (YYYY-MM-DD) pour éviter les problèmes de fuseau horaire
+  const leaveStartStr = leave.start_date.includes('T') ? leave.start_date.split('T')[0] : leave.start_date.substring(0, 10);
+  const leaveEndStr = leave.end_date.includes('T') ? leave.end_date.split('T')[0] : leave.end_date.substring(0, 10);
+  
+  // Créer des dates en heure locale (midi) pour éviter les décalages UTC
+  const leaveStart = startOfDay(new Date(leaveStartStr + 'T12:00:00'));
+  const leaveEnd = startOfDay(new Date(leaveEndStr + 'T12:00:00'));
+  const normalizedRangeStart = startOfDay(rangeStart);
+  const normalizedRangeEnd = startOfDay(rangeEnd);
+  return leaveStart <= normalizedRangeEnd && leaveEnd >= normalizedRangeStart;
 };
 
 const intervalsOverlap = (start: string, end: string, rangeStart: Date, rangeEnd: Date) => {
   if (!start || !end) return false;
-  const intervalStart = startOfDay(new Date(start));
-  const intervalEnd = startOfDay(new Date(end));
-  return intervalStart <= rangeEnd && intervalEnd >= rangeStart;
+  // Extraire uniquement la partie date (YYYY-MM-DD) de la string
+  const startDateOnly = start.includes('T') ? start.split('T')[0] : start.substring(0, 10);
+  const endDateOnly = end.includes('T') ? end.split('T')[0] : end.substring(0, 10);
+  
+  // Créer des dates en heure locale (midi) pour éviter les problèmes de fuseau horaire
+  // Utiliser midi (12:00) au lieu de minuit pour éviter les décalages
+  const intervalStart = startOfDay(new Date(startDateOnly + 'T12:00:00'));
+  const intervalEnd = startOfDay(new Date(endDateOnly + 'T12:00:00'));
+  const normalizedRangeStart = startOfDay(rangeStart);
+  const normalizedRangeEnd = startOfDay(rangeEnd);
+  return intervalStart <= normalizedRangeEnd && intervalEnd >= normalizedRangeStart;
 };
 
 export default LeavePage;

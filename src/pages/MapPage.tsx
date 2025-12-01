@@ -167,8 +167,21 @@ export const MapPage = () => {
 
   // Pour les users, filtrer pour ne voir que leur propre position
   const filteredUserLocations = useMemo(() => {
-    if (!isUser || !user?.email) return userLocations;
-    return userLocations.filter((loc) => loc.employee_email?.toLowerCase() === user.email?.toLowerCase());
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd = new Date(todayStart);
+    todayEnd.setDate(todayEnd.getDate() + 1);
+    
+    // Filtrer uniquement les positions du jour présent
+    const todayLocations = userLocations.filter((loc) => {
+      const updateDate = new Date(loc.last_update);
+      if (Number.isNaN(updateDate.getTime())) return false;
+      // Vérifier que la mise à jour est aujourd'hui
+      return updateDate >= todayStart && updateDate < todayEnd;
+    });
+    
+    if (!isUser || !user?.email) return todayLocations;
+    return todayLocations.filter((loc) => loc.employee_email?.toLowerCase() === user.email?.toLowerCase());
   }, [userLocations, isUser, user?.email]);
 
   const loadLocations = useCallback(
@@ -1080,8 +1093,8 @@ export const MapPage = () => {
               })
           )}
 
-          {/* Pour les users, afficher seulement leur propre position */}
-          {(isUser ? filteredUserLocations : userLocations).map((location) => {
+          {/* Afficher uniquement les positions du jour présent */}
+          {filteredUserLocations.map((location) => {
             const icon = location.employee_email?.toLowerCase() === currentUserEmail ? currentUserMarker : blueMarker;
             return (
               <Marker key={location.employee_id} position={[location.latitude, location.longitude]} icon={icon}>
