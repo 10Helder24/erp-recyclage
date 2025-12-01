@@ -12,6 +12,7 @@ import UsersAdminPage from './pages/UsersAdminPage';
 import LoginPage from './pages/LoginPage';
 import MapPage from './pages/MapPage';
 import CustomersPage from './pages/CustomersPage';
+import { MaterialsPage } from './pages/MaterialsPage';
 import InterventionsPage from './pages/InterventionsPage';
 import VehiclesPage from './pages/VehiclesPage';
 import RoutesPage from './pages/RoutesPage';
@@ -36,6 +37,7 @@ const NAV_LINK_IDS = [
   'map',
   'adminUsers',
   'customers',
+  'materials',
   'interventions',
   'vehicles',
   'routes',
@@ -109,7 +111,10 @@ const NAV_SECTIONS: NavSection[] = [
     type: 'group',
     id: 'gestion',
     label: 'Gestion',
-    children: [{ id: 'customers', label: 'Clients', requiresManager: true, requiresPermissions: ['view_customers'] }]
+    children: [
+      { id: 'customers', label: 'Clients', requiresManager: true, requiresPermissions: ['view_customers'] },
+      { id: 'materials', label: 'Gestion des matières', requiresManager: true, requiresPermissions: ['view_materials'] }
+    ]
   },
   {
     type: 'group',
@@ -299,6 +304,12 @@ const App = () => {
       case 'customers':
         return hasRole('admin') || hasRole('manager') || hasPermission('view_customers') ? (
           <CustomersPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'materials':
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_materials') ? (
+          <MaterialsPage />
         ) : (
           <LeavePage initialTab="demandes" />
         );

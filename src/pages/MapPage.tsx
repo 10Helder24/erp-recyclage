@@ -63,6 +63,32 @@ const currentUserMarker = L.divIcon({
   iconAnchor: [16, 32]
 });
 
+// Icône pour les dépôts (warehouse/building)
+const depotIcon = L.divIcon({
+  className: 'map-marker depot-marker',
+  html: `
+    <div style="
+      width: 32px;
+      height: 32px;
+      background: #0ea5e9;
+      border: 3px solid #fff;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      position: relative;
+    ">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+        <polyline points="9 22 9 12 15 12 15 22"></polyline>
+      </svg>
+    </div>
+  `,
+  iconSize: [32, 32],
+  iconAnchor: [16, 32]
+});
+
 export const MapPage = () => {
   const { user, hasRole } = useAuth();
   const isAdmin = hasRole('admin');
@@ -90,6 +116,7 @@ export const MapPage = () => {
   const [centerOverride, setCenterOverride] = useState<[number, number] | null>(null);
   const [highlightedCustomer, setHighlightedCustomer] = useState<{ id?: string; name?: string } | null>(null);
   const [clusterTimestamp, setClusterTimestamp] = useState<number | null>(null);
+  const [customers, setCustomers] = useState<Array<{ id: string; name: string; address: string | null; latitude: number | null; longitude: number | null; risk_level: string | null }>>([]);
   
   // Mode rejeu
   const [replayMode, setReplayMode] = useState(false);
@@ -188,6 +215,21 @@ export const MapPage = () => {
     }
   }, []);
 
+  const loadCustomers = useCallback(async () => {
+    try {
+      const data = await Api.fetchCustomers();
+      console.log('Clients chargés:', data.length, data.map(c => ({ 
+        name: c.name, 
+        lat: c.latitude, 
+        lng: c.longitude,
+        hasCoords: c.latitude != null && c.longitude != null
+      })));
+      setCustomers(data);
+    } catch (error) {
+      console.error('Erreur lors du chargement des clients:', error);
+    }
+  }, []);
+
   const loadRoutes = useCallback(async () => {
     if (!selectedDate) return;
     setLoadingRoutes(true);
@@ -208,10 +250,11 @@ export const MapPage = () => {
 
   useEffect(() => {
     loadVehicles();
+    loadCustomers();
     loadLocations(filters);
     const interval = setInterval(() => loadLocations(filters), 15000);
     return () => clearInterval(interval);
-  }, [loadVehicles, loadLocations, filters]);
+  }, [loadVehicles, loadCustomers, loadLocations, filters]);
 
   useEffect(() => {
     loadRoutes();
@@ -857,13 +900,70 @@ export const MapPage = () => {
           <MapCenterController center={mapCenter} />
 
           {FIXED_POINTS.map((point) => (
-            <Marker key={point.id} position={point.position}>
+            <Marker key={point.id} position={point.position} icon={depotIcon}>
               <Popup>
                 <strong>{point.name}</strong>
                 <p>{point.description}</p>
               </Popup>
             </Marker>
           ))}
+
+          {/* Afficher tous les clients avec des icônes rouges */}
+          {customers
+            .filter((customer) => {
+              // Filtrer les clients avec des coordonnées valides (non null et non 0,0)
+              if (customer.latitude == null || customer.longitude == null) {
+                console.log('Client filtré (pas de coords):', customer.name);
+                return false;
+              }
+              if (customer.latitude === 0 && customer.longitude === 0) {
+                console.log('Client filtré (0,0):', customer.name);
+                return false;
+              }
+              // Vérifier que les coordonnées sont dans une plage raisonnable (Europe de l'Ouest)
+              if (customer.latitude < 40 || customer.latitude > 55) {
+                console.log('Client filtré (latitude hors plage):', customer.name, customer.latitude);
+                return false;
+              }
+              if (customer.longitude < -5 || customer.longitude > 15) {
+                console.log('Client filtré (longitude hors plage):', customer.name, customer.longitude);
+                return false;
+              }
+              console.log('Client affiché:', customer.name, customer.latitude, customer.longitude);
+              return true;
+            })
+            .map((customer) => (
+              <Marker key={customer.id} position={[customer.latitude!, customer.longitude!]} icon={redMarker}>
+                <Popup>
+                  <strong>{customer.name}</strong>
+                  {customer.address && <p>{customer.address}</p>}
+                  {customer.risk_level && (
+                    <p className="map-note" style={{ color: customer.risk_level.toLowerCase() === 'high' || customer.risk_level.toLowerCase() === 'sensitive' ? '#ef4444' : '#f97316', fontWeight: 'bold' }}>
+                      ⚠️ Niveau de risque : {customer.risk_level}
+                    </p>
+                  )}
+                  {!isUser && (
+                    <div className="map-popup-actions" style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-small"
+                        onClick={() => handleOpenInterventionModal({
+                          id: customer.id,
+                          name: customer.name,
+                          address: customer.address || undefined,
+                          latitude: customer.latitude || undefined,
+                          longitude: customer.longitude || undefined
+                        })}
+                        style={{ width: '100%', fontSize: '0.85rem' }}
+                      >
+                        <Plus size={14} />
+                        Créer intervention
+                      </button>
+                    </div>
+                  )}
+                </Popup>
+              </Marker>
+            ))}
 
           {routes.map((route) => (
             <Polyline key={route.id} positions={getFullRoutePath(route)} pathOptions={{ color: getRouteColor(route.status) }} />

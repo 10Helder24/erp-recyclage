@@ -1199,6 +1199,22 @@ const ensureSchema = async () => {
   await run(`alter table customers add column if not exists risk_level text`);
 
   await run(`
+    create table if not exists materials (
+      id uuid primary key default gen_random_uuid(),
+      famille text,
+      numero text,
+      abrege text,
+      description text,
+      unite text,
+      me_bez text,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists materials_abrege_idx on materials(abrege)');
+  await run('create index if not exists materials_famille_idx on materials(famille)');
+
+  await run(`
     create table if not exists customer_documents (
       id uuid primary key default gen_random_uuid(),
       customer_id uuid not null references customers(id) on delete cascade,
@@ -3082,6 +3098,135 @@ app.delete(
       await recordAuditLog({ entityType: 'customer', entityId: id, action: 'delete', req, before });
     }
     res.json({ message: 'Client supprimé avec succès' });
+  })
+);
+
+// Materials API endpoints
+app.get(
+  '/api/materials',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_materials'] }),
+  asyncHandler(async (req, res) => {
+    const rows = await run<{
+      id: string;
+      famille: string | null;
+      numero: string | null;
+      abrege: string | null;
+      description: string | null;
+      unite: string | null;
+      me_bez: string | null;
+      created_at: string;
+      updated_at: string;
+    }>('select * from materials order by famille, abrege');
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/materials',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
+  asyncHandler(async (req, res) => {
+    const { famille, numero, abrege, description, unite, me_bez } = req.body as {
+      famille?: string;
+      numero?: string;
+      abrege: string;
+      description: string;
+      unite: string;
+      me_bez?: string;
+    };
+    if (!abrege || !description || !unite) {
+      return res.status(400).json({ message: 'Abrégé, description et unité sont requis' });
+    }
+    const id = randomUUID();
+    const [material] = await run<{
+      id: string;
+      famille: string | null;
+      numero: string | null;
+      abrege: string | null;
+      description: string | null;
+      unite: string | null;
+      me_bez: string | null;
+      created_at: string;
+      updated_at: string;
+    }>(
+      `insert into materials (id, famille, numero, abrege, description, unite, me_bez)
+       values ($1, $2, $3, $4, $5, $6, $7)
+       returning *`,
+      [id, famille || null, numero || null, abrege, description, unite, me_bez || null]
+    );
+    await recordAuditLog({ entityType: 'material', entityId: material.id, action: 'create', req, after: material });
+    res.status(201).json({ id: material.id, message: 'Matière créée avec succès' });
+  })
+);
+
+app.patch(
+  '/api/materials/:id',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { famille, numero, abrege, description, unite, me_bez } = req.body as {
+      famille?: string;
+      numero?: string;
+      abrege?: string;
+      description?: string;
+      unite?: string;
+      me_bez?: string;
+    };
+    const updates: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+    if (famille !== undefined) {
+      updates.push(`famille = $${paramIndex++}`);
+      params.push(famille);
+    }
+    if (numero !== undefined) {
+      updates.push(`numero = $${paramIndex++}`);
+      params.push(numero);
+    }
+    if (abrege !== undefined) {
+      updates.push(`abrege = $${paramIndex++}`);
+      params.push(abrege);
+    }
+    if (description !== undefined) {
+      updates.push(`description = $${paramIndex++}`);
+      params.push(description);
+    }
+    if (unite !== undefined) {
+      updates.push(`unite = $${paramIndex++}`);
+      params.push(unite);
+    }
+    if (me_bez !== undefined) {
+      updates.push(`me_bez = $${paramIndex++}`);
+      params.push(me_bez);
+    }
+    if (updates.length === 0) {
+      return res.status(400).json({ message: 'Aucune modification à apporter' });
+    }
+    updates.push(`updated_at = now()`);
+    params.push(id);
+    const [before] = await run('select * from materials where id = $1', [id]);
+    if (!before) {
+      return res.status(404).json({ message: 'Matière introuvable' });
+    }
+    const [after] = await run(
+      `update materials set ${updates.join(', ')} where id = $${paramIndex} returning *`,
+      params
+    );
+    await recordAuditLog({ entityType: 'material', entityId: id, action: 'update', req, before, after });
+    res.json({ message: 'Matière mise à jour avec succès' });
+  })
+);
+
+app.delete(
+  '/api/materials/:id',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const [before] = await run('select * from materials where id = $1', [id]);
+    await run('delete from materials where id = $1', [id]);
+    if (before) {
+      await recordAuditLog({ entityType: 'material', entityId: id, action: 'delete', req, before });
+    }
+    res.json({ message: 'Matière supprimée avec succès' });
   })
 );
 

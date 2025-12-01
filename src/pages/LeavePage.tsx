@@ -77,7 +77,7 @@ const DEPARTMENT_MIN_STAFF: Record<string, number> = {
 };
 type WeekRange = { start: Date; end: Date; label: string };
 type CapacityAlert = { department: string; label: string; available: number; required: number };
-type SimulationAbsence = { start: string; end: string; department?: string };
+type SimulationAbsence = { start: string; end: string; department?: string; fromPending?: boolean; leaveId?: string };
 
 type PeriodForm = { type: LeaveType; start_date: string; end_date: string };
 
@@ -161,13 +161,17 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
   const [departmentFilter, setDepartmentFilter] = useState<string>('all');
   const weekRanges = useMemo(() => generateWeekRanges(currentDate), [currentDate]);
   const [showSimulationModal, setShowSimulationModal] = useState(false);
+  const [simulationDate, setSimulationDate] = useState(() => new Date());
+  const simulationWeekRanges = useMemo(() => generateWeekRanges(simulationDate), [simulationDate]);
   const [simulationConfig, setSimulationConfig] = useState<{
     department: string;
     headcount: number;
+    minRequired: number;
     absences: SimulationAbsence[];
   }>({
     department: 'all',
     headcount: 0,
+    minRequired: DEFAULT_MIN_STAFF,
     absences: []
   });
   const groupedPendingLeaves = useMemo(() => {
@@ -449,6 +453,37 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     return alerts;
   }, [canAccessRequests, weekRanges, employees, approvedCalendarLeaves, resolveEmployeeMeta]);
 
+  // Récupérer les demandes en attente pour le mois de simulation (uniquement pour les managers)
+  const pendingLeavesForSimulation = useMemo(() => {
+    if (!canReviewManager || !simulationConfig.department || simulationConfig.department === 'all') {
+      return [];
+    }
+    const monthStart = startOfMonth(simulationDate);
+    const monthEnd = endOfMonth(simulationDate);
+    return pendingLeaves.filter((leave) => {
+      const meta = resolveEmployeeMeta(leave);
+      // Filtrer par département du manager
+      if (meta.department !== simulationConfig.department) {
+        return false;
+      }
+      // Vérifier que la demande est dans le mois de simulation
+      const leaveStart = new Date(leave.start_date);
+      const leaveEnd = new Date(leave.end_date);
+      return (leaveStart >= monthStart && leaveStart <= monthEnd) || (leaveEnd >= monthStart && leaveEnd <= monthEnd) || (leaveStart <= monthStart && leaveEnd >= monthEnd);
+    });
+  }, [canReviewManager, pendingLeaves, simulationConfig.department, simulationDate, resolveEmployeeMeta]);
+
+  // Convertir les demandes en attente en absences fictives
+  const pendingAbsencesForSimulation = useMemo(() => {
+    return pendingLeavesForSimulation.map((leave) => ({
+      start: leave.start_date,
+      end: leave.end_date,
+      department: resolveEmployeeMeta(leave).department,
+      fromPending: true,
+      leaveId: leave.id
+    }));
+  }, [pendingLeavesForSimulation, resolveEmployeeMeta]);
+
   const simulationResults = useMemo(() => {
     if (!canAccessRequests) {
       return [];
@@ -459,15 +494,18 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     }
     const departmentEmployees = employees.filter((employee) => employee.department === department);
     const baseHeadcount = simulationConfig.headcount || departmentEmployees.length || 0;
-    const minStaff = DEPARTMENT_MIN_STAFF[department] ?? DEFAULT_MIN_STAFF;
-    const customAbsences = simulationConfig.absences.filter((absence) => !absence.department || absence.department === department);
-    return weekRanges.map((range) => {
+    const minStaff = simulationConfig.minRequired || DEPARTMENT_MIN_STAFF[department] || DEFAULT_MIN_STAFF;
+    // Combiner les absences personnalisées et les demandes en attente
+    const allAbsences = [...simulationConfig.absences, ...pendingAbsencesForSimulation].filter(
+      (absence) => !absence.department || absence.department === department
+    );
+    return simulationWeekRanges.map((range) => {
       const unavailableEmployees = new Set(
         approvedCalendarLeaves
           .filter((leave) => resolveEmployeeMeta(leave).department === department && overlapsRange(leave, range.start, range.end))
           .map((leave) => leave.employee_id)
       );
-      const customCount = customAbsences.filter(
+      const customCount = allAbsences.filter(
         (absence) => absence.start && absence.end && intervalsOverlap(absence.start, absence.end, range.start, range.end)
       ).length;
       const available = baseHeadcount - unavailableEmployees.size - customCount;
@@ -477,7 +515,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
         required: minStaff
       };
     });
-  }, [canAccessRequests, simulationConfig, weekRanges, employees, approvedCalendarLeaves, resolveEmployeeMeta, departmentOptions]);
+  }, [canAccessRequests, simulationConfig, simulationWeekRanges, employees, approvedCalendarLeaves, resolveEmployeeMeta, departmentOptions, pendingAbsencesForSimulation]);
   const displayBalances = useMemo(() => {
     if (canSeeAllEmployees) {
       return leaveBalances;
@@ -642,10 +680,12 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     const count = targetDept
       ? employees.filter((employee) => employee.department === targetDept).length
       : employees.length;
+    const defaultMin = targetDept ? (DEPARTMENT_MIN_STAFF[targetDept] ?? DEFAULT_MIN_STAFF) : DEFAULT_MIN_STAFF;
     setSimulationConfig((prev) => ({
       ...prev,
       department: departmentValue,
-      headcount: count
+      headcount: count,
+      minRequired: prev.minRequired || defaultMin
     }));
   }, [employees, simulationConfig.department, departmentOptions]);
 
@@ -695,11 +735,17 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
   };
 
   const resetSimulation = () => {
+    setSimulationDate(new Date());
+    const department = departmentOptions[0] || 'all';
+    const targetDept = department === 'all' ? null : department;
+    const count = targetDept
+      ? employees.filter((employee) => employee.department === targetDept).length
+      : employees.length;
+    const defaultMin = targetDept ? (DEPARTMENT_MIN_STAFF[targetDept] ?? DEFAULT_MIN_STAFF) : DEFAULT_MIN_STAFF;
     setSimulationConfig({
-      department: departmentOptions[0] || 'all',
-      headcount: departmentOptions[0]
-        ? employees.filter((employee) => employee.department === departmentOptions[0]).length
-        : employees.length,
+      department,
+      headcount: count,
+      minRequired: defaultMin,
       absences: []
     });
   };
@@ -896,15 +942,6 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
           </p>
         </div>
         <div className="page-actions">
-          <div className="page-actions__filters">
-            <button type="button" className="btn btn-outline" onClick={() => changeMonth(-1)} aria-label="Mois précédent">
-              <ChevronLeft size={16} />
-            </button>
-            <span className="page-actions__current-month">{MONTHS[currentDate.getMonth()]} {currentDate.getFullYear()}</span>
-            <button type="button" className="btn btn-outline" onClick={() => changeMonth(1)} aria-label="Mois suivant">
-              <ChevronRight size={16} />
-            </button>
-          </div>
           {currentEmployee && (
             <button type="button" className="btn btn-primary" onClick={openAddModal}>
               <Plus size={18} />
@@ -1429,83 +1466,195 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
 
       {showSimulationModal && (
         <Modal title="Simulation d'absence" onClose={() => setShowSimulationModal(false)}>
-          <div className="simulation-grid">
-            <div className="input-group">
-              <label>Département</label>
-              <select value={simulationConfig.department} onChange={(event) => handleSimulationDepartmentChange(event.target.value)}>
-                {departmentOptions.length === 0 && <option value="all">Tous</option>}
-                {departmentOptions.map((dept) => (
-                  <option key={dept} value={dept}>
-                    {dept}
-                  </option>
-                ))}
-              </select>
+          <div className="simulation-form">
+            <div className="simulation-section">
+              <h3 className="simulation-section-title">Paramètres de simulation</h3>
+              <div className="simulation-grid">
+                <div className="input-group">
+                  <label>Mois de simulation</label>
+                  <div className="date-selector">
+                    <button
+                      type="button"
+                      className="btn btn-outline date-nav-btn"
+                      onClick={() => setSimulationDate(new Date(simulationDate.getFullYear(), simulationDate.getMonth() - 1, 1))}
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+                    <select
+                      value={simulationDate.getMonth()}
+                      onChange={(event) => setSimulationDate(new Date(simulationDate.getFullYear(), Number(event.target.value), 1))}
+                      className="date-select"
+                    >
+                      {MONTHS.map((month, index) => (
+                        <option key={month} value={index}>
+                          {month}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={simulationDate.getFullYear()}
+                      onChange={(event) => setSimulationDate(new Date(Number(event.target.value), simulationDate.getMonth(), 1))}
+                      className="date-select"
+                    >
+                      {Array.from({ length: 5 }, (_, i) => simulationDate.getFullYear() - 2 + i).map((year) => (
+                        <option key={year} value={year}>
+                          {year}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn btn-outline date-nav-btn"
+                      onClick={() => setSimulationDate(new Date(simulationDate.getFullYear(), simulationDate.getMonth() + 1, 1))}
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                </div>
+                <div className="input-group">
+                  <label>Département</label>
+                  <select value={simulationConfig.department} onChange={(event) => handleSimulationDepartmentChange(event.target.value)}>
+                    {departmentOptions.length === 0 && <option value="all">Tous</option>}
+                    {departmentOptions.map((dept) => (
+                      <option key={dept} value={dept}>
+                        {dept}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="input-group">
+                  <label>Effectif considéré</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={simulationConfig.headcount}
+                    onChange={(event) =>
+                      setSimulationConfig((prev) => ({
+                        ...prev,
+                        headcount: Number(event.target.value)
+                      }))
+                    }
+                  />
+                </div>
+                <div className="input-group">
+                  <label>Minimum requis</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={simulationConfig.minRequired}
+                    onChange={(event) =>
+                      setSimulationConfig((prev) => ({
+                        ...prev,
+                        minRequired: Number(event.target.value)
+                      }))
+                    }
+                  />
+                  <small className="input-hint">Nombre minimum d'employés requis par semaine</small>
+                </div>
+              </div>
             </div>
-            <div className="input-group">
-              <label>Effectif considéré</label>
-              <input
-                type="number"
-                min={0}
-                value={simulationConfig.headcount}
-                onChange={(event) =>
-                  setSimulationConfig((prev) => ({
-                    ...prev,
-                    headcount: Number(event.target.value)
-                  }))
-                }
-              />
-            </div>
-          </div>
-          <div className="simulation-absences">
-            <div className="simulation-absences__header">
-              <strong>Absences fictives</strong>
-              <button type="button" className="btn btn-outline" onClick={addSimulationAbsence}>
-                Ajouter
-              </button>
-            </div>
-            {simulationConfig.absences.length === 0 && <p className="muted-text">Aucune absence ajoutée pour l’instant.</p>}
-            {simulationConfig.absences.map((absence, index) => (
-              <div key={index} className="simulation-absence-row">
-                <input
-                  type="date"
-                  value={absence.start}
-                  onChange={(event) => updateSimulationAbsence(index, 'start', event.target.value)}
-                />
-                <input
-                  type="date"
-                  value={absence.end}
-                  onChange={(event) => updateSimulationAbsence(index, 'end', event.target.value)}
-                />
-                <button type="button" className="icon-button warn" onClick={() => removeSimulationAbsence(index)} aria-label="Supprimer">
-                  <AlertTriangle size={16} />
+            <div className="simulation-section">
+              <div className="simulation-section-header">
+                <h3 className="simulation-section-title">Absences fictives</h3>
+                <button type="button" className="btn btn-outline btn-small" onClick={addSimulationAbsence}>
+                  <Plus size={14} />
+                  Ajouter
                 </button>
               </div>
-            ))}
-          </div>
-          <div className="simulation-results">
-            <h4>Impact hebdomadaire</h4>
-            {simulationResults.length === 0 ? (
-              <p className="muted-text">Sélectionnez un département pour voir la simulation.</p>
-            ) : (
-              <table className="simulation-table">
-                <thead>
-                  <tr>
-                    <th>Semaine</th>
-                    <th>Disponible (simulé)</th>
-                    <th>Minimum requis</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {simulationResults.map((result) => (
-                    <tr key={result.label} className={result.available < result.required ? 'critical' : ''}>
-                      <td>{result.label}</td>
-                      <td>{result.available}</td>
-                      <td>{result.required}</td>
-                    </tr>
+              {canReviewManager && pendingAbsencesForSimulation.length > 0 && (
+                <div className="simulation-pending-notice">
+                  <small>
+                    <strong>Note :</strong> {pendingAbsencesForSimulation.length} demande(s) de congé en attente pour ce mois sont automatiquement incluses dans la simulation.
+                  </small>
+                </div>
+              )}
+              {simulationConfig.absences.length === 0 && pendingAbsencesForSimulation.length === 0 ? (
+                <p className="muted-text">Aucune absence ajoutée pour l'instant.</p>
+              ) : (
+                <div className="simulation-absences-list">
+                  {pendingAbsencesForSimulation.map((absence, index) => (
+                    <div key={`pending-${absence.leaveId}`} className="simulation-absence-row simulation-absence-row--pending">
+                      <div className="simulation-absence-dates">
+                        <input
+                          type="date"
+                          value={absence.start}
+                          disabled
+                          style={{ opacity: 0.7, cursor: 'not-allowed' }}
+                        />
+                        <span className="date-separator">→</span>
+                        <input
+                          type="date"
+                          value={absence.end}
+                          disabled
+                          style={{ opacity: 0.7, cursor: 'not-allowed' }}
+                        />
+                        <span className="pending-badge">Demande en attente</span>
+                      </div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
-            )}
+                  {simulationConfig.absences.map((absence, index) => (
+                    <div key={`custom-${index}`} className="simulation-absence-row">
+                      <div className="simulation-absence-dates">
+                        <input
+                          type="date"
+                          value={absence.start}
+                          onChange={(event) => updateSimulationAbsence(index, 'start', event.target.value)}
+                          placeholder="Date début"
+                        />
+                        <span className="date-separator">→</span>
+                        <input
+                          type="date"
+                          value={absence.end}
+                          onChange={(event) => updateSimulationAbsence(index, 'end', event.target.value)}
+                          placeholder="Date fin"
+                        />
+                      </div>
+                      <button type="button" className="icon-button warn" onClick={() => removeSimulationAbsence(index)} aria-label="Supprimer">
+                        <X size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="simulation-section">
+              <h3 className="simulation-section-title">Impact hebdomadaire</h3>
+              {simulationResults.length === 0 ? (
+                <p className="muted-text">Sélectionnez un département pour voir la simulation.</p>
+              ) : (
+                <div className="simulation-results-table">
+                  <table className="simulation-table">
+                    <thead>
+                      <tr>
+                        <th>Semaine</th>
+                        <th>Disponible (simulé)</th>
+                        <th>Minimum requis</th>
+                        <th>Statut</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {simulationResults.map((result) => {
+                        const isCritical = result.available < result.required;
+                        return (
+                          <tr key={result.label} className={isCritical ? 'critical' : ''}>
+                            <td><strong>{result.label}</strong></td>
+                            <td>{result.available}</td>
+                            <td>{result.required}</td>
+                            <td>
+                              {isCritical ? (
+                                <span className="status-badge status-badge--warning">⚠️ Insuffisant</span>
+                              ) : (
+                                <span className="status-badge status-badge--success">✓ OK</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
           <div className="modal-actions">
             <button type="button" className="btn btn-outline" onClick={resetSimulation}>

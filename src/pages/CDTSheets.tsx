@@ -138,12 +138,12 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
   const currentDate = useMemo(
     () =>
       new Date().toLocaleDateString('fr-FR', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
       }),
     []
   );
@@ -236,7 +236,7 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
                 <Download size={18} />
                 Télécharger PDF
               </button>
-              <button
+                  <button
                 onClick={() => handleSendEmail(formData, currentDate)}
                 className="btn btn-primary"
                 disabled={loading || templateLoading}
@@ -247,8 +247,8 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
                   <>
                     <Send size={18} />
                     Générer & envoyer
-                  </>
-                )}
+                </>
+              )}
               </button>
               {templateLoading && <span className="pill">Préférences PDF…</span>}
             </div>
@@ -259,13 +259,13 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
             <section className="destruction-section cdt-bins-section">
               <div className="destruction-section__header">
                 <h2>Types de bennes</h2>
-              </div>
-              
+          </div>
+
               {/* Vue desktop - Tableau */}
               <div className="calendar-table-wrapper cdt-table-wrapper cdt-table-desktop">
                 <table className="calendar-table">
                   <thead>
-                    <tr>
+                <tr>
                       <th>Type de bennes</th>
                       <th>7m3</th>
                       <th>10m3</th>
@@ -275,28 +275,28 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
                       <th>en benne</th>
                       <th>en vrac estimé</th>
                       <th>A vider sur site</th>
-                    </tr>
-                  </thead>
+                </tr>
+              </thead>
                   <tbody>
-                    {binTypes.map((item, index) => (
+                {binTypes.map((item, index) => (
                       <tr key={index}>
                         <td className="sticky">{item.name}</td>
-                        {['7m3', '10m3', '20m3', '36m3', '24m3', 'benne', 'vrac', 'vider'].map((size) => (
+                    {['7m3', '10m3', '20m3', '36m3', '24m3', 'benne', 'vrac', 'vider'].map((size) => (
                           <td key={size}>
-                            <input
-                              type="text"
+                        <input
+                          type="text"
                               className="destruction-input"
-                              value={formData[`${item.name}_${size}`] || ''}
-                              onChange={(e) => handleInputChange(`${item.name}_${size}`, e.target.value)}
-                              placeholder="-"
-                            />
-                          </td>
-                        ))}
-                      </tr>
+                          value={formData[`${item.name}_${size}`] || ''}
+                          onChange={(e) => handleInputChange(`${item.name}_${size}`, e.target.value)}
+                          placeholder="-"
+                        />
+                      </td>
                     ))}
-                  </tbody>
-                </table>
-              </div>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
               {/* Vue mobile - Cartes */}
               <div className="cdt-mobile-cards">
@@ -329,16 +329,16 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
                           ].map(({ key, label }) => (
                             <div key={key} className="cdt-mobile-field">
                               <label className="cdt-mobile-field-label">{label}</label>
-                              <input
-                                type="text"
+                  <input
+                    type="text"
                                 className="destruction-input"
                                 value={formData[`${item.name}_${key}`] || ''}
                                 onChange={(e) => handleInputChange(`${item.name}_${key}`, e.target.value)}
-                                placeholder="-"
-                              />
-                            </div>
-                          ))}
-                        </div>
+                    placeholder="-"
+                  />
+                </div>
+              ))}
+            </div>
                       )}
                     </div>
                   );
@@ -367,7 +367,7 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
             </section>
           </div>
         </div>
-      </div>
+    </div>
     </section>
   );
 }

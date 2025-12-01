@@ -39,6 +39,18 @@ export type Customer = {
   created_at: string;
 };
 
+export type Material = {
+  id: string;
+  famille: string | null;
+  numero: string | null;
+  abrege: string | null;
+  description: string | null;
+  unite: string | null;
+  me_bez: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type CustomerDocument = {
   id: string;
   filename: string;
@@ -597,6 +609,37 @@ export const Api = {
     request<{ message: string }>(`/customers/${customerId}/documents/${documentId}`, {
       method: 'DELETE'
     }),
+
+  // Materials API
+  fetchMaterials: () => request<Material[]>('/materials'),
+  createMaterial: (payload: {
+    famille?: string;
+    numero?: string;
+    abrege: string;
+    description: string;
+    unite: string;
+    me_bez?: string;
+  }) =>
+    request<{ id: string; message: string }>('/materials', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateMaterial: (
+    id: string,
+    payload: {
+      famille?: string;
+      numero?: string;
+      abrege?: string;
+      description?: string;
+      unite?: string;
+      me_bez?: string;
+    }
+  ) =>
+    request<{ message: string }>(`/materials/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteMaterial: (id: string) => request<{ message: string }>(`/materials/${id}`, { method: 'DELETE' }),
   downloadCustomerDocument: async (customerId: string, documentId: string) => {
     const response = await fetch(`${API_URL}/customers/${customerId}/documents/${documentId}/download`, {
       headers: authToken
