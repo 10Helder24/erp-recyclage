@@ -7,7 +7,8 @@ import {
   ChevronRight,
   AlertTriangle,
   Loader2,
-  Plus
+  Plus,
+  Edit2
 } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import toast from 'react-hot-toast';
@@ -148,6 +149,9 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
   const [showSignModal, setShowSignModal] = useState(false);
   const [selectedLeave, setSelectedLeave] = useState<Leave | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<Leave[] | null>(null);
+  const [showBalanceModal, setShowBalanceModal] = useState(false);
+  const [selectedBalance, setSelectedBalance] = useState<LeaveBalance | null>(null);
+  const [adjustedBalanceTotal, setAdjustedBalanceTotal] = useState<number>(0);
   const [workflowModal, setWorkflowModal] = useState<{
     group: Leave[];
     action: 'approve' | 'reject';
@@ -909,6 +913,13 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     }));
   };
 
+  const handleAddPeriod = () => {
+    setNewLeave((prev) => ({
+      ...prev,
+      periods: [...prev.periods, { type: 'vacances', start_date: '', end_date: '' }]
+    }));
+  };
+
   const handleDeleteLeave = async (leaveToDelete: Leave) => {
     const group = getGroupLeaves(leaveToDelete);
     if (getWorkflowStep(group[0]) !== 'manager') {
@@ -1420,7 +1431,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
                       <div className="avatar">
                         <User size={20} />
                       </div>
-                      <div>
+                      <div style={{ flex: 1 }}>
                         <strong>
                           {balance.employee?.first_name} {balance.employee?.last_name}
                         </strong>
@@ -1428,6 +1439,21 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
                           Année {balance.year}
                         </p>
                       </div>
+                      {canReviewManager && (
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-small"
+                          onClick={() => {
+                            setSelectedBalance(balance);
+                            setAdjustedBalanceTotal(balance.paid_leave_total);
+                            setShowBalanceModal(true);
+                          }}
+                          style={{ marginLeft: 'auto' }}
+                        >
+                          <Edit2 size={14} />
+                          Ajuster
+                        </button>
+                      )}
                     </div>
                     <Progress label="Congés payés" used={balance.paid_leave_used} total={balance.paid_leave_total} color="#10b981" />
                     <Progress label="Maladie" used={balance.sick_leave_used} total={30} color="#ef4444" />
@@ -1587,6 +1613,18 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
                 </div>
               </div>
             ))}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: 8 }}>
+              <button
+                type="button"
+                className="btn btn-outline btn-small"
+                onClick={handleAddPeriod}
+                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+              >
+                <Plus size={14} />
+                Ajouter une période
+              </button>
+            </div>
 
             <div className="input-group">
               <label>Signature de l'employé</label>
@@ -1870,6 +1908,91 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
                 Valider & envoyer
               </button>
           </div>
+        </Modal>
+      )}
+
+      {showBalanceModal && selectedBalance && (
+        <Modal title="Ajuster le solde de vacances" onClose={() => setShowBalanceModal(false)}>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!selectedBalance) return;
+              
+              try {
+                await Api.updateLeaveBalance(selectedBalance.employee_id, selectedBalance.year, adjustedBalanceTotal);
+                toast.success('Solde ajusté avec succès');
+                setShowBalanceModal(false);
+                await loadData();
+              } catch (error) {
+                toast.error((error as Error).message || 'Erreur lors de l\'ajustement');
+              }
+            }}
+          >
+            <div className="input-group">
+              <label>Employé</label>
+              <input
+                type="text"
+                value={`${selectedBalance.employee?.first_name} ${selectedBalance.employee?.last_name}`}
+                disabled
+                style={{ background: '#f3f4f6', cursor: 'not-allowed' }}
+              />
+            </div>
+            <div className="input-group">
+              <label>Année</label>
+              <input
+                type="number"
+                value={selectedBalance.year}
+                disabled
+                style={{ background: '#f3f4f6', cursor: 'not-allowed' }}
+              />
+            </div>
+            <div className="input-group">
+              <label>Solde actuel (jours)</label>
+              <input
+                type="number"
+                value={selectedBalance.paid_leave_total}
+                disabled
+                style={{ background: '#f3f4f6', cursor: 'not-allowed' }}
+              />
+            </div>
+            <div className="input-group">
+              <label>Nouveau solde total (jours) *</label>
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                value={adjustedBalanceTotal}
+                onChange={(e) => setAdjustedBalanceTotal(parseFloat(e.target.value) || 0)}
+                required
+                placeholder="Ex: 25, 30, 27.5"
+              />
+              <small className="input-hint">
+                Utilisez cette fonction pour reporter des jours de l'année précédente ou ajuster le solde initial.
+              </small>
+            </div>
+            <div className="input-group">
+              <div style={{ padding: '12px', background: '#f0f9ff', borderRadius: '8px', border: '1px solid #bae6fd' }}>
+                <strong style={{ display: 'block', marginBottom: '4px' }}>Résumé</strong>
+                <p style={{ margin: 0, fontSize: '0.9rem' }}>
+                  Solde actuel : <strong>{selectedBalance.paid_leave_total} jours</strong>
+                  <br />
+                  Nouveau solde : <strong>{adjustedBalanceTotal} jours</strong>
+                  <br />
+                  Congés utilisés : <strong>{selectedBalance.paid_leave_used} jours</strong>
+                  <br />
+                  Solde restant après ajustement : <strong>{adjustedBalanceTotal - selectedBalance.paid_leave_used} jours</strong>
+                </p>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-outline" onClick={() => setShowBalanceModal(false)}>
+                Annuler
+              </button>
+              <button type="submit" className="btn btn-primary">
+                Enregistrer l'ajustement
+              </button>
+            </div>
+          </form>
         </Modal>
       )}
     </section>

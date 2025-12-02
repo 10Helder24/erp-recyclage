@@ -1,10 +1,11 @@
 import { useEffect, useState, useRef } from 'react';
-import { Plus, Edit2, Trash2, Search, Loader2, Save, X, Upload, FileSpreadsheet } from 'lucide-react';
+import { Plus, Edit2, Trash2, Search, Loader2, Save, X, Upload, FileSpreadsheet, DollarSign } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 
 import { Api, type Material } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
+import { MaterialPricesTab } from '../components/MaterialPricesTab';
 
 type MaterialForm = {
   famille: string;
@@ -38,6 +39,7 @@ export const MaterialsPage = () => {
   const [form, setForm] = useState<MaterialForm>(DEFAULT_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [activeTab, setActiveTab] = useState<'materials' | 'prices'>('materials');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadMaterials = async () => {
@@ -173,12 +175,19 @@ export const MaterialsPage = () => {
       }
 
       // Détection automatique des colonnes (première ligne = en-têtes)
-      const headers = (jsonData[0] || []).map((h: any) => String(h || '').toLowerCase().trim());
+      const headers = (jsonData[0] || []).map((h: any) => {
+        if (h === null || h === undefined) return '';
+        return String(h).toLowerCase().trim();
+      });
       
       // Mapping des colonnes possibles
       const getColumnIndex = (possibleNames: string[]) => {
+        if (!headers || headers.length === 0) return -1;
         for (const name of possibleNames) {
-          const idx = headers.findIndex(h => h.includes(name));
+          const idx = headers.findIndex((h: string) => {
+            if (!h || typeof h !== 'string') return false;
+            return h.includes(name);
+          });
           if (idx >= 0) return idx;
         }
         return -1;
@@ -312,81 +321,109 @@ export const MaterialsPage = () => {
         )}
       </div>
 
-      <div className="page-content materials-page-content">
-        <div className="materials-search-bar">
-          <div className="materials-search-wrapper">
-            <Search size={20} />
-            <input
-              type="text"
-              placeholder="Rechercher une matière (abréviation, description, famille, numéro)..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
+      <div className="card" style={{ marginTop: '24px' }}>
+        <div className="tab-nav">
+          <button
+            type="button"
+            onClick={() => setActiveTab('materials')}
+            className={activeTab === 'materials' ? 'active' : ''}
+          >
+            Matières
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('prices')}
+            className={activeTab === 'prices' ? 'active' : ''}
+          >
+            <DollarSign size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+            Prix
+          </button>
         </div>
 
-        {loading ? (
-          <div className="loading-state">
-            <Loader2 size={24} className="spinner" />
-            <p>Chargement des matières...</p>
+        {activeTab === 'materials' && (
+          <div className="page-content materials-page-content">
+            <div className="materials-search-bar">
+              <div className="materials-search-wrapper">
+                <Search size={20} />
+                <input
+                  type="text"
+                  placeholder="Rechercher une matière (abréviation, description, famille, numéro)..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="loading-state">
+                <Loader2 size={24} className="spinner" />
+                <p>Chargement des matières...</p>
+              </div>
+            ) : filteredMaterials.length === 0 ? (
+              <div className="empty-state">
+                <FileSpreadsheet size={48} style={{ opacity: 0.3, marginBottom: '16px' }} />
+                <p style={{ fontSize: '1.1rem', marginBottom: '8px', fontWeight: 500 }}>
+                  {searchTerm ? 'Aucune matière ne correspond à votre recherche' : 'Aucune matière enregistrée'}
+                </p>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                  {searchTerm
+                    ? 'Essayez avec d\'autres mots-clés'
+                    : 'Commencez par ajouter une matière manuellement ou importez un fichier Excel'}
+                </p>
+              </div>
+            ) : (
+              <div className="materials-table-wrapper">
+                <table className="materials-data-table">
+                  <thead>
+                    <tr>
+                      <th>Famille</th>
+                      <th>N°</th>
+                      <th>Abrégé</th>
+                      <th>Description</th>
+                      <th>Unité</th>
+                      <th>ME-Bez</th>
+                      {canEdit && <th className="actions-column">Actions</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredMaterials.map((material) => (
+                      <tr key={material.id}>
+                        <td>{material.famille || <span style={{ color: 'var(--text-muted)' }}>-</span>}</td>
+                        <td>{material.numero || <span style={{ color: 'var(--text-muted)' }}>-</span>}</td>
+                        <td><strong>{material.abrege || '-'}</strong></td>
+                        <td>{material.description || '-'}</td>
+                        <td>{material.unite || '-'}</td>
+                        <td>{material.me_bez || <span style={{ color: 'var(--text-muted)' }}>-</span>}</td>
+                        {canEdit && (
+                          <td className="actions-column">
+                            <button
+                              className="btn-icon"
+                              onClick={() => openEditModal(material)}
+                              title="Modifier"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                            <button
+                              className="btn-icon btn-icon-danger"
+                              onClick={() => handleDelete(material.id)}
+                              title="Supprimer"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        ) : filteredMaterials.length === 0 ? (
-          <div className="empty-state">
-            <FileSpreadsheet size={48} style={{ opacity: 0.3, marginBottom: '16px' }} />
-            <p style={{ fontSize: '1.1rem', marginBottom: '8px', fontWeight: 500 }}>
-              {searchTerm ? 'Aucune matière ne correspond à votre recherche' : 'Aucune matière enregistrée'}
-            </p>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-              {searchTerm
-                ? 'Essayez avec d\'autres mots-clés'
-                : 'Commencez par ajouter une matière manuellement ou importez un fichier Excel'}
-            </p>
-          </div>
-        ) : (
-          <div className="materials-table-wrapper">
-            <table className="materials-data-table">
-              <thead>
-                <tr>
-                  <th>Famille</th>
-                  <th>N°</th>
-                  <th>Abrégé</th>
-                  <th>Description</th>
-                  <th>Unité</th>
-                  <th>ME-Bez</th>
-                  {canEdit && <th className="actions-column">Actions</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredMaterials.map((material) => (
-                  <tr key={material.id}>
-                    <td>{material.famille || <span style={{ color: 'var(--text-muted)' }}>-</span>}</td>
-                    <td>{material.numero || <span style={{ color: 'var(--text-muted)' }}>-</span>}</td>
-                    <td><strong>{material.abrege || '-'}</strong></td>
-                    <td>{material.description || '-'}</td>
-                    <td>{material.unite || '-'}</td>
-                    <td>{material.me_bez || <span style={{ color: 'var(--text-muted)' }}>-</span>}</td>
-                    {canEdit && (
-                      <td className="actions-column">
-                        <button
-                          className="btn-icon"
-                          onClick={() => openEditModal(material)}
-                          title="Modifier"
-                        >
-                          <Edit2 size={16} />
-                        </button>
-                        <button
-                          className="btn-icon btn-icon-danger"
-                          onClick={() => handleDelete(material.id)}
-                          title="Supprimer"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        )}
+
+        {activeTab === 'prices' && (
+          <div style={{ padding: '24px' }}>
+            <MaterialPricesTab materials={materials} canEdit={canEdit} />
           </div>
         )}
       </div>

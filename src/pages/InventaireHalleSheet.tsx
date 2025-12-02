@@ -1,13 +1,15 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Download, Save, FileText, Send } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useContext } from 'react';
+import { Download, Save, FileText, Send, Settings } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 
-import { Api, type PdfTemplateConfig } from '../lib/api';
+import { Api, type PdfTemplateConfig, type InventoryMaterial, type InventoryMachine, type InventoryContainer, type InventoryBag, type InventoryOtherItem } from '../lib/api';
 import { usePdfTemplate } from '../hooks/usePdfTemplate';
 import { openPdfPreview } from '../utils/pdfPreview';
 import { getFooterLines, getZonePalette, hexToRgb, resolveTemplateImage } from '../utils/pdfTemplate';
+import { AuthContext } from '../context/AuthContext';
+import { InventoryConfigModal } from '../components/InventoryConfigModal';
 
 // Types temporaires - TODO: Déplacer vers types/ si nécessaire
 interface Article {
@@ -87,11 +89,15 @@ interface InventorySheetProps {
 }
 
 export function InventorySheet({ articles, user, signOut }: InventorySheetProps) {
+  const { hasRole } = useContext(AuthContext)!;
+  const isAdmin = hasRole('admin');
   const [activeTab, setActiveTab] = useState('plastiquebb');
   const [previousSnapshot, setPreviousSnapshot] = useState<InventorySnapshot | null>(null);
   const [historyEntries, setHistoryEntries] = useState<
     Array<{ key: string; label: string; created_at: string; data: InventorySnapshot }>
   >([]);
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [configLoaded, setConfigLoaded] = useState(false);
 
   const HALLE_DEFAULT_ROWS: HalleRow[] = [
     { matiere: 'PET broyé', bb: 0, palette: 0 },
@@ -258,11 +264,25 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
   const saveAllData = async () => {
     try {
       setIsSaving(true);
+      
+      // Sauvegarder dans la base de données
+      await Api.createInventorySnapshot({
+        report_date: reportDate,
+        report_date_label: reportDateLabel,
+        halle_data: halleData,
+        plastique_b_data: plastiqueBData,
+        cdt_data: cdtData,
+        papier_data: papierData,
+        machines_data: machineData,
+        autres_data: autresData,
+        containers_data: containersData,
+        bags_data: bagsData
+      });
+
+      // Sauvegarder aussi dans localStorage pour compatibilité
       const currentDate = new Date();
       const month = currentDate.getMonth() + 1;
       const year = currentDate.getFullYear();
-
-      // Préparer les données pour la sauvegarde
       const inventoryData = {
         halle: halleData,
         plastique_balles: plastiqueBData,
@@ -276,39 +296,277 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
         year,
         created_at: new Date().toISOString()
       };
-
-      // Sauvegarder dans le localStorage
       const key = `inventory_${year}_${month}`;
       localStorage.setItem(key, JSON.stringify(inventoryData));
 
-      // TODO: Réimplémenter avec l'API backend si nécessaire
-      // Les données sont sauvegardées dans localStorage pour l'instant
-
       toast.success('Données sauvegardées avec succès');
-    } catch (error) {
+      
+      // Recharger l'historique
+      await loadCurrentMonthData();
+    } catch (error: any) {
       console.error('Erreur lors de la sauvegarde:', error);
-      toast.error('Erreur lors de la sauvegarde des données');
+      toast.error(`Erreur lors de la sauvegarde: ${error.message}`);
     } finally {
       setIsSaving(false);
     }
+  };
+
+  // Fonction pour réinitialiser les heures et balles au 1er du mois
+  const resetMonthlyValues = (machines: MachineRow[], papier: PapierRow[]): { machines: MachineRow[]; papier: PapierRow[] } => {
+    // Réinitialiser les heures des machines à '100' et les balles à ''
+    const resetMachines = machines.map(m => ({
+      ...m,
+      heur: '100',
+      ball: ''
+    }));
+    
+    // Réinitialiser les balles du papier à ''
+    const resetPapier = papier.map(p => ({
+      ...p,
+      bal: ''
+    }));
+    
+    return { machines: resetMachines, papier: resetPapier };
   };
 
   // Fonction pour charger les données du mois en cours
   const loadCurrentMonthData = async () => {
     try {
       const currentDate = new Date();
+      const day = currentDate.getDate();
       const month = currentDate.getMonth() + 1;
       const year = currentDate.getFullYear();
+      const isFirstDayOfMonth = day === 1;
       const currentKey = `inventory_${year}_${month}`;
       const prevDate = new Date(year, month - 2, 1);
       const prevKey = `inventory_${prevDate.getFullYear()}_${prevDate.getMonth() + 1}`;
 
-      // TODO: Charger depuis l'API backend si nécessaire
-      // Pour l'instant, on charge depuis localStorage
-      {
-        // Si pas de données Supabase, essayer le localStorage
+      // Charger depuis la base de données
+      try {
+        const snapshots = await Api.fetchInventorySnapshots({ year, month, limit: 1 });
+        
+        if (snapshots.length > 0) {
+          const latest = snapshots[0];
+          let loadedMachines = latest.machines_data || [];
+          let loadedPapier = latest.papier_data || [];
+          
+          // Si c'est le 1er du mois, réinitialiser les heures et balles
+          if (isFirstDayOfMonth) {
+            const reset = resetMonthlyValues(loadedMachines, loadedPapier);
+            loadedMachines = reset.machines;
+            loadedPapier = reset.papier;
+            
+            // Sauvegarder automatiquement les valeurs réinitialisées
+            try {
+              await Api.updateInventorySnapshot(latest.id, {
+                machines_data: loadedMachines,
+                papier_data: loadedPapier
+              });
+              toast.success('Heures et balles réinitialisées pour le nouveau mois');
+            } catch (error) {
+              console.warn('Erreur lors de la sauvegarde automatique de la réinitialisation:', error);
+            }
+          }
+          
+          setHalleData(normalizeHalleData(latest.halle_data || []));
+          setPlastiqueBData(latest.plastique_b_data || []);
+          setCdtData(latest.cdt_data || []);
+          setPapierData(loadedPapier);
+          setMachineData(loadedMachines);
+          setAutresData(latest.autres_data || autresData);
+          setContainersData(latest.containers_data || []);
+          setBagsData(latest.bags_data || []);
+        } else if (isFirstDayOfMonth) {
+          // Pas de snapshot pour ce mois, mais c'est le 1er du mois - créer un snapshot avec valeurs réinitialisées
+          // Charger le dernier snapshot du mois précédent pour récupérer les autres données
+          const prevDate = new Date(year, month - 2, 1);
+          const prevSnapshots = await Api.fetchInventorySnapshots({
+            year: prevDate.getFullYear(),
+            month: prevDate.getMonth() + 1,
+            limit: 1
+          });
+          
+          let baseMachines = machineData;
+          let basePapier = papierData;
+          let baseHalle = halleData;
+          let basePlastiqueB = plastiqueBData;
+          let baseCdt = cdtData;
+          let baseAutres = autresData;
+          let baseContainers = containersData;
+          let baseBags = bagsData;
+          
+          if (prevSnapshots.length > 0) {
+            const prev = prevSnapshots[0];
+            baseHalle = normalizeHalleData(prev.halle_data || []);
+            basePlastiqueB = prev.plastique_b_data || [];
+            baseCdt = prev.cdt_data || [];
+            basePapier = prev.papier_data || [];
+            baseMachines = prev.machines_data || [];
+            baseAutres = prev.autres_data || autresData;
+            baseContainers = prev.containers_data || [];
+            baseBags = prev.bags_data || [];
+          }
+          
+          // Réinitialiser les heures et balles
+          const reset = resetMonthlyValues(baseMachines, basePapier);
+          
+          // Créer un nouveau snapshot avec les valeurs réinitialisées
+          try {
+            await Api.createInventorySnapshot({
+              report_date: reportDate,
+              report_date_label: reportDateLabel,
+              halle_data: baseHalle,
+              plastique_b_data: basePlastiqueB,
+              cdt_data: baseCdt,
+              papier_data: reset.papier,
+              machines_data: reset.machines,
+              autres_data: baseAutres,
+              containers_data: baseContainers,
+              bags_data: baseBags
+            });
+            
+            setHalleData(baseHalle);
+            setPlastiqueBData(basePlastiqueB);
+            setCdtData(baseCdt);
+            setPapierData(reset.papier);
+            setMachineData(reset.machines);
+            setAutresData(baseAutres);
+            setContainersData(baseContainers);
+            setBagsData(baseBags);
+            
+            toast.success('Heures et balles réinitialisées pour le nouveau mois');
+          } catch (error) {
+            console.warn('Erreur lors de la création automatique du snapshot:', error);
+            // Fallback : juste réinitialiser les valeurs dans l'interface
+            const reset = resetMonthlyValues(machineData, papierData);
+            setMachineData(reset.machines);
+            setPapierData(reset.papier);
+          }
+        } else {
+          // Pas de données en base, essayer localStorage
+          const savedData = localStorage.getItem(currentKey);
+          if (savedData) {
+            const data = JSON.parse(savedData);
+            let loadedMachines = data.machines || machineData;
+            let loadedPapier = data.papier || papierData;
+            
+            // Si c'est le 1er du mois, réinitialiser les heures et balles
+            if (isFirstDayOfMonth) {
+              const reset = resetMonthlyValues(loadedMachines, loadedPapier);
+              loadedMachines = reset.machines;
+              loadedPapier = reset.papier;
+              
+              // Mettre à jour localStorage avec les valeurs réinitialisées
+              const updatedData = {
+                ...data,
+                machines: loadedMachines,
+                papier: loadedPapier
+              };
+              localStorage.setItem(currentKey, JSON.stringify(updatedData));
+              
+              // Essayer de sauvegarder dans la BD si possible
+              try {
+                await Api.createInventorySnapshot({
+                  report_date: reportDate,
+                  report_date_label: reportDateLabel,
+                  halle_data: normalizeHalleData(data.halle),
+                  plastique_b_data: data.plastique_balles || plastiqueBData,
+                  cdt_data: data.cdt || cdtData,
+                  papier_data: loadedPapier,
+                  machines_data: loadedMachines,
+                  autres_data: data.autres || autresData,
+                  containers_data: data.containers || containersData,
+                  bags_data: data.bags || bagsData
+                });
+                toast.success('Heures et balles réinitialisées pour le nouveau mois');
+              } catch (error) {
+                console.warn('Erreur lors de la sauvegarde automatique:', error);
+              }
+            }
+            
+            setHalleData(normalizeHalleData(data.halle));
+            setPlastiqueBData(data.plastique_balles || plastiqueBData);
+            setCdtData(data.cdt || cdtData);
+            setPapierData(loadedPapier);
+            setMachineData(loadedMachines);
+            setAutresData(data.autres || autresData);
+            setContainersData(data.containers || containersData);
+            setBagsData(data.bags || bagsData);
+          } else if (isFirstDayOfMonth) {
+            // Pas de données du tout, mais c'est le 1er du mois - réinitialiser les valeurs par défaut
+            const reset = resetMonthlyValues(machineData, papierData);
+            setMachineData(reset.machines);
+            setPapierData(reset.papier);
+          }
+        }
+        
+        // Charger le snapshot précédent pour comparaison
+        const prevDate = new Date(year, month - 2, 1);
+        const prevSnapshots = await Api.fetchInventorySnapshots({
+          year: prevDate.getFullYear(),
+          month: prevDate.getMonth() + 1,
+          limit: 1
+        });
+        
+        if (prevSnapshots.length > 0) {
+          const prev = prevSnapshots[0];
+          setPreviousSnapshot({
+            halle: normalizeHalleData(prev.halle_data || []),
+            plastiqueB: prev.plastique_b_data || [],
+            cdt: prev.cdt_data || [],
+            papier: prev.papier_data || [],
+            machines: prev.machines_data || [],
+            autres: prev.autres_data || autresData,
+            containers: prev.containers_data || [],
+            bags: prev.bags_data || []
+          });
+        } else {
+          // Fallback sur localStorage
+          const prevDataRaw = localStorage.getItem(prevKey);
+          if (prevDataRaw) {
+            try {
+              const parsed = JSON.parse(prevDataRaw);
+              setPreviousSnapshot({
+                halle: normalizeHalleData(parsed.halle),
+                plastiqueB: parsed.plastique_balles || [],
+                cdt: parsed.cdt || [],
+                papier: parsed.papier || [],
+                machines: parsed.machines || [],
+                autres: parsed.autres || autresData,
+                containers: parsed.containers || [],
+                bags: parsed.bags || []
+              });
+            } catch (error) {
+              console.warn('Historique précédent illisible', error);
+              setPreviousSnapshot(null);
+            }
+          } else {
+            setPreviousSnapshot(null);
+          }
+        }
+        
+        // Charger l'historique complet
+        const allSnapshots = await Api.fetchInventorySnapshots({ limit: 50 });
+        const entries: Array<{ key: string; label: string; created_at: string; data: InventorySnapshot }> = allSnapshots.map((snapshot) => ({
+          key: snapshot.id,
+          label: snapshot.report_date_label || new Date(snapshot.report_date).toLocaleDateString('fr-FR'),
+          created_at: snapshot.created_at,
+          data: {
+            halle: normalizeHalleData(snapshot.halle_data || []),
+            plastiqueB: snapshot.plastique_b_data || [],
+            cdt: snapshot.cdt_data || [],
+            papier: snapshot.papier_data || [],
+            machines: snapshot.machines_data || [],
+            autres: snapshot.autres_data || autresData,
+            containers: snapshot.containers_data || [],
+            bags: snapshot.bags_data || []
+          }
+        }));
+        setHistoryEntries(entries);
+      } catch (apiError) {
+        console.warn('Erreur lors du chargement depuis l\'API, utilisation du localStorage:', apiError);
+        // Fallback sur localStorage en cas d'erreur
         const savedData = localStorage.getItem(currentKey);
-
         if (savedData) {
           const data = JSON.parse(savedData);
           setHalleData(normalizeHalleData(data.halle));
@@ -319,9 +577,8 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
           setAutresData(data.autres || autresData);
           setContainersData(data.containers || containersData);
           setBagsData(data.bags || bagsData);
-        } else {
-          setHalleData(HALLE_DEFAULT_ROWS);
         }
+        
         const prevDataRaw = localStorage.getItem(prevKey);
         if (prevDataRaw) {
           try {
@@ -343,7 +600,7 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
         } else {
           setPreviousSnapshot(null);
         }
-
+        
         const entries: Array<{ key: string; label: string; created_at: string; data: InventorySnapshot }> = [];
         Object.keys(localStorage)
           .filter((key) => key.startsWith('inventory_'))
@@ -580,6 +837,24 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
   };
 
   return (
+    <>
+      {isAdmin && (
+        <div style={{ padding: '20px', maxWidth: '1400px', margin: '0 auto', display: 'flex', justifyContent: 'flex-end' }}>
+          <button className="btn btn-secondary" onClick={() => setShowConfigModal(true)}>
+            <Settings size={16} /> Gérer les configurations
+          </button>
+        </div>
+      )}
+      <InventoryConfigModal
+        isOpen={showConfigModal}
+        onClose={() => {
+          setShowConfigModal(false);
+          setConfigLoaded(false); // Recharger les configurations après modification
+        }}
+        onConfigUpdated={() => {
+          setConfigLoaded(false);
+        }}
+      />
     <section className="destruction-page">
       <div className="destruction-wrapper">
         <div className="destruction-card">
@@ -1853,6 +2128,7 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
         </div>
       </div>
     </section>
+    </>
   );
 }
 

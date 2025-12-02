@@ -61,6 +61,32 @@ export type CustomerDocument = {
   created_at: string;
 };
 
+export type PriceSource = {
+  id: string;
+  name: string;
+  description: string | null;
+  source_type: string;
+  created_at: string;
+};
+
+export type MaterialPrice = {
+  id: string;
+  material_id: string;
+  price_source_id: string;
+  price: number;
+  price_min: number | null;
+  price_max: number | null;
+  currency: string;
+  valid_from: string;
+  valid_to: string | null;
+  comment: string | null;
+  imported_from_file: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  source_name?: string;
+};
+
 export type AuditLogEntry = {
   id: string;
   entity_type: string;
@@ -71,6 +97,78 @@ export type AuditLogEntry = {
   before_data: Record<string, any> | null;
   after_data: Record<string, any> | null;
   created_at: string;
+};
+
+export type InventoryMaterial = {
+  id: string;
+  category: 'halle' | 'plastiqueB' | 'cdt' | 'papier';
+  matiere: string;
+  num: string | null;
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InventoryMachine = {
+  id: string;
+  num1: string;
+  mac: string;
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InventoryContainer = {
+  id: string;
+  type: string;
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InventoryBag = {
+  id: string;
+  type: string;
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InventoryOtherItem = {
+  id: string;
+  category: 'diesel' | 'adBlue' | 'filFer' | 'eau';
+  subcategory: string | null;
+  label: string;
+  unit1: string | null;
+  unit2: string | null;
+  default_value1: number;
+  default_value2: number;
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InventorySnapshot = {
+  id: string;
+  report_date: string;
+  report_date_label: string | null;
+  halle_data: any[];
+  plastique_b_data: any[];
+  cdt_data: any[];
+  papier_data: any[];
+  machines_data: any[];
+  autres_data: any;
+  containers_data: any[];
+  bags_data: any[];
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type Intervention = {
@@ -491,6 +589,11 @@ export const Api = {
     request<LeaveBalance[]>('/leave-balances/recalculate', {
       method: 'POST'
     }),
+  updateLeaveBalance: (employeeId: string, year: number, paid_leave_total: number) =>
+    request<LeaveBalance>(`/leave-balances/${employeeId}/${year}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ paid_leave_total })
+    }),
   sendDeclassement: (payload: DeclassementEmailPayload) =>
     request<{ message: string }>('/declassements/send', {
       method: 'POST',
@@ -640,6 +743,54 @@ export const Api = {
       body: JSON.stringify(payload)
     }),
   deleteMaterial: (id: string) => request<{ message: string }>(`/materials/${id}`, { method: 'DELETE' }),
+  fetchMaterialPrices: (materialId: string) => request<MaterialPrice[]>(`/materials/${materialId}/prices`),
+  fetchPriceSources: () => request<PriceSource[]>('/price-sources'),
+  createMaterialPrice: (materialId: string, payload: {
+    price_source_id: string;
+    price: number;
+    price_min?: number;
+    price_max?: number;
+    currency?: string;
+    valid_from?: string;
+    valid_to?: string | null;
+    comment?: string;
+  }) =>
+    request<MaterialPrice>(`/materials/${materialId}/prices`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateMaterialPrice: (priceId: string, payload: {
+    price?: number;
+    price_min?: number;
+    price_max?: number;
+    currency?: string;
+    valid_from?: string;
+    valid_to?: string | null;
+    comment?: string;
+  }) =>
+    request<MaterialPrice>(`/material-prices/${priceId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteMaterialPrice: (priceId: string) => request<{ message: string }>(`/material-prices/${priceId}`, { method: 'DELETE' }),
+  importCopacelPdf: (payload: {
+    prices: Array<{
+      abrege?: string;
+      description?: string;
+      price: number;
+      price_min?: number;
+      price_max?: number;
+    }>;
+    filename?: string;
+    valid_from?: string;
+  }) =>
+    request<{ message: string; results: Array<{ material_id: string; success: boolean; error?: string }> }>(
+      '/materials/import-copacel-pdf',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      }
+    ),
   downloadCustomerDocument: async (customerId: string, documentId: string) => {
     const response = await fetch(`${API_URL}/customers/${customerId}/documents/${documentId}/download`, {
       headers: authToken
@@ -653,6 +804,177 @@ export const Api = {
     }
     return response.blob();
   },
+  
+  // Inventory Config API
+  fetchInventoryMaterials: (category?: string, includeInactive?: boolean) => {
+    const params = new URLSearchParams();
+    if (category) params.append('category', category);
+    if (includeInactive) params.append('include_inactive', 'true');
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request<InventoryMaterial[]>(`/inventory-config/materials${query}`);
+  },
+  createInventoryMaterial: (payload: { category: string; matiere: string; num?: string; display_order?: number }) =>
+    request<InventoryMaterial>('/inventory-config/materials', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateInventoryMaterial: (id: string, payload: { category?: string; matiere?: string; num?: string; display_order?: number; is_active?: boolean }) =>
+    request<InventoryMaterial>(`/inventory-config/materials/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteInventoryMaterial: (id: string, permanent?: boolean) => {
+    const query = permanent ? '?permanent=true' : '';
+    return request<InventoryMaterial>(`/inventory-config/materials/${id}${query}`, { method: 'DELETE' });
+  },
+  
+  fetchInventoryMachines: (includeInactive?: boolean) => {
+    const query = includeInactive ? '?include_inactive=true' : '';
+    return request<InventoryMachine[]>(`/inventory-config/machines${query}`);
+  },
+  createInventoryMachine: (payload: { num1: string; mac: string; display_order?: number }) =>
+    request<InventoryMachine>('/inventory-config/machines', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateInventoryMachine: (id: string, payload: { num1?: string; mac?: string; display_order?: number; is_active?: boolean }) =>
+    request<InventoryMachine>(`/inventory-config/machines/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteInventoryMachine: (id: string, permanent?: boolean) => {
+    const query = permanent ? '?permanent=true' : '';
+    return request<InventoryMachine>(`/inventory-config/machines/${id}${query}`, { method: 'DELETE' });
+  },
+  
+  fetchInventoryContainers: (includeInactive?: boolean) => {
+    const query = includeInactive ? '?include_inactive=true' : '';
+    return request<InventoryContainer[]>(`/inventory-config/containers${query}`);
+  },
+  createInventoryContainer: (payload: { type: string; display_order?: number }) =>
+    request<InventoryContainer>('/inventory-config/containers', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateInventoryContainer: (id: string, payload: { type?: string; display_order?: number; is_active?: boolean }) =>
+    request<InventoryContainer>(`/inventory-config/containers/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteInventoryContainer: (id: string, permanent?: boolean) => {
+    const query = permanent ? '?permanent=true' : '';
+    return request<InventoryContainer>(`/inventory-config/containers/${id}${query}`, { method: 'DELETE' });
+  },
+  
+  fetchInventoryBags: (includeInactive?: boolean) => {
+    const query = includeInactive ? '?include_inactive=true' : '';
+    return request<InventoryBag[]>(`/inventory-config/bags${query}`);
+  },
+  createInventoryBag: (payload: { type: string; display_order?: number }) =>
+    request<InventoryBag>('/inventory-config/bags', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateInventoryBag: (id: string, payload: { type?: string; display_order?: number; is_active?: boolean }) =>
+    request<InventoryBag>(`/inventory-config/bags/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteInventoryBag: (id: string, permanent?: boolean) => {
+    const query = permanent ? '?permanent=true' : '';
+    return request<InventoryBag>(`/inventory-config/bags/${id}${query}`, { method: 'DELETE' });
+  },
+  
+  fetchInventoryOtherItems: (category?: string, includeInactive?: boolean) => {
+    const params = new URLSearchParams();
+    if (category) params.append('category', category);
+    if (includeInactive) params.append('include_inactive', 'true');
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request<InventoryOtherItem[]>(`/inventory-config/other-items${query}`);
+  },
+  createInventoryOtherItem: (payload: {
+    category: string;
+    subcategory?: string;
+    label: string;
+    unit1?: string;
+    unit2?: string;
+    default_value1?: number;
+    default_value2?: number;
+    display_order?: number;
+  }) =>
+    request<InventoryOtherItem>('/inventory-config/other-items', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateInventoryOtherItem: (
+    id: string,
+    payload: {
+      category?: string;
+      subcategory?: string;
+      label?: string;
+      unit1?: string;
+      unit2?: string;
+      default_value1?: number;
+      default_value2?: number;
+      display_order?: number;
+      is_active?: boolean;
+    }
+  ) =>
+    request<InventoryOtherItem>(`/inventory-config/other-items/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteInventoryOtherItem: (id: string, permanent?: boolean) => {
+    const query = permanent ? '?permanent=true' : '';
+    return request<InventoryOtherItem>(`/inventory-config/other-items/${id}${query}`, { method: 'DELETE' });
+  },
+  
+  // Inventory Snapshots API
+  fetchInventorySnapshots: (params?: { year?: number; month?: number; limit?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.year) query.append('year', params.year.toString());
+    if (params?.month) query.append('month', params.month.toString());
+    if (params?.limit) query.append('limit', params.limit.toString());
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return request<InventorySnapshot[]>(`/inventory-snapshots${suffix}`);
+  },
+  fetchInventorySnapshot: (id: string) => request<InventorySnapshot>(`/inventory-snapshots/${id}`),
+  createInventorySnapshot: (payload: {
+    report_date: string;
+    report_date_label?: string;
+    halle_data: any[];
+    plastique_b_data: any[];
+    cdt_data: any[];
+    papier_data: any[];
+    machines_data: any[];
+    autres_data: any;
+    containers_data: any[];
+    bags_data: any[];
+  }) =>
+    request<InventorySnapshot>('/inventory-snapshots', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateInventorySnapshot: (
+    id: string,
+    payload: {
+      report_date?: string;
+      report_date_label?: string;
+      halle_data?: any[];
+      plastique_b_data?: any[];
+      cdt_data?: any[];
+      papier_data?: any[];
+      machines_data?: any[];
+      autres_data?: any;
+      containers_data?: any[];
+      bags_data?: any[];
+    }
+  ) =>
+    request<InventorySnapshot>(`/inventory-snapshots/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteInventorySnapshot: (id: string) => request<{ message: string }>(`/inventory-snapshots/${id}`, { method: 'DELETE' }),
   fetchAuditLogs: (params: { entity_type: string; entity_id?: string; limit?: number }) => {
     const searchParams = new URLSearchParams({ entity_type: params.entity_type });
     if (params.entity_id) {

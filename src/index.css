@@ -3877,6 +3877,408 @@ main.main-content:has(.cdt-page) {
     font-size: 0.8rem;
   }
 
+  /* InventaireHalleSheet - Responsive Mobile */
+  .destruction-page {
+    padding: 0;
+    margin: 0;
+  }
+
+  .destruction-wrapper {
+    padding: 0;
+  }
+
+  .destruction-card {
+    border-radius: 0;
+    margin: 0;
+    padding: 12px;
+  }
+
+  .destruction-card__header {
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px 12px;
+  }
+
+  .destruction-card__header h1 {
+    font-size: 1.5rem;
+  }
+
+  .destruction-card__header .page-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .destruction-card__header .page-actions .btn {
+    width: 100%;
+    justify-content: center;
+    padding: 12px 16px;
+    font-size: 0.95rem;
+    min-height: 44px; /* Taille minimale pour le tactile */
+  }
+
+  .destruction-field {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .destruction-input {
+    font-size: 16px; /* Évite le zoom automatique sur iOS */
+    padding: 12px 16px;
+    min-height: 44px;
+  }
+
+  /* Navigation des onglets - Scrollable horizontalement */
+  .tab-nav {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    padding: 8px 0;
+    margin: 0 -12px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .tab-nav button {
+    white-space: nowrap;
+    padding: 10px 16px;
+    font-size: 0.9rem;
+    min-height: 40px;
+    flex-shrink: 0;
+  }
+
+  /* Tables - Scrollables horizontalement sur mobile */
+  .inventory-table-desktop {
+    overflow-x: auto;
+    overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 -12px;
+    padding: 0 12px;
+  }
+
+  .inventory-table-desktop .calendar-table {
+    min-width: 600px;
+    font-size: 0.9rem;
+  }
+
+  .inventory-table-desktop .calendar-table th,
+  .inventory-table-desktop .calendar-table td {
+    padding: 12px 8px;
+    min-width: 80px;
+  }
+
+  .inventory-table-desktop .calendar-table th:first-child,
+  .inventory-table-desktop .calendar-table td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--card-bg);
+    z-index: 2;
+    min-width: 150px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .inventory-table-desktop .destruction-input {
+    width: 100%;
+    min-width: 60px;
+    font-size: 16px;
+    padding: 10px 12px;
+  }
+
+  /* Sections responsive */
+  .destruction-section {
+    padding: 16px 0;
+  }
+
+  .destruction-section__header {
+    margin-bottom: 16px;
+    padding: 0 4px;
+  }
+
+  .destruction-section__header h2 {
+    font-size: 1.25rem;
+  }
+
+  /* Grid responsive pour les autres sections */
+  .destruction-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  /* Historique responsive */
+  .inventory-history {
+    margin-bottom: 24px;
+  }
+
+  .inventory-history__header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .inventory-history__list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .inventory-history-item {
+    padding: 12px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .inventory-history-item .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Alerts responsive */
+  .inventory-alerts {
+    margin-bottom: 24px;
+  }
+
+  .inventory-alerts__grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .inventory-alert-card {
+    padding: 12px;
+  }
+
+  /* Section Autres - Grid responsive */
+  .inventory-autres-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  /* Section Machines - Table responsive */
+  .inventory-machines-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 -12px;
+    padding: 0 12px;
+  }
+
+  .inventory-machines-table-wrapper table {
+    min-width: 700px;
+  }
+
+  /* Section Papier - Table responsive */
+  .inventory-papier-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 -12px;
+    padding: 0 12px;
+  }
+
+  .inventory-papier-table-wrapper table {
+    min-width: 500px;
+  }
+
+  /* Section Contenants et Sacs - Cards sur mobile */
+  .inventory-containers-grid,
+  .inventory-bags-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .inventory-container-card,
+  .inventory-bag-card {
+    padding: 16px;
+  }
+
+  .inventory-container-card .destruction-field,
+  .inventory-bag-card .destruction-field {
+    margin-bottom: 12px;
+  }
+
+  /* Bouton de configuration */
+  .destruction-page > div:first-child {
+    padding: 12px;
+    margin-bottom: 0;
+  }
+
+  .destruction-page > div:first-child .btn {
+    width: 100%;
+    justify-content: center;
+    min-height: 44px;
+  }
+}
+
+/* Orientation paysage sur mobile */
+@media (max-width: 960px) and (orientation: landscape) {
+  .destruction-card__header {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .destruction-card__header .page-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .destruction-card__header .page-actions .btn {
+    flex: 1;
+    min-width: 140px;
+  }
+
+  .tab-nav {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
+  .inventory-table-desktop .calendar-table {
+    min-width: 800px;
+  }
+}
+
+/* Tablettes */
+@media (min-width: 481px) and (max-width: 960px) {
+  .destruction-card {
+    padding: 16px;
+  }
+
+  .destruction-card__header .page-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .destruction-card__header .page-actions .btn {
+    flex: 1;
+    min-width: 160px;
+  }
+
+  .destruction-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .inventory-alerts__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .inventory-containers-grid,
+  .inventory-bags-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+  /* Amélioration du zoom et du tactile */
+@media (max-width: 960px) {
+  /* Empêcher le double-tap zoom sur les boutons */
+  button, a, input, select, textarea {
+    touch-action: manipulation;
+  }
+
+  /* Améliorer la lisibilité */
+  body {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  /* Améliorer le scroll */
+  * {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Masquer les tables desktop sur mobile */
+  .inventory-table-desktop {
+    display: none !important;
+  }
+
+  /* Afficher les cartes mobiles */
+  .inventory-mobile-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  .inventory-mobile-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  .inventory-mobile-card-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin: 0 0 16px 0;
+    color: var(--text-primary);
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .inventory-mobile-card-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .inventory-mobile-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .inventory-mobile-field-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .inventory-mobile-field .destruction-input {
+    width: 100%;
+    font-size: 16px; /* Évite le zoom automatique sur iOS */
+  }
+}
+
+/* Afficher les tables sur desktop, masquer les cartes */
+@media (min-width: 961px) {
+  .inventory-mobile-cards {
+    display: none !important;
+  }
+
+  .inventory-table-desktop {
+    display: block !important;
+  }
+}
+
+/* Orientation paysage sur mobile */
+@media (max-width: 960px) and (orientation: landscape) {
+  .inventory-mobile-card-fields {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+
+  .destruction-card__header {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .destruction-card__header .page-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .destruction-card__header .page-actions .btn {
+    flex: 1;
+    min-width: 140px;
+  }
+}
+
   .cdt-table-wrapper .calendar-table th,
   .cdt-table-wrapper .calendar-table td {
     padding: 8px 4px;

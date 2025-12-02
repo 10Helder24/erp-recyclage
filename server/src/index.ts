@@ -1242,6 +1242,50 @@ const ensureSchema = async () => {
   await run('create index if not exists materials_abrege_idx on materials(abrege)');
   await run('create index if not exists materials_famille_idx on materials(famille)');
 
+  // Tables pour la gestion des prix des matières
+  await run(`
+    create table if not exists price_sources (
+      id uuid primary key default gen_random_uuid(),
+      name text not null unique,
+      description text,
+      source_type text not null default 'manual',
+      created_at timestamptz not null default now()
+    )
+  `);
+  
+  // Insérer les sources par défaut
+  await run(`
+    insert into price_sources (name, description, source_type)
+    values 
+      ('Manuel', 'Prix saisi manuellement', 'manual'),
+      ('Copacel', 'Prix importé depuis PDF Copacel', 'copacel'),
+      ('EUWID', 'Prix importé depuis EUWID', 'euwid')
+    on conflict (name) do nothing
+  `);
+
+  await run(`
+    create table if not exists material_prices (
+      id uuid primary key default gen_random_uuid(),
+      material_id uuid not null references materials(id) on delete cascade,
+      price_source_id uuid not null references price_sources(id) on delete restrict,
+      price numeric(10,2) not null,
+      price_min numeric(10,2),
+      price_max numeric(10,2),
+      currency text not null default 'CHF',
+      valid_from date not null default current_date,
+      valid_to date,
+      comment text,
+      imported_from_file text,
+      created_by uuid references users(id) on delete set null,
+      created_by_name text,
+      created_at timestamptz not null default now()
+    )
+  `);
+  
+  await run('create index if not exists material_prices_material_idx on material_prices(material_id, valid_from desc)');
+  await run('create index if not exists material_prices_source_idx on material_prices(price_source_id)');
+  await run('create index if not exists material_prices_valid_idx on material_prices(valid_from, valid_to)');
+
   await run(`
     create table if not exists customer_documents (
       id uuid primary key default gen_random_uuid(),
@@ -1356,6 +1400,99 @@ const ensureSchema = async () => {
   `);
   await run('create index if not exists audit_logs_entity_idx on audit_logs(entity_type, entity_id, created_at desc)');
   await run('create index if not exists audit_logs_created_idx on audit_logs(created_at desc)');
+
+  // Tables pour la gestion des configurations d'inventaire
+  await run(`
+    create table if not exists inventory_materials (
+      id uuid primary key default gen_random_uuid(),
+      category text not null check (category in ('halle', 'plastiqueB', 'cdt', 'papier')),
+      matiere text not null,
+      num text,
+      display_order integer not null default 0,
+      is_active boolean not null default true,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists inventory_materials_category_idx on inventory_materials(category, display_order)');
+
+  await run(`
+    create table if not exists inventory_machines (
+      id uuid primary key default gen_random_uuid(),
+      num1 text not null,
+      mac text not null,
+      display_order integer not null default 0,
+      is_active boolean not null default true,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists inventory_machines_display_order_idx on inventory_machines(display_order)');
+
+  await run(`
+    create table if not exists inventory_containers (
+      id uuid primary key default gen_random_uuid(),
+      type text not null,
+      display_order integer not null default 0,
+      is_active boolean not null default true,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists inventory_containers_display_order_idx on inventory_containers(display_order)');
+
+  await run(`
+    create table if not exists inventory_bags (
+      id uuid primary key default gen_random_uuid(),
+      type text not null,
+      display_order integer not null default 0,
+      is_active boolean not null default true,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists inventory_bags_display_order_idx on inventory_bags(display_order)');
+
+  await run(`
+    create table if not exists inventory_other_items (
+      id uuid primary key default gen_random_uuid(),
+      category text not null check (category in ('diesel', 'adBlue', 'filFer', 'eau')),
+      subcategory text,
+      label text not null,
+      unit1 text,
+      unit2 text,
+      default_value1 numeric default 0,
+      default_value2 numeric default 0,
+      display_order integer not null default 0,
+      is_active boolean not null default true,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists inventory_other_items_category_idx on inventory_other_items(category, display_order)');
+
+  // Table pour sauvegarder les inventaires
+  await run(`
+    create table if not exists inventory_snapshots (
+      id uuid primary key default gen_random_uuid(),
+      report_date timestamptz not null,
+      report_date_label text,
+      halle_data jsonb not null,
+      plastique_b_data jsonb not null,
+      cdt_data jsonb not null,
+      papier_data jsonb not null,
+      machines_data jsonb not null,
+      autres_data jsonb not null,
+      containers_data jsonb not null,
+      bags_data jsonb not null,
+      created_by uuid references users(id) on delete set null,
+      created_by_name text,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists inventory_snapshots_report_date_idx on inventory_snapshots(report_date desc)');
+  await run('create index if not exists inventory_snapshots_created_at_idx on inventory_snapshots(created_at desc)');
 };
 
 const ensureEmployee = async (payload: LeaveRequestPayload): Promise<EmployeeRow> => {
@@ -2079,17 +2216,29 @@ app.get(
       usageMap.set(leave.employee_id, (usageMap.get(leave.employee_id) ?? 0) + days);
     }
 
+    // Récupérer les soldes ajustés depuis la table leave_balances
+    const adjustedBalances = await run<LeaveBalanceRow>(
+      'select * from leave_balances where year = $1',
+      [year]
+    );
+    const adjustedMap = new Map<string, LeaveBalanceRow>();
+    adjustedBalances.forEach((balance) => {
+      adjustedMap.set(balance.employee_id, balance);
+    });
+
     const balances: LeaveBalanceRow[] = employees.map((employee) => {
-      const total = calculateAnnualEntitlement(employee, year);
+      const defaultTotal = calculateAnnualEntitlement(employee, year);
       const used = usageMap.get(employee.id) ?? 0;
+      const adjusted = adjustedMap.get(employee.id);
+      
       return {
-        id: `${employee.id}-${year}`,
+        id: adjusted?.id ?? `${employee.id}-${year}`,
         employee_id: employee.id,
         year,
-        paid_leave_total: total,
+        paid_leave_total: adjusted?.paid_leave_total ?? defaultTotal,
         paid_leave_used: used,
-        sick_leave_used: 0,
-        training_days_used: 0,
+        sick_leave_used: adjusted?.sick_leave_used ?? 0,
+        training_days_used: adjusted?.training_days_used ?? 0,
         employee: mapEmployeeRow(employee)
       };
     });
@@ -2359,6 +2508,69 @@ app.post(
   asyncHandler(async (_req, res) => {
     await run('select 1');
     res.json({ message: 'Recalcul déclenché (adapter selon votre logique business)' });
+  })
+);
+
+app.patch(
+  '/api/leave-balances/:employeeId/:year',
+  requireManagerAuth,
+  asyncHandler(async (req, res) => {
+    const { employeeId, year } = req.params;
+    const { paid_leave_total } = req.body as { paid_leave_total: number };
+    const auth = (req as AuthenticatedRequest).auth;
+    
+    if (!auth) {
+      return res.status(401).json({ message: 'Authentification requise' });
+    }
+
+    if (typeof paid_leave_total !== 'number' || paid_leave_total < 0) {
+      return res.status(400).json({ message: 'paid_leave_total doit être un nombre positif' });
+    }
+
+    // Vérifier que l'employé existe
+    const [employee] = await run<EmployeeRow>('select * from employees where id = $1', [employeeId]);
+    if (!employee) {
+      return res.status(404).json({ message: 'Employé introuvable' });
+    }
+
+    // Vérifier que le manager peut modifier cet employé (même département ou admin)
+    if (auth.role !== 'admin') {
+      if (employee.department !== auth.department) {
+        return res.status(403).json({ message: 'Vous ne pouvez modifier que les employés de votre département' });
+      }
+    }
+
+    const yearNum = parseInt(year, 10);
+    if (isNaN(yearNum)) {
+      return res.status(400).json({ message: 'Année invalide' });
+    }
+
+    // Vérifier ou créer l'enregistrement dans leave_balances
+    const existing = await run<LeaveBalanceRow>(
+      'select * from leave_balances where employee_id = $1 and year = $2',
+      [employeeId, yearNum]
+    );
+
+    let result: LeaveBalanceRow;
+    if (existing.length > 0) {
+      // Mettre à jour l'enregistrement existant
+      const [updated] = await run<LeaveBalanceRow>(
+        'update leave_balances set paid_leave_total = $1 where employee_id = $2 and year = $3 returning *',
+        [paid_leave_total, employeeId, yearNum]
+      );
+      result = { ...updated, employee: mapEmployeeRow(employee) };
+    } else {
+      // Créer un nouvel enregistrement
+      const id = randomUUID();
+      const [created] = await run<LeaveBalanceRow>(
+        `insert into leave_balances (id, employee_id, year, paid_leave_total, paid_leave_used, sick_leave_used, training_days_used)
+         values ($1, $2, $3, $4, 0, 0, 0)
+         returning *`,
+        [id, employeeId, yearNum, paid_leave_total]
+      );
+      result = { ...created, employee: mapEmployeeRow(employee) };
+    }
+    res.json(result);
   })
 );
 
@@ -3258,6 +3470,290 @@ app.delete(
   })
 );
 
+// Material Prices API endpoints
+type PriceSourceRow = {
+  id: string;
+  name: string;
+  description: string | null;
+  source_type: string;
+  created_at: string;
+};
+
+type MaterialPriceRow = {
+  id: string;
+  material_id: string;
+  price_source_id: string;
+  price: number;
+  price_min: number | null;
+  price_max: number | null;
+  currency: string;
+  valid_from: string;
+  valid_to: string | null;
+  comment: string | null;
+  imported_from_file: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+};
+
+app.get(
+  '/api/materials/:id/prices',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_materials'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await run<MaterialPriceRow & { source_name: string }>(
+      `select mp.*, ps.name as source_name
+       from material_prices mp
+       join price_sources ps on mp.price_source_id = ps.id
+       where mp.material_id = $1
+       order by mp.valid_from desc, mp.created_at desc`,
+      [id]
+    );
+    res.json(rows);
+  })
+);
+
+app.get(
+  '/api/price-sources',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_materials'] }),
+  asyncHandler(async (_req, res) => {
+    const rows = await run<PriceSourceRow>('select * from price_sources order by name');
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/materials/:id/prices',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const authReq = req as AuthenticatedRequest;
+    const { price_source_id, price, price_min, price_max, currency, valid_from, valid_to, comment } = req.body as {
+      price_source_id: string;
+      price: number;
+      price_min?: number;
+      price_max?: number;
+      currency?: string;
+      valid_from?: string;
+      valid_to?: string | null;
+      comment?: string;
+    };
+
+    if (!price_source_id || typeof price !== 'number' || price < 0) {
+      return res.status(400).json({ message: 'Source et prix valide requis' });
+    }
+
+    // Vérifier que la matière existe
+    const [material] = await run('select id from materials where id = $1', [id]);
+    if (!material) {
+      return res.status(404).json({ message: 'Matière introuvable' });
+    }
+
+    const priceId = randomUUID();
+    const [created] = await run<MaterialPriceRow>(
+      `insert into material_prices (
+        id, material_id, price_source_id, price, price_min, price_max, currency, 
+        valid_from, valid_to, comment, created_by, created_by_name
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      returning *`,
+      [
+        priceId,
+        id,
+        price_source_id,
+        price,
+        price_min || null,
+        price_max || null,
+        currency || 'CHF',
+        valid_from || new Date().toISOString().split('T')[0],
+        valid_to || null,
+        comment || null,
+        authReq.auth?.id || null,
+        authReq.auth?.full_name || null
+      ]
+    );
+    res.status(201).json(created);
+  })
+);
+
+app.patch(
+  '/api/material-prices/:id',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { price, price_min, price_max, currency, valid_from, valid_to, comment } = req.body as {
+      price?: number;
+      price_min?: number;
+      price_max?: number;
+      currency?: string;
+      valid_from?: string;
+      valid_to?: string | null;
+      comment?: string;
+    };
+
+    const updates: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (price !== undefined) {
+      updates.push(`price = $${paramIndex++}`);
+      params.push(price);
+    }
+    if (price_min !== undefined) {
+      updates.push(`price_min = $${paramIndex++}`);
+      params.push(price_min);
+    }
+    if (price_max !== undefined) {
+      updates.push(`price_max = $${paramIndex++}`);
+      params.push(price_max);
+    }
+    if (currency !== undefined) {
+      updates.push(`currency = $${paramIndex++}`);
+      params.push(currency);
+    }
+    if (valid_from !== undefined) {
+      updates.push(`valid_from = $${paramIndex++}`);
+      params.push(valid_from);
+    }
+    if (valid_to !== undefined) {
+      updates.push(`valid_to = $${paramIndex++}`);
+      params.push(valid_to);
+    }
+    if (comment !== undefined) {
+      updates.push(`comment = $${paramIndex++}`);
+      params.push(comment);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ message: 'Aucune modification' });
+    }
+
+    params.push(id);
+    const [updated] = await run<MaterialPriceRow>(
+      `update material_prices set ${updates.join(', ')} where id = $${paramIndex} returning *`,
+      params
+    );
+    res.json(updated);
+  })
+);
+
+app.delete(
+  '/api/material-prices/:id',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    await run('delete from material_prices where id = $1', [id]);
+    res.json({ message: 'Prix supprimé avec succès' });
+  })
+);
+
+// Import PDF Copacel
+app.post(
+  '/api/materials/import-copacel-pdf',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    
+    // Pour l'instant, on accepte un JSON avec les prix extraits manuellement
+    // TODO: Ajouter pdf-parse pour extraire automatiquement depuis le PDF
+    const { prices, filename, valid_from } = req.body as {
+      prices: Array<{
+        abrege?: string;
+        description?: string;
+        price: number;
+        price_min?: number;
+        price_max?: number;
+      }>;
+      filename?: string;
+      valid_from?: string;
+    };
+
+    if (!Array.isArray(prices) || prices.length === 0) {
+      return res.status(400).json({ message: 'Liste de prix requise' });
+    }
+
+    // Récupérer la source Copacel
+    const [copacelSource] = await run<PriceSourceRow>(
+      "select * from price_sources where name = 'Copacel'"
+    );
+    if (!copacelSource) {
+      return res.status(500).json({ message: 'Source Copacel introuvable' });
+    }
+
+    const validFrom = valid_from || new Date().toISOString().split('T')[0];
+    const results: Array<{ material_id: string; success: boolean; error?: string }> = [];
+    const createdBy = authReq.auth?.id || null;
+    const createdByName = authReq.auth?.full_name || null;
+
+    for (const priceData of prices) {
+      try {
+        // Chercher la matière par abrégé ou description
+        let material;
+        if (priceData.abrege) {
+          const [found] = await run<{ id: string }>(
+            'select id from materials where lower(abrege) = lower($1)',
+            [priceData.abrege]
+          );
+          material = found;
+        }
+        
+        if (!material && priceData.description) {
+          const [found] = await run<{ id: string }>(
+            'select id from materials where lower(description) like lower($1)',
+            [`%${priceData.description}%`]
+          );
+          material = found;
+        }
+
+        if (!material) {
+          results.push({
+            material_id: '',
+            success: false,
+            error: `Matière non trouvée: ${priceData.abrege || priceData.description}`
+          });
+          continue;
+        }
+
+        // Créer le prix
+        const priceId = randomUUID();
+        await run(
+          `insert into material_prices (
+            id, material_id, price_source_id, price, price_min, price_max, currency,
+            valid_from, imported_from_file, created_by, created_by_name
+          )
+          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [
+            priceId,
+            material.id,
+            copacelSource.id,
+            priceData.price,
+            priceData.price_min || null,
+            priceData.price_max || null,
+            'CHF',
+            validFrom,
+            filename || null,
+            createdBy,
+            createdByName
+          ]
+        );
+
+        results.push({ material_id: material.id, success: true });
+      } catch (error) {
+        results.push({
+          material_id: '',
+          success: false,
+          error: error instanceof Error ? error.message : 'Erreur inconnue'
+        });
+      }
+    }
+
+    res.json({
+      message: `${results.filter(r => r.success).length} prix importés sur ${results.length}`,
+      results
+    });
+  })
+);
+
 app.get(
   '/api/customers/:id/detail',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
@@ -4097,9 +4593,892 @@ function calculateAnnualEntitlement(employee: EmployeeRow, year: number): number
 
 const start = async () => {
   await ensureSchema();
-  app.listen(PORT, () => {
-    console.log(`API server running on http://localhost:${PORT}`);
-  });
+// Endpoints pour la gestion des configurations d'inventaire
+
+// GET /api/inventory-config/materials - Récupérer toutes les matières configurées
+app.get(
+  '/api/inventory-config/materials',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_materials'] }),
+  async (req, res) => {
+    try {
+      const { category, include_inactive } = req.query;
+      let query = 'select * from inventory_materials';
+      const params: any[] = [];
+      const conditions: string[] = [];
+      let paramIndex = 1;
+      
+      if (category) {
+        conditions.push(`category = $${paramIndex++}`);
+        params.push(category);
+      }
+      
+      if (include_inactive !== 'true') {
+        conditions.push('is_active = true');
+      }
+      
+      if (conditions.length > 0) {
+        query += ' where ' + conditions.join(' and ');
+      }
+      
+      query += ' order by category, display_order, matiere';
+      
+      const materials = await run(query, params);
+      res.json(materials);
+    } catch (error: any) {
+      console.error('Error fetching inventory materials:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// POST /api/inventory-config/materials - Créer une nouvelle matière
+app.post(
+  '/api/inventory-config/materials',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { category, matiere, num, display_order } = req.body;
+      if (!category || !matiere) {
+        return res.status(400).json({ error: 'Category et matiere sont requis' });
+      }
+      
+      const [result] = await run(
+        `insert into inventory_materials (id, category, matiere, num, display_order)
+         values (gen_random_uuid(), $1, $2, $3, $4)
+         returning *`,
+        [category, matiere, num || null, display_order || 0]
+      );
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error creating inventory material:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// PATCH /api/inventory-config/materials/:id - Modifier une matière
+app.patch(
+  '/api/inventory-config/materials/:id',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+      
+      if (req.body.category !== undefined) {
+        updates.push(`category = $${paramIndex++}`);
+        values.push(req.body.category);
+      }
+      if (req.body.matiere !== undefined) {
+        updates.push(`matiere = $${paramIndex++}`);
+        values.push(req.body.matiere);
+      }
+      if (req.body.num !== undefined) {
+        updates.push(`num = $${paramIndex++}`);
+        values.push(req.body.num);
+      }
+      if (req.body.display_order !== undefined) {
+        updates.push(`display_order = $${paramIndex++}`);
+        values.push(req.body.display_order);
+      }
+      if (req.body.is_active !== undefined) {
+        updates.push(`is_active = $${paramIndex++}`);
+        values.push(req.body.is_active);
+      }
+      
+      updates.push(`updated_at = now()`);
+      values.push(id);
+      
+      const [result] = await run(
+        `update inventory_materials set ${updates.join(', ')} where id = $${paramIndex} returning *`,
+        values
+      );
+      
+      if (!result) {
+        return res.status(404).json({ error: 'Matière introuvable' });
+      }
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error updating inventory material:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// DELETE /api/inventory-config/materials/:id - Supprimer une matière (soft delete par défaut, permanent si ?permanent=true)
+app.delete(
+  '/api/inventory-config/materials/:id',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { permanent } = req.query;
+      
+      if (permanent === 'true') {
+        // Suppression définitive
+        await run('delete from inventory_materials where id = $1', [id]);
+        res.json({ message: 'Matière supprimée définitivement' });
+      } else {
+        // Soft delete
+        const [result] = await run(
+          'update inventory_materials set is_active = false, updated_at = now() where id = $1 returning *',
+          [id]
+        );
+        
+        if (!result) {
+          return res.status(404).json({ error: 'Matière introuvable' });
+        }
+        
+        res.json(result);
+      }
+    } catch (error: any) {
+      console.error('Error deleting inventory material:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// GET /api/inventory-config/machines - Récupérer toutes les machines
+app.get(
+  '/api/inventory-config/machines',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_materials'] }),
+  async (req, res) => {
+    try {
+      const { include_inactive } = req.query;
+      let query = 'select * from inventory_machines';
+      if (include_inactive !== 'true') {
+        query += ' where is_active = true';
+      }
+      query += ' order by display_order, num1';
+      const machines = await run(query);
+      res.json(machines);
+    } catch (error: any) {
+      console.error('Error fetching inventory machines:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// POST /api/inventory-config/machines - Créer une nouvelle machine
+app.post(
+  '/api/inventory-config/machines',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { num1, mac, display_order } = req.body;
+      if (!num1 || !mac) {
+        return res.status(400).json({ error: 'num1 et mac sont requis' });
+      }
+      
+      const [result] = await run(
+        `insert into inventory_machines (id, num1, mac, display_order)
+         values (gen_random_uuid(), $1, $2, $3)
+         returning *`,
+        [num1, mac, display_order || 0]
+      );
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error creating inventory machine:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// PATCH /api/inventory-config/machines/:id - Modifier une machine
+app.patch(
+  '/api/inventory-config/machines/:id',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+      
+      if (req.body.num1 !== undefined) {
+        updates.push(`num1 = $${paramIndex++}`);
+        values.push(req.body.num1);
+      }
+      if (req.body.mac !== undefined) {
+        updates.push(`mac = $${paramIndex++}`);
+        values.push(req.body.mac);
+      }
+      if (req.body.display_order !== undefined) {
+        updates.push(`display_order = $${paramIndex++}`);
+        values.push(req.body.display_order);
+      }
+      if (req.body.is_active !== undefined) {
+        updates.push(`is_active = $${paramIndex++}`);
+        values.push(req.body.is_active);
+      }
+      
+      updates.push(`updated_at = now()`);
+      values.push(id);
+      
+      const [result] = await run(
+        `update inventory_machines set ${updates.join(', ')} where id = $${paramIndex} returning *`,
+        values
+      );
+      
+      if (!result) {
+        return res.status(404).json({ error: 'Machine introuvable' });
+      }
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error updating inventory machine:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// DELETE /api/inventory-config/machines/:id - Supprimer une machine
+app.delete(
+  '/api/inventory-config/machines/:id',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { permanent } = req.query;
+      
+      if (permanent === 'true') {
+        await run('delete from inventory_machines where id = $1', [id]);
+        res.json({ message: 'Machine supprimée définitivement' });
+      } else {
+        const [result] = await run(
+          'update inventory_machines set is_active = false, updated_at = now() where id = $1 returning *',
+          [id]
+        );
+        
+        if (!result) {
+          return res.status(404).json({ error: 'Machine introuvable' });
+        }
+        
+        res.json(result);
+      }
+    } catch (error: any) {
+      console.error('Error deleting inventory machine:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// GET /api/inventory-config/containers - Récupérer tous les conteneurs
+app.get(
+  '/api/inventory-config/containers',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_materials'] }),
+  async (req, res) => {
+    try {
+      const { include_inactive } = req.query;
+      let query = 'select * from inventory_containers';
+      if (include_inactive !== 'true') {
+        query += ' where is_active = true';
+      }
+      query += ' order by display_order, type';
+      const containers = await run(query);
+      res.json(containers);
+    } catch (error: any) {
+      console.error('Error fetching inventory containers:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// POST /api/inventory-config/containers - Créer un nouveau conteneur
+app.post(
+  '/api/inventory-config/containers',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { type, display_order } = req.body;
+      if (!type) {
+        return res.status(400).json({ error: 'type est requis' });
+      }
+      
+      const [result] = await run(
+        `insert into inventory_containers (id, type, display_order)
+         values (gen_random_uuid(), $1, $2)
+         returning *`,
+        [type, display_order || 0]
+      );
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error creating inventory container:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// PATCH /api/inventory-config/containers/:id - Modifier un conteneur
+app.patch(
+  '/api/inventory-config/containers/:id',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+      
+      if (req.body.type !== undefined) {
+        updates.push(`type = $${paramIndex++}`);
+        values.push(req.body.type);
+      }
+      if (req.body.display_order !== undefined) {
+        updates.push(`display_order = $${paramIndex++}`);
+        values.push(req.body.display_order);
+      }
+      if (req.body.is_active !== undefined) {
+        updates.push(`is_active = $${paramIndex++}`);
+        values.push(req.body.is_active);
+      }
+      
+      updates.push(`updated_at = now()`);
+      values.push(id);
+      
+      const [result] = await run(
+        `update inventory_containers set ${updates.join(', ')} where id = $${paramIndex} returning *`,
+        values
+      );
+      
+      if (!result) {
+        return res.status(404).json({ error: 'Conteneur introuvable' });
+      }
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error updating inventory container:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// DELETE /api/inventory-config/containers/:id - Supprimer un conteneur
+app.delete(
+  '/api/inventory-config/containers/:id',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { permanent } = req.query;
+      
+      if (permanent === 'true') {
+        await run('delete from inventory_containers where id = $1', [id]);
+        res.json({ message: 'Conteneur supprimé définitivement' });
+      } else {
+        const [result] = await run(
+          'update inventory_containers set is_active = false, updated_at = now() where id = $1 returning *',
+          [id]
+        );
+        
+        if (!result) {
+          return res.status(404).json({ error: 'Conteneur introuvable' });
+        }
+        
+        res.json(result);
+      }
+    } catch (error: any) {
+      console.error('Error deleting inventory container:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// GET /api/inventory-config/bags - Récupérer tous les sacs
+app.get(
+  '/api/inventory-config/bags',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_materials'] }),
+  async (req, res) => {
+    try {
+      const { include_inactive } = req.query;
+      let query = 'select * from inventory_bags';
+      if (include_inactive !== 'true') {
+        query += ' where is_active = true';
+      }
+      query += ' order by display_order, type';
+      const bags = await run(query);
+      res.json(bags);
+    } catch (error: any) {
+      console.error('Error fetching inventory bags:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// POST /api/inventory-config/bags - Créer un nouveau sac
+app.post(
+  '/api/inventory-config/bags',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { type, display_order } = req.body;
+      if (!type) {
+        return res.status(400).json({ error: 'type est requis' });
+      }
+      
+      const [result] = await run(
+        `insert into inventory_bags (id, type, display_order)
+         values (gen_random_uuid(), $1, $2)
+         returning *`,
+        [type, display_order || 0]
+      );
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error creating inventory bag:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// PATCH /api/inventory-config/bags/:id - Modifier un sac
+app.patch(
+  '/api/inventory-config/bags/:id',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+      
+      if (req.body.type !== undefined) {
+        updates.push(`type = $${paramIndex++}`);
+        values.push(req.body.type);
+      }
+      if (req.body.display_order !== undefined) {
+        updates.push(`display_order = $${paramIndex++}`);
+        values.push(req.body.display_order);
+      }
+      if (req.body.is_active !== undefined) {
+        updates.push(`is_active = $${paramIndex++}`);
+        values.push(req.body.is_active);
+      }
+      
+      updates.push(`updated_at = now()`);
+      values.push(id);
+      
+      const [result] = await run(
+        `update inventory_bags set ${updates.join(', ')} where id = $${paramIndex} returning *`,
+        values
+      );
+      
+      if (!result) {
+        return res.status(404).json({ error: 'Sac introuvable' });
+      }
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error updating inventory bag:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// DELETE /api/inventory-config/bags/:id - Supprimer un sac
+app.delete(
+  '/api/inventory-config/bags/:id',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { permanent } = req.query;
+      
+      if (permanent === 'true') {
+        await run('delete from inventory_bags where id = $1', [id]);
+        res.json({ message: 'Sac supprimé définitivement' });
+      } else {
+        const [result] = await run(
+          'update inventory_bags set is_active = false, updated_at = now() where id = $1 returning *',
+          [id]
+        );
+        
+        if (!result) {
+          return res.status(404).json({ error: 'Sac introuvable' });
+        }
+        
+        res.json(result);
+      }
+    } catch (error: any) {
+      console.error('Error deleting inventory bag:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// GET /api/inventory-config/other-items - Récupérer tous les autres éléments
+app.get(
+  '/api/inventory-config/other-items',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_materials'] }),
+  async (req, res) => {
+    try {
+      const { category, include_inactive } = req.query;
+      let query = 'select * from inventory_other_items';
+      const params: any[] = [];
+      const conditions: string[] = [];
+      let paramIndex = 1;
+      
+      if (category) {
+        conditions.push(`category = $${paramIndex++}`);
+        params.push(category);
+      }
+      
+      if (include_inactive !== 'true') {
+        conditions.push('is_active = true');
+      }
+      
+      if (conditions.length > 0) {
+        query += ' where ' + conditions.join(' and ');
+      }
+      
+      query += ' order by category, display_order, label';
+      
+      const items = await run(query, params);
+      res.json(items);
+    } catch (error: any) {
+      console.error('Error fetching inventory other items:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// POST /api/inventory-config/other-items - Créer un nouvel élément
+app.post(
+  '/api/inventory-config/other-items',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { category, subcategory, label, unit1, unit2, default_value1, default_value2, display_order } = req.body;
+      if (!category || !label) {
+        return res.status(400).json({ error: 'category et label sont requis' });
+      }
+      
+      const [result] = await run(
+        `insert into inventory_other_items (id, category, subcategory, label, unit1, unit2, default_value1, default_value2, display_order)
+         values (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)
+         returning *`,
+        [category, subcategory || null, label, unit1 || null, unit2 || null, default_value1 || 0, default_value2 || 0, display_order || 0]
+      );
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error creating inventory other item:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// PATCH /api/inventory-config/other-items/:id - Modifier un élément
+app.patch(
+  '/api/inventory-config/other-items/:id',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+      
+      if (req.body.category !== undefined) {
+        updates.push(`category = $${paramIndex++}`);
+        values.push(req.body.category);
+      }
+      if (req.body.subcategory !== undefined) {
+        updates.push(`subcategory = $${paramIndex++}`);
+        values.push(req.body.subcategory);
+      }
+      if (req.body.label !== undefined) {
+        updates.push(`label = $${paramIndex++}`);
+        values.push(req.body.label);
+      }
+      if (req.body.unit1 !== undefined) {
+        updates.push(`unit1 = $${paramIndex++}`);
+        values.push(req.body.unit1);
+      }
+      if (req.body.unit2 !== undefined) {
+        updates.push(`unit2 = $${paramIndex++}`);
+        values.push(req.body.unit2);
+      }
+      if (req.body.default_value1 !== undefined) {
+        updates.push(`default_value1 = $${paramIndex++}`);
+        values.push(req.body.default_value1);
+      }
+      if (req.body.default_value2 !== undefined) {
+        updates.push(`default_value2 = $${paramIndex++}`);
+        values.push(req.body.default_value2);
+      }
+      if (req.body.display_order !== undefined) {
+        updates.push(`display_order = $${paramIndex++}`);
+        values.push(req.body.display_order);
+      }
+      if (req.body.is_active !== undefined) {
+        updates.push(`is_active = $${paramIndex++}`);
+        values.push(req.body.is_active);
+      }
+      
+      updates.push(`updated_at = now()`);
+      values.push(id);
+      
+      const [result] = await run(
+        `update inventory_other_items set ${updates.join(', ')} where id = $${paramIndex} returning *`,
+        values
+      );
+      
+      if (!result) {
+        return res.status(404).json({ error: 'Élément introuvable' });
+      }
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error updating inventory other item:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// DELETE /api/inventory-config/other-items/:id - Supprimer un élément
+app.delete(
+  '/api/inventory-config/other-items/:id',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { permanent } = req.query;
+      
+      if (permanent === 'true') {
+        await run('delete from inventory_other_items where id = $1', [id]);
+        res.json({ message: 'Élément supprimé définitivement' });
+      } else {
+        const [result] = await run(
+          'update inventory_other_items set is_active = false, updated_at = now() where id = $1 returning *',
+          [id]
+        );
+        
+        if (!result) {
+          return res.status(404).json({ error: 'Élément introuvable' });
+        }
+        
+        res.json(result);
+      }
+    } catch (error: any) {
+      console.error('Error deleting inventory other item:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// Endpoints pour sauvegarder et charger les inventaires
+
+// GET /api/inventory-snapshots - Récupérer les inventaires (avec filtres optionnels)
+app.get(
+  '/api/inventory-snapshots',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_materials'] }),
+  async (req, res) => {
+    try {
+      const { year, month, limit } = req.query;
+      let query = 'select * from inventory_snapshots where 1=1';
+      const params: any[] = [];
+      let paramIndex = 1;
+      
+      if (year) {
+        query += ` and extract(year from report_date) = $${paramIndex++}`;
+        params.push(parseInt(year as string));
+      }
+      if (month) {
+        query += ` and extract(month from report_date) = $${paramIndex++}`;
+        params.push(parseInt(month as string));
+      }
+      
+      query += ' order by report_date desc, created_at desc';
+      
+      if (limit) {
+        query += ` limit $${paramIndex++}`;
+        params.push(parseInt(limit as string));
+      }
+      
+      const snapshots = await run(query, params);
+      res.json(snapshots);
+    } catch (error: any) {
+      console.error('Error fetching inventory snapshots:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// GET /api/inventory-snapshots/:id - Récupérer un inventaire spécifique
+app.get(
+  '/api/inventory-snapshots/:id',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const [snapshot] = await run('select * from inventory_snapshots where id = $1', [id]);
+      
+      if (!snapshot) {
+        return res.status(404).json({ error: 'Inventaire introuvable' });
+      }
+      
+      res.json(snapshot);
+    } catch (error: any) {
+      console.error('Error fetching inventory snapshot:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// POST /api/inventory-snapshots - Créer un nouvel inventaire
+app.post(
+  '/api/inventory-snapshots',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const {
+        report_date,
+        report_date_label,
+        halle_data,
+        plastique_b_data,
+        cdt_data,
+        papier_data,
+        machines_data,
+        autres_data,
+        containers_data,
+        bags_data
+      } = req.body;
+      
+      if (!report_date || !halle_data || !plastique_b_data || !cdt_data || !papier_data || !machines_data || !autres_data || !containers_data || !bags_data) {
+        return res.status(400).json({ error: 'Toutes les données sont requises' });
+      }
+      
+      const createdBy = authReq.auth?.id || null;
+      const createdByName = authReq.auth?.full_name || null;
+      
+      const [result] = await run(
+        `insert into inventory_snapshots (
+          id, report_date, report_date_label, halle_data, plastique_b_data, cdt_data, 
+          papier_data, machines_data, autres_data, containers_data, bags_data,
+          created_by, created_by_name
+        )
+        values (
+          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+        )
+        returning *`,
+        [
+          report_date,
+          report_date_label || null,
+          JSON.stringify(halle_data),
+          JSON.stringify(plastique_b_data),
+          JSON.stringify(cdt_data),
+          JSON.stringify(papier_data),
+          JSON.stringify(machines_data),
+          JSON.stringify(autres_data),
+          JSON.stringify(containers_data),
+          JSON.stringify(bags_data),
+          createdBy,
+          createdByName
+        ]
+      );
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error creating inventory snapshot:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// PATCH /api/inventory-snapshots/:id - Modifier un inventaire
+app.patch(
+  '/api/inventory-snapshots/:id',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+      
+      if (req.body.report_date !== undefined) {
+        updates.push(`report_date = $${paramIndex++}`);
+        values.push(req.body.report_date);
+      }
+      if (req.body.report_date_label !== undefined) {
+        updates.push(`report_date_label = $${paramIndex++}`);
+        values.push(req.body.report_date_label);
+      }
+      if (req.body.halle_data !== undefined) {
+        updates.push(`halle_data = $${paramIndex++}`);
+        values.push(JSON.stringify(req.body.halle_data));
+      }
+      if (req.body.plastique_b_data !== undefined) {
+        updates.push(`plastique_b_data = $${paramIndex++}`);
+        values.push(JSON.stringify(req.body.plastique_b_data));
+      }
+      if (req.body.cdt_data !== undefined) {
+        updates.push(`cdt_data = $${paramIndex++}`);
+        values.push(JSON.stringify(req.body.cdt_data));
+      }
+      if (req.body.papier_data !== undefined) {
+        updates.push(`papier_data = $${paramIndex++}`);
+        values.push(JSON.stringify(req.body.papier_data));
+      }
+      if (req.body.machines_data !== undefined) {
+        updates.push(`machines_data = $${paramIndex++}`);
+        values.push(JSON.stringify(req.body.machines_data));
+      }
+      if (req.body.autres_data !== undefined) {
+        updates.push(`autres_data = $${paramIndex++}`);
+        values.push(JSON.stringify(req.body.autres_data));
+      }
+      if (req.body.containers_data !== undefined) {
+        updates.push(`containers_data = $${paramIndex++}`);
+        values.push(JSON.stringify(req.body.containers_data));
+      }
+      if (req.body.bags_data !== undefined) {
+        updates.push(`bags_data = $${paramIndex++}`);
+        values.push(JSON.stringify(req.body.bags_data));
+      }
+      
+      updates.push(`updated_at = now()`);
+      values.push(id);
+      
+      const [result] = await run(
+        `update inventory_snapshots set ${updates.join(', ')} where id = $${paramIndex} returning *`,
+        values
+      );
+      
+      if (!result) {
+        return res.status(404).json({ error: 'Inventaire introuvable' });
+      }
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error updating inventory snapshot:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// DELETE /api/inventory-snapshots/:id - Supprimer un inventaire
+app.delete(
+  '/api/inventory-snapshots/:id',
+  requireAuth({ roles: ['admin'], permissions: ['edit_materials'] }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      await run('delete from inventory_snapshots where id = $1', [id]);
+      res.json({ message: 'Inventaire supprimé avec succès' });
+    } catch (error: any) {
+      console.error('Error deleting inventory snapshot:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+app.listen(PORT, () => {
+  console.log(`API server running on http://localhost:${PORT}`);
+});
 };
 
 start().catch((error) => {

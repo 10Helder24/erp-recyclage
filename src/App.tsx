@@ -17,6 +17,7 @@ import InterventionsPage from './pages/InterventionsPage';
 import VehiclesPage from './pages/VehiclesPage';
 import RoutesPage from './pages/RoutesPage';
 import LogisticsDashboard from './pages/LogisticsDashboard';
+import WeighbridgePage from './pages/WeighbridgePage';
 import PdfTemplatesPage from './pages/PdfTemplatesPage';
 import { useAuth } from './hooks/useAuth';
 import { useOffline } from './hooks/useOffline';
@@ -41,6 +42,7 @@ const NAV_LINK_IDS = [
   'interventions',
   'vehicles',
   'routes',
+  'weighbridge',
   'logistics',
   'pdfTemplates'
 ] as const;
@@ -103,6 +105,7 @@ const NAV_SECTIONS: NavSection[] = [
       { id: 'map', label: 'Carte', requiresManager: true, requiresPermissions: ['view_map'] },
       { id: 'interventions', label: 'Interventions', requiresManager: true, requiresPermissions: ['view_interventions'] },
       { id: 'vehicles', label: 'Véhicules', requiresManager: true, requiresPermissions: ['view_vehicles'] },
+      { id: 'weighbridge', label: 'Pont-bascule', requiresManager: true, requiresPermissions: ['view_routes'] },
       { id: 'routes', label: 'Routes & Tournées', requiresManager: true, requiresPermissions: ['view_routes'] },
       { id: 'logistics', label: 'Tableau logistique', requiresManager: true, requiresPermissions: ['view_routes'] }
     ]
@@ -322,6 +325,12 @@ const App = () => {
       case 'vehicles':
         return hasRole('admin') || hasRole('manager') || hasPermission('view_vehicles') ? (
           <VehiclesPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'weighbridge':
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_routes') ? (
+          <WeighbridgePage />
         ) : (
           <LeavePage initialTab="demandes" />
         );
