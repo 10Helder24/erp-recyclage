@@ -19,6 +19,13 @@ import RoutesPage from './pages/RoutesPage';
 import LogisticsDashboard from './pages/LogisticsDashboard';
 import WeighbridgePage from './pages/WeighbridgePage';
 import PdfTemplatesPage from './pages/PdfTemplatesPage';
+import DashboardPage from './pages/DashboardPage';
+import { FinancePage } from './pages/FinancePage';
+import { StockManagementPage } from './pages/StockManagementPage';
+import { CRMPage } from './pages/CRMPage';
+import { MobileOperatorPage } from './pages/MobileOperatorPage';
+import { AlertsPage } from './pages/AlertsPage';
+import { SecurityAlertsSettingsPage } from './pages/SecurityAlertsSettingsPage';
 import { useAuth } from './hooks/useAuth';
 import { useOffline } from './hooks/useOffline';
 import { Api } from './lib/api';
@@ -37,8 +44,13 @@ const NAV_LINK_IDS = [
   'Declassement',
   'map',
   'adminUsers',
+  'securityAlertsSettings',
   'customers',
   'materials',
+  'finance',
+  'stocks',
+  'crm',
+  'mobile',
   'interventions',
   'vehicles',
   'routes',
@@ -68,7 +80,8 @@ type NavSection =
 
     
 const NAV_SECTIONS: NavSection[] = [
-  { type: 'link', id: 'dashboard', label: 'Tableau de bord', pill: 'Bientôt' },
+  { type: 'link', id: 'dashboard', label: 'Tableau de bord' },
+  { type: 'link', id: 'alerts', label: 'Alertes' },
   {
     type: 'group',
     id: 'rhPlus',
@@ -107,7 +120,8 @@ const NAV_SECTIONS: NavSection[] = [
       { id: 'vehicles', label: 'Véhicules', requiresManager: true, requiresPermissions: ['view_vehicles'] },
       { id: 'weighbridge', label: 'Pont-bascule', requiresManager: true, requiresPermissions: ['view_routes'] },
       { id: 'routes', label: 'Routes & Tournées', requiresManager: true, requiresPermissions: ['view_routes'] },
-      { id: 'logistics', label: 'Tableau logistique', requiresManager: true, requiresPermissions: ['view_routes'] }
+      { id: 'logistics', label: 'Tableau logistique', requiresManager: true, requiresPermissions: ['view_routes'] },
+      { id: 'mobile', label: 'Application Mobile', requiresManager: false }
     ]
   },
   {
@@ -116,7 +130,10 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'Gestion',
     children: [
       { id: 'customers', label: 'Clients', requiresManager: true, requiresPermissions: ['view_customers'] },
-      { id: 'materials', label: 'Gestion des matières', requiresManager: true, requiresPermissions: ['view_materials'] }
+      { id: 'materials', label: 'Gestion des matières', requiresManager: true, requiresPermissions: ['view_materials'] },
+      { id: 'finance', label: 'Finance', requiresManager: true, requiresPermissions: ['view_customers'] },
+      { id: 'stocks', label: 'Gestion des stocks', requiresManager: true, requiresPermissions: ['view_materials'] },
+      { id: 'crm', label: 'CRM', requiresManager: true, requiresPermissions: ['view_customers'] }
     ]
   },
   {
@@ -126,7 +143,7 @@ const NAV_SECTIONS: NavSection[] = [
     children: [
       { id: 'pdfTemplates', label: 'Templates PDF', requiresAdmin: true },
       { id: 'adminUsers', label: 'Utilisateurs', requiresAdmin: true },
-      { id: 'alerts', label: 'Alertes sécurité', requiresAdmin: true, pill: 'Nouveau' }
+      { id: 'securityAlertsSettings', label: 'Alertes sécurité', requiresAdmin: true }
     ]
   }
 ];
@@ -316,6 +333,28 @@ const App = () => {
         ) : (
           <LeavePage initialTab="demandes" />
         );
+      case 'finance':
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_customers') ? (
+          <FinancePage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'stocks':
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_materials') ? (
+          <StockManagementPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'crm':
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_customers') ? (
+          <CRMPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'mobile':
+        return <MobileOperatorPage />;
+      case 'alerts':
+        return <AlertsPage />;
       case 'interventions':
         return hasRole('admin') || hasRole('manager') || hasPermission('view_interventions') ? (
           <InterventionsPage />
@@ -352,9 +391,15 @@ const App = () => {
         ) : (
           <LeavePage initialTab="demandes" />
         );
-      case 'rh':
+      case 'securityAlertsSettings':
+        return hasRole('admin') ? (
+          <SecurityAlertsSettingsPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
       case 'dashboard':
-      case 'alerts':
+        return <DashboardPage />;
+      case 'rh':
       case 'Inventaires':
       default:
         return <LeavePage initialTab="demandes" />;

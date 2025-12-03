@@ -444,7 +444,7 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
           }
         } else {
           // Pas de données en base, essayer localStorage
-          const savedData = localStorage.getItem(currentKey);
+        const savedData = localStorage.getItem(currentKey);
           if (savedData) {
             const data = JSON.parse(savedData);
             let loadedMachines = data.machines || machineData;
@@ -600,7 +600,7 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
         } else {
           setPreviousSnapshot(null);
         }
-        
+
         const entries: Array<{ key: string; label: string; created_at: string; data: InventorySnapshot }> = [];
         Object.keys(localStorage)
           .filter((key) => key.startsWith('inventory_'))

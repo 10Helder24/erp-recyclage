@@ -6,9 +6,11 @@ import { Calendar, Truck, Users, AlertTriangle, Users as UsersIcon, MapPin, Cloc
 import jsPDF from 'jspdf';
 import toast from 'react-hot-toast';
 
-import { Api, type MapUserLocation, type MapVehicle, type MapRoute, type MapUserLocationHistory } from '../lib/api';
+import { Api, type MapUserLocation, type MapVehicle, type MapRouteType, type MapUserLocationHistory, type Warehouse } from '../lib/api';
 import { format } from 'date-fns';
 import { useAuth } from '../hooks/useAuth';
+
+type RouteStop = MapRouteType['stops'][number];
 
 const DEFAULT_POSITION: [number, number] = [46.548452466797585, 6.572221457669403];
 
@@ -20,17 +22,7 @@ const MapCenterController = ({ center }: { center: [number, number] }) => {
   return null;
 };
 
-const FIXED_POINTS: Array<{ id: number; position: [number, number]; name: string; description: string }> = [
-  { id: 1, position: [46.548452466797585, 6.572221457669403], name: 'Crissier', description: 'Dépôt principal' },
-  { id: 2, position: [46.22068015966211, 6.080341239904371], name: 'Genève', description: 'Centre de tri Retripa' },
-  { id: 3, position: [46.26667201049415, 6.973837869040357], name: 'Massongex', description: 'Retripa Valais' },
-  { id: 4, position: [46.234384268717385, 7.282828327931758], name: 'Vétroz', description: 'Retripa Valais Vétroz' },
-  { id: 5, position: [46.296094268800076, 6.946372050472233], name: 'Chablais', description: 'Retripa Chablais SA' },
-  { id: 6, position: [46.133600477702174, 7.086447725169667], name: 'Martigny', description: 'Centre de tri Martigny' },
-  { id: 7, position: [47.10832025999326, 6.834793470119427], name: 'Neuchâtel', description: 'Retripa Vadtri' },
-  { id: 8, position: [46.472647832598774, 6.377009906234024], name: 'Féchy', description: 'Henny transport' },
-  { id: 9, position: [46.175661850733334, 7.1770121046357325], name: 'Saillon', description: 'Plateforme Valais' }
-];
+// Les dépôts sont maintenant chargés depuis l'API
 
 // Fix leaflet default icons (vite)
 const iconRetinaUrl = new URL('leaflet/dist/images/marker-icon-2x.png', import.meta.url).toString();
@@ -97,7 +89,7 @@ export const MapPage = () => {
   const [userPosition, setUserPosition] = useState<[number, number] | null>(null);
   const [userLocations, setUserLocations] = useState<MapUserLocation[]>([]);
   const [vehicles, setVehicles] = useState<MapVehicle[]>([]);
-  const [routes, setRoutes] = useState<MapRoute[]>([]);
+  const [routes, setRoutes] = useState<MapRouteType[]>([]);
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [selectedVehicle, setSelectedVehicle] = useState<string>('');
   const [loadingRoutes, setLoadingRoutes] = useState(false);
@@ -117,6 +109,7 @@ export const MapPage = () => {
   const [highlightedCustomer, setHighlightedCustomer] = useState<{ id?: string; name?: string } | null>(null);
   const [clusterTimestamp, setClusterTimestamp] = useState<number | null>(null);
   const [customers, setCustomers] = useState<Array<{ id: string; name: string; address: string | null; latitude: number | null; longitude: number | null; risk_level: string | null }>>([]);
+  const [depots, setDepots] = useState<Warehouse[]>([]);
   
   // Mode rejeu
   const [replayMode, setReplayMode] = useState(false);
@@ -243,6 +236,19 @@ export const MapPage = () => {
     }
   }, []);
 
+  const loadDepots = useCallback(async () => {
+    try {
+      const warehouses = await Api.fetchWarehouses();
+      // Filtrer uniquement les dépôts actifs avec coordonnées
+      const depotsWithCoords = warehouses.filter(
+        (w) => w.is_depot && w.is_active && w.latitude != null && w.longitude != null
+      );
+      setDepots(depotsWithCoords);
+    } catch (error) {
+      console.error('Erreur lors du chargement des dépôts:', error);
+    }
+  }, []);
+
   const loadRoutes = useCallback(async () => {
     if (!selectedDate) return;
     setLoadingRoutes(true);
@@ -264,10 +270,11 @@ export const MapPage = () => {
   useEffect(() => {
     loadVehicles();
     loadCustomers();
+    loadDepots();
     loadLocations(filters);
     const interval = setInterval(() => loadLocations(filters), 15000);
     return () => clearInterval(interval);
-  }, [loadVehicles, loadCustomers, loadLocations, filters]);
+  }, [loadVehicles, loadCustomers, loadDepots, loadLocations, filters]);
 
   useEffect(() => {
     loadRoutes();
@@ -332,8 +339,8 @@ export const MapPage = () => {
   const handleExportCSV = useCallback(() => {
     const stops = routes.flatMap((route) =>
       route.stops
-        .filter((stop) => stop.status === 'completed' && stop.completed_at)
-        .map((stop) => ({
+        .filter((stop: RouteStop) => stop.status === 'completed' && stop.completed_at)
+        .map((stop: RouteStop) => ({
           client: stop.customer_name || 'Inconnu',
           adresse: stop.customer_address || '',
           heure: stop.completed_at ? new Date(stop.completed_at).toLocaleString('fr-FR') : '',
@@ -372,8 +379,8 @@ export const MapPage = () => {
   const handleExportPDF = useCallback(() => {
     const stops = routes.flatMap((route) =>
       route.stops
-        .filter((stop) => stop.status === 'completed' && stop.completed_at)
-        .map((stop) => ({
+        .filter((stop: RouteStop) => stop.status === 'completed' && stop.completed_at)
+        .map((stop: RouteStop) => ({
           client: stop.customer_name || 'Inconnu',
           adresse: stop.customer_address || '',
           heure: stop.completed_at ? new Date(stop.completed_at).toLocaleString('fr-FR') : '',
@@ -429,7 +436,22 @@ export const MapPage = () => {
       Api.updateCurrentLocation({
         latitude: coords[0],
         longitude: coords[1]
-      }).catch((error) => console.error(error));
+      })
+        .then((response: any) => {
+          // Si la réponse indique que la position n'a pas été mise à jour (utilisateur non-employé)
+          // on ne fait rien, c'est normal pour les admins/managers
+          if (response?.updated === false) {
+            // Position non mise à jour car utilisateur non-employé - c'est normal
+            return;
+          }
+        })
+        .catch((error) => {
+          // Ne logger que les erreurs autres que "utilisateur non-employé"
+          const errorMessage = error.message || error.toString();
+          if (!errorMessage.includes('non-employé') && !errorMessage.includes('Position non mise à jour')) {
+            console.error('Erreur mise à jour position:', error);
+          }
+        });
     };
     const error = (err: GeolocationPositionError) => {
       console.warn('Erreur géolocalisation', err);
@@ -485,7 +507,7 @@ export const MapPage = () => {
 
   const pendingStopsCount = useMemo(
     () =>
-      routes.reduce((sum, route) => sum + route.stops.filter((stop) => (stop.status ?? 'pending') !== 'completed').length, 0),
+      routes.reduce((sum, route) => sum + route.stops.filter((stop: RouteStop) => (stop.status ?? 'pending') !== 'completed').length, 0),
     [routes]
   );
   const formatTimeDiff = (timestamp: string) => {
@@ -514,8 +536,14 @@ export const MapPage = () => {
 
   const resetFilters = () => setFilters({ department: '', role: '', manager: '' });
 
-  // Dépôt principal (Crissier)
-  const depotPrincipal = FIXED_POINTS.find((p) => p.description === 'Dépôt principal')?.position || FIXED_POINTS[0].position;
+  // Dépôt principal (premier dépôt chargé depuis l'API, ou position par défaut)
+  const depotPrincipal = useMemo<[number, number]>(() => {
+    if (depots.length > 0 && depots[0].latitude != null && depots[0].longitude != null) {
+      return [depots[0].latitude, depots[0].longitude];
+    }
+    // Position par défaut (Crissier) si aucun dépôt n'est chargé
+    return [46.548452466797585, 6.572221457669403];
+  }, [depots]);
 
   // Calculer la distance entre deux points (en mètres)
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -533,7 +561,7 @@ export const MapPage = () => {
   const sensitiveClients = useMemo(() => {
     const sensitive: Array<{ name: string; address: string | null; risk_level: string }> = [];
     routes.forEach((route) => {
-      route.stops.forEach((stop) => {
+      route.stops.forEach((stop: RouteStop) => {
         if (stop.risk_level && (stop.risk_level.toLowerCase() === 'high' || stop.risk_level.toLowerCase() === 'sensitive') && stop.customer_name) {
           sensitive.push({
             name: stop.customer_name,
@@ -605,12 +633,12 @@ export const MapPage = () => {
 
   // Construire le chemin complet de chaque route selon l'ordre logique :
   // Dépôt → Client 1 → Client 2 → Client 3 → ...
-  const getFullRoutePath = (route: MapRoute): Array<[number, number]> => {
+  const getFullRoutePath = (route: MapRouteType): Array<[number, number]> => {
     // Toujours privilégier la construction à partir des stops (clients) triés par order_index
     const stopsWithCoords = route.stops
-      .filter((stop) => stop.latitude != null && stop.longitude != null)
-      .sort((a, b) => a.order_index - b.order_index)
-      .map((stop) => [stop.latitude!, stop.longitude!] as [number, number]);
+      .filter((stop: RouteStop) => stop.latitude != null && stop.longitude != null)
+      .sort((a: RouteStop, b: RouteStop) => a.order_index - b.order_index)
+      .map((stop: RouteStop) => [stop.latitude!, stop.longitude!] as [number, number]);
     
     if (stopsWithCoords.length > 0) {
       // Chemin logique : Dépôt → Client 1 → Client 2 → Client 3 → ...
@@ -912,13 +940,21 @@ export const MapPage = () => {
           <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
           <MapCenterController center={mapCenter} />
 
-          {FIXED_POINTS.map((point) => (
-            <Marker key={point.id} position={point.position} icon={depotIcon}>
-              <Popup>
-                <strong>{point.name}</strong>
-                <p>{point.description}</p>
-              </Popup>
-            </Marker>
+          {depots.map((depot) => (
+            depot.latitude != null && depot.longitude != null && (
+              <Marker 
+                key={depot.id} 
+                position={[depot.latitude, depot.longitude]} 
+                icon={depotIcon}
+              >
+                <Popup>
+                  <strong>{depot.name}</strong>
+                  <p>{depot.code}</p>
+                  {depot.address && <p>{depot.address}</p>}
+                  {depot.location && <p>{depot.location}</p>}
+                </Popup>
+              </Marker>
+            )
           ))}
 
           {/* Afficher tous les clients avec des icônes rouges */}
@@ -998,11 +1034,11 @@ export const MapPage = () => {
 
           {routes.map((route) =>
             route.stops
-              .filter((stop) => {
+              .filter((stop: RouteStop) => {
                 if (!showPendingOnly) return true;
                 return (stop.status ?? 'pending').toLowerCase() !== 'completed';
               })
-              .map((stop) => {
+              .map((stop: RouteStop) => {
                 if (stop.latitude == null || stop.longitude == null) return null;
                 const status = (stop.status ?? 'pending').toLowerCase();
                 const icon = status === 'completed' ? blueMarker : redMarker;

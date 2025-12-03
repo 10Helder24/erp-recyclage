@@ -1,102 +1,112 @@
+// Service Worker pour le mode offline
 const CACHE_NAME = 'erp-retripa-v1';
-const STATIC_CACHE = 'erp-retripa-static-v1';
-const API_CACHE = 'erp-retripa-api-v1';
-
-const STATIC_ASSETS = [
+const OFFLINE_URLS = [
   '/',
   '/index.html',
-  '/ERP2.jpg',
-  '/retripa-ln.jpg',
-  '/sgs.png',
-  '/logo-retripa.png'
+  '/manifest.json'
 ];
 
+// Installation
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(STATIC_CACHE).then((cache) => {
-      return cache.addAll(STATIC_ASSETS);
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.addAll(OFFLINE_URLS);
     })
   );
   self.skipWaiting();
 });
 
+// Activation
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames
-          .filter((name) => name !== STATIC_CACHE && name !== API_CACHE && name !== CACHE_NAME)
-          .map((name) => caches.delete(name))
+          .filter((cacheName) => cacheName !== CACHE_NAME)
+          .map((cacheName) => caches.delete(cacheName))
       );
     })
   );
   self.clients.claim();
 });
 
+// Interception des requêtes
 self.addEventListener('fetch', (event) => {
-  const { request } = event;
-  const url = new URL(request.url);
-
-  if (request.method !== 'GET') {
-    return;
-  }
-
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(networkFirstStrategy(request));
-  } else if (STATIC_ASSETS.some((asset) => url.pathname === asset || url.pathname.startsWith('/assets/'))) {
-    event.respondWith(cacheFirstStrategy(request));
+  // Stratégie Network First pour les API
+  if (event.request.url.includes('/api/')) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          // Si la requête réussit, mettre en cache
+          const responseClone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseClone);
+          });
+          return response;
+        })
+        .catch(() => {
+          // Si offline, retourner depuis le cache
+          return caches.match(event.request).then((cachedResponse) => {
+            if (cachedResponse) {
+              return cachedResponse;
+            }
+            // Retourner une réponse par défaut pour les API
+            return new Response(
+              JSON.stringify({ error: 'Mode hors ligne', offline: true }),
+              {
+                headers: { 'Content-Type': 'application/json' }
+              }
+            );
+          });
+        })
+    );
   } else {
-    event.respondWith(networkFirstStrategy(request));
-  }
-});
-
-async function cacheFirstStrategy(request) {
-  const cached = await caches.match(request);
-  if (cached) {
-    return cached;
-  }
-  try {
-    const response = await fetch(request);
-    if (response.ok) {
-      const cache = await caches.open(STATIC_CACHE);
-      cache.put(request, response.clone());
-    }
-    return response;
-  } catch (error) {
-    return new Response('Offline', { status: 503 });
-  }
-}
-
-async function networkFirstStrategy(request) {
-  try {
-    const response = await fetch(request);
-    if (response.ok && request.url.startsWith('http')) {
-      const cache = await caches.open(API_CACHE);
-      cache.put(request, response.clone());
-    }
-    return response;
-  } catch (error) {
-    const cached = await caches.match(request);
-    if (cached) {
-      return cached;
-    }
-    return new Response(JSON.stringify({ error: 'Offline', cached: false }), {
-      status: 503,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-}
-
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-  if (event.data && event.data.type === 'CLEAR_CACHE') {
-    event.waitUntil(
-      caches.keys().then((cacheNames) => {
-        return Promise.all(cacheNames.map((name) => caches.delete(name)));
+    // Stratégie Cache First pour les assets statiques
+    event.respondWith(
+      caches.match(event.request).then((cachedResponse) => {
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+        return fetch(event.request).catch(() => {
+          // En cas d'erreur réseau, retourner une réponse offline
+          return new Response('Mode hors ligne', {
+            status: 503,
+            statusText: 'Service Unavailable',
+            headers: { 'Content-Type': 'text/plain' }
+          });
+        });
       })
     );
   }
 });
 
+// Gestion des notifications push
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    if (event.data) {
+      data = event.data.json();
+    }
+  } catch (error) {
+    console.error('Erreur lors du parsing des données push:', error);
+    // En cas d'erreur, utiliser les données par défaut
+    data = {};
+  }
+  
+  const title = data.title || 'Nouvelle notification';
+  const options = {
+    body: data.body || 'Vous avez une nouvelle notification',
+    icon: '/icons/erp2-192.png',
+    badge: '/icons/erp2-192.png',
+    data: data
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Gestion des clics sur les notifications
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    clients.openWindow(event.notification.data.url || '/')
+  );
+});

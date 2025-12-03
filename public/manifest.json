@@ -1,28 +1,35 @@
 {
-  "short_name": "ERP Recyclage",
-  "name": "ERP Recyclage",
+  "name": "ERP RETRIPA - Application Mobile",
+  "short_name": "ERP Mobile",
+  "description": "Application mobile pour les opérateurs terrain",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "orientation": "portrait",
   "icons": [
     {
-      "src": "favicon.ico",
-      "sizes": "64x64 32x32 24x24 16x16",
-      "type": "image/x-icon"
-    },
-    {
-      "src": "icons/erp2-192.png",
-      "type": "image/png",
+      "src": "/icons/erp2-192.png",
       "sizes": "192x192",
-      "purpose": "any"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
-      "src": "icons/erp2-512.png",
-      "type": "image/png",
+      "src": "/icons/erp2-512.png",
       "sizes": "512x512",
-      "purpose": "any"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ],
-  "start_url": ".",
-  "display": "standalone",
-  "theme_color": "#16a34a",
-  "background_color": "#ffffff",
-  "orientation": "portrait"
+  "categories": ["business", "productivity"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Interventions",
+      "short_name": "Interventions",
+      "description": "Voir mes interventions",
+      "url": "/?page=mobile",
+      "icons": [{ "src": "/icons/erp2-192.png", "sizes": "192x192" }]
+    }
+  ]
 }

@@ -24,8 +24,12 @@ const LoginPage = () => {
       await login(email, password);
       toast.success('Connexion réussie');
     } catch (error) {
-      console.error(error);
-      toast.error(error instanceof Error ? error.message : 'Connexion impossible');
+      // Ne logger que si ce n'est pas une erreur d'authentification normale
+      const errorMessage = error instanceof Error ? error.message : 'Connexion impossible';
+      if (!errorMessage.includes('Identifiants invalides')) {
+        console.error('Erreur de connexion:', error);
+      }
+      toast.error(errorMessage);
     } finally {
       setSubmitting(false);
     }
