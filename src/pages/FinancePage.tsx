@@ -416,8 +416,8 @@ export const FinancePage = () => {
                       <td>{format(new Date(invoice.issue_date), 'dd/MM/yyyy', { locale: fr })}</td>
                       <td>{format(new Date(invoice.due_date), 'dd/MM/yyyy', { locale: fr })}</td>
                       <td className="font-mono">{invoice.total_amount.toFixed(2)} {invoice.currency}</td>
-                      <td className="font-mono text-green-600">{invoice.total_paid.toFixed(2)}</td>
-                      <td className="font-mono text-red-600">{invoice.remaining_amount.toFixed(2)}</td>
+                      <td className="font-mono text-green-600">{(invoice.total_paid ?? 0).toFixed(2)}</td>
+                      <td className="font-mono text-red-600">{(invoice.remaining_amount ?? 0).toFixed(2)}</td>
                       <td>
                         <span className={`finance-badge ${getStatusColor(invoice.status)}`}>
                           {invoice.status}
