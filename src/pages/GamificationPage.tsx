@@ -53,6 +53,7 @@ export default function GamificationPage() {
   const [employeeBadges, setEmployeeBadges] = useState<EmployeeBadge[]>([]);
   const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [currentEmployee, setCurrentEmployee] = useState<Employee | null>(null);
   const [showAwardBadgeModal, setShowAwardBadgeModal] = useState(false);
   const [awardBadgeForm, setAwardBadgeForm] = useState<AwardBadgePayload>({ badge_id: '', earned_for: '' });
 
@@ -78,7 +79,7 @@ export default function GamificationPage() {
 
   useEffect(() => {
     loadData();
-  }, [activeTab, leaderboardType, leaderboardPeriod, selectedChallenge, selectedEmployee, statisticsPeriod]);
+  }, [activeTab, leaderboardType, leaderboardPeriod, selectedChallenge, selectedEmployee, statisticsPeriod, user, currentEmployee]);
 
   const loadData = async () => {
     setLoading(true);
@@ -93,6 +94,11 @@ export default function GamificationPage() {
         ]);
         setBadges(badgesData);
         setEmployees(employeesData);
+        // Trouver l'employé correspondant à l'utilisateur connecté
+        if (user?.email) {
+          const employee = employeesData.find((e) => e.email === user.email);
+          setCurrentEmployee(employee || null);
+        }
         if (selectedEmployee) {
           const badges = await Api.fetchEmployeeBadges(selectedEmployee);
           setEmployeeBadges(badges);
@@ -107,9 +113,20 @@ export default function GamificationPage() {
       } else if (activeTab === 'rewards') {
         const rewardsData = await Api.fetchRewards();
         setRewards(rewardsData);
-      } else if (activeTab === 'statistics' && user?.employee_id) {
-        const stats = await Api.fetchEmployeeStatistics(user.employee_id, statisticsPeriod);
-        setStatistics(stats);
+      } else if (activeTab === 'statistics') {
+        // Charger les employés si nécessaire pour trouver l'employé de l'utilisateur
+        if (!currentEmployee && user?.email) {
+          const employeesData = await Api.fetchEmployees();
+          const employee = employeesData.find((e) => e.email === user.email);
+          setCurrentEmployee(employee || null);
+          if (employee) {
+            const stats = await Api.fetchEmployeeStatistics(employee.id, statisticsPeriod);
+            setStatistics(stats);
+          }
+        } else if (currentEmployee) {
+          const stats = await Api.fetchEmployeeStatistics(currentEmployee.id, statisticsPeriod);
+          setStatistics(stats);
+        }
       }
     } catch (error: any) {
       console.error('Erreur chargement données:', error);
