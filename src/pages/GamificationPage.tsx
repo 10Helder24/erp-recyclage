@@ -12,8 +12,8 @@ import {
   type Leaderboard,
   type CreateChallengePayload,
   type AwardBadgePayload,
-  type Employee
 } from '../lib/api';
+import type { Employee } from '../types/employees';
 import { useAuth } from '../hooks/useAuth';
 import { toast } from 'react-hot-toast';
 import {
@@ -39,7 +39,7 @@ const RARITY_LABELS: Record<string, string> = {
 };
 
 export default function GamificationPage() {
-  const { auth } = useAuth();
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('leaderboards');
   const [loading, setLoading] = useState(true);
 
@@ -107,8 +107,8 @@ export default function GamificationPage() {
       } else if (activeTab === 'rewards') {
         const rewardsData = await Api.fetchRewards();
         setRewards(rewardsData);
-      } else if (activeTab === 'statistics' && auth?.employee_id) {
-        const stats = await Api.fetchEmployeeStatistics(auth.employee_id, statisticsPeriod);
+      } else if (activeTab === 'statistics' && user?.employee_id) {
+        const stats = await Api.fetchEmployeeStatistics(user.employee_id, statisticsPeriod);
         setStatistics(stats);
       }
     } catch (error: any) {
@@ -294,7 +294,7 @@ export default function GamificationPage() {
           {/* TAB: BADGES */}
           {activeTab === 'badges' && (
             <div className="gamification-content">
-              {(auth?.role === 'admin' || auth?.role === 'manager') && (
+              {(user?.role === 'admin' || user?.role === 'manager') && (
                 <div className="action-bar">
                   <button className="btn-primary" onClick={() => setShowAwardBadgeModal(true)}>
                     <Plus size={18} />
@@ -349,7 +349,7 @@ export default function GamificationPage() {
           {/* TAB: CHALLENGES */}
           {activeTab === 'challenges' && (
             <div className="gamification-content">
-              {(auth?.role === 'admin' || auth?.role === 'manager') && (
+              {(user?.role === 'admin' || user?.role === 'manager') && (
                 <div className="action-bar">
                   <button className="btn-primary" onClick={() => setShowChallengeModal(true)}>
                     <Plus size={18} />

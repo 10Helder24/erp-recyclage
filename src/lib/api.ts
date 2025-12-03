@@ -3102,7 +3102,7 @@ export type WasteTrackingSlip = {
   treatment_method: string | null;
   treatment_facility: string | null;
   status: 'draft' | 'in_transit' | 'delivered' | 'treated' | 'archived';
-  pdf_data: Buffer | null;
+  pdf_data: string | null; // Base64 encoded PDF data
   pdf_filename: string | null;
   created_by: string | null;
   created_by_name: string | null;
@@ -3151,7 +3151,7 @@ export type TreatmentCertificate = {
   unit: string;
   treatment_result: string | null;
   compliance_status: 'compliant' | 'non_compliant' | 'pending_verification';
-  pdf_data: Buffer | null;
+  pdf_data: string | null; // Base64 encoded PDF data
   pdf_filename: string | null;
   issued_by: string | null;
   issued_by_name: string | null;
@@ -3558,7 +3558,7 @@ export type SupplierInvoice = {
   payment_method: string | null;
   payment_reference: string | null;
   notes: string | null;
-  pdf_data: Buffer | null;
+  pdf_data: string | null; // Base64 encoded PDF data
   pdf_filename: string | null;
   created_by: string | null;
   created_by_name: string | null;

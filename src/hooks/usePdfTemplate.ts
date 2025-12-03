@@ -38,7 +38,7 @@ export const usePdfTemplate = (module: string) => {
     lastUpdated: null
   });
   
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastCheckRef = useRef<number>(0);
 
   const fetchTemplate = useCallback(async (force = false) => {

@@ -246,7 +246,7 @@ export const RoutesPage = () => {
   const handleOptimizeRoute = async (route: RouteType) => {
     try {
       setOptimizingRouteId(route.id);
-      const result = await Api.optimizeRoute(route.id, { startTime: routeStartTime });
+      const result = await Api.optimizeRouteById(route.id, { startTime: routeStartTime });
       setOptimizationPreview({ route, result });
       toast.success('Suggestion calculée');
     } catch (error) {
@@ -261,7 +261,7 @@ export const RoutesPage = () => {
     if (!optimizationPreview) return;
     try {
       setOptimizingRouteId(optimizationPreview.route.id);
-      await Api.optimizeRoute(optimizationPreview.route.id, { startTime: routeStartTime, apply: true });
+      await Api.optimizeRouteById(optimizationPreview.route.id, { startTime: routeStartTime, apply: true });
       toast.success('Ordre appliqué');
       setOptimizationPreview(null);
       loadData();
