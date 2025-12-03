@@ -322,7 +322,7 @@ export type Invoice = {
   id: string;
   invoice_number: string;
   customer_id: string | null;
-  customer_name_full?: string | null;
+  customer_name_full: string | null;
   customer_name: string;
   customer_address: string | null;
   customer_vat_number: string | null;
@@ -1772,8 +1772,7 @@ export const Api = {
       body: JSON.stringify(payload)
     }),
   deleteAlertCategoryRecipient: (id: string) =>
-    request<{ message: string }>(`/alert-category-recipients/${id}`, { method: 'DELETE' }),
-  fetchUsers: () => request<AuthUser[]>('/auth/users')
+    request<{ message: string }>(`/alert-category-recipients/${id}`, { method: 'DELETE' })
 };
 
 // Alert & Notification types
@@ -1790,6 +1789,7 @@ export type Alert = {
   is_resolved: boolean;
   resolved_at: string | null;
   resolved_by: string | null;
+  resolved_by_name: string | null;
   resolved_notes: string | null;
   assigned_to: string | null;
   assigned_to_name: string | null;
@@ -2376,4 +2376,5 @@ export type CustomerStatistics = {
   last_interaction_date: string | null;
   segment: 'A' | 'B' | 'C';
   customer_type: 'prospect' | 'client' | 'inactive';
+  currency?: string;
 };

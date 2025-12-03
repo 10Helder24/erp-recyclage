@@ -4,80 +4,8 @@ import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
-import { Api } from '../lib/api';
+import { Api, type Invoice, type Quote, type InvoiceLine, type QuoteLine, type InvoiceDetail, type QuoteDetail } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
-
-type Invoice = {
-  id: string;
-  invoice_number: string;
-  customer_id: string | null;
-  customer_name_full: string | null;
-  customer_name: string;
-  customer_address: string | null;
-  customer_vat_number: string | null;
-  issue_date: string;
-  due_date: string;
-  paid_date: string | null;
-  status: string;
-  total_amount: number;
-  total_tax: number;
-  currency: string;
-  payment_terms: string | null;
-  notes: string | null;
-  reference: string | null;
-  total_paid: number;
-  remaining_amount: number;
-  created_at: string;
-};
-
-type Quote = {
-  id: string;
-  quote_number: string;
-  customer_id: string | null;
-  customer_name: string;
-  customer_address: string | null;
-  customer_vat_number: string | null;
-  issue_date: string;
-  valid_until: string;
-  status: string;
-  total_amount: number;
-  total_tax: number;
-  currency: string;
-  notes: string | null;
-  reference: string | null;
-  created_at: string;
-};
-
-type InvoiceLine = {
-  id: string;
-  invoice_id: string;
-  line_number: number;
-  description: string;
-  quantity: number;
-  unit_price: number;
-  tax_rate: number;
-  material_id: string | null;
-};
-
-type QuoteLine = {
-  id: string;
-  quote_id: string;
-  line_number: number;
-  description: string;
-  quantity: number;
-  unit_price: number;
-  tax_rate: number;
-  material_id: string | null;
-};
-
-type InvoiceDetail = Invoice & {
-  lines: InvoiceLine[];
-  payments: any[];
-};
-
-type QuoteDetail = Quote & {
-  lines: QuoteLine[];
-};
 
 type InvoiceForm = {
   customer_id: string;

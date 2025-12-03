@@ -159,6 +159,12 @@ type AuthPayload = {
 
 type AuthenticatedRequest = express.Request & { auth?: AuthPayload; user?: AuthPayload };
 
+// Helper function to check user role
+const hasRole = (user: AuthPayload | undefined, role: 'admin' | 'manager' | 'user'): boolean => {
+  if (!user) return false;
+  return user.role === role || user.role === 'admin'; // Admin a tous les rôles
+};
+
 const mapEmployeeRow = (row: EmployeeRow) => ({
   id: row.id,
   employee_code: row.employee_code,
@@ -6697,7 +6703,8 @@ app.post(
   '/api/invoices',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const {
       customer_id,
       customer_name,
@@ -6893,7 +6900,8 @@ app.post(
   '/api/quotes',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const {
       customer_id,
       customer_name,
@@ -7042,7 +7050,8 @@ app.post(
   '/api/payments',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { invoice_id, amount, payment_date, payment_method, reference, notes } = req.body;
 
     if (!invoice_id || !amount || !payment_date || !payment_method) {
@@ -7146,7 +7155,8 @@ app.post(
   '/api/customer-pricing',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const {
       customer_id,
       material_id,
@@ -7207,7 +7217,8 @@ app.post(
   '/api/intervention-costs',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['view_interventions'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { intervention_id, fuel_cost, labor_cost, material_cost, other_costs, notes } = req.body;
 
     if (!intervention_id) {
@@ -7338,7 +7349,8 @@ app.post(
   '/api/stock/thresholds',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { material_id, warehouse_id, min_quantity, max_quantity, alert_enabled, unit, notes } = req.body;
     if (!material_id || !warehouse_id || min_quantity === undefined) {
       return res.status(400).json({ error: 'Données incomplètes' });
@@ -7443,7 +7455,8 @@ app.patch(
   requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     await run('update stock_alerts set is_resolved = true, resolved_at = now(), resolved_by = $1 where id = $2', [
       user.id,
       id
@@ -7621,7 +7634,8 @@ app.post(
   '/api/stock/movements',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const {
       movement_type,
       material_id,
@@ -7716,7 +7730,8 @@ app.post(
   '/api/stock/reconciliations',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const {
       warehouse_id,
       material_id,
@@ -7764,7 +7779,8 @@ app.patch(
   requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const updates: string[] = [];
     const params: any[] = [];
     let paramIndex = 1;
@@ -7850,7 +7866,8 @@ app.post(
   '/api/stock/valuations/calculate',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { material_id, warehouse_id, valuation_method, valuation_date } = req.body;
     if (!material_id || !warehouse_id || !valuation_method || !valuation_date) {
       return res.status(400).json({ error: 'Données incomplètes' });
@@ -7940,7 +7957,8 @@ app.post(
   '/api/stock/forecasts',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const {
       material_id,
       warehouse_id,
@@ -8059,7 +8077,8 @@ app.post(
   '/api/customers/:id/interactions',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_customers'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { id } = req.params;
     const {
       interaction_type,
@@ -8132,7 +8151,8 @@ app.post(
   '/api/customers/:id/contracts',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_customers'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { id } = req.params;
     const {
       contract_number,
@@ -8270,7 +8290,8 @@ app.post(
   '/api/customers/:id/opportunities',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_customers'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { id } = req.params;
     const {
       title,
@@ -8415,7 +8436,8 @@ app.post(
   '/api/customers/:id/notes',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_customers'] }),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { id } = req.params;
     const {
       note_type,
@@ -8609,7 +8631,8 @@ app.post(
   '/api/interventions/:id/photos',
   requireAuth(),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { id } = req.params;
     const { photo_type, photo_data, mime_type, file_size, latitude, longitude } = req.body;
     if (!photo_type || !photo_data) {
@@ -8743,7 +8766,8 @@ app.post(
   '/api/interventions/:id/scans',
   requireAuth(),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { id } = req.params;
     const {
       scan_type,
@@ -8801,7 +8825,8 @@ app.post(
   '/api/interventions/:id/voice-notes',
   requireAuth(),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { id } = req.params;
     const { audio_data, mime_type, duration_seconds, transcription, latitude, longitude } = req.body;
     if (!audio_data) {
@@ -8868,7 +8893,8 @@ app.post(
   '/api/mobile/sync',
   requireAuth(),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { sync_items } = req.body as { sync_items: Array<{ entity_type: string; action: string; payload: any }> };
     if (!sync_items || !Array.isArray(sync_items)) {
       return res.status(400).json({ error: 'sync_items requis' });
@@ -8929,7 +8955,8 @@ app.get(
   '/api/mobile/sync-queue',
   requireAuth(),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const queue = await run(
       'select * from offline_sync_queue where user_id = $1 and status = $2 order by created_at',
       [user.id, 'pending']
@@ -8956,7 +8983,8 @@ app.post(
   '/api/mobile/push-token',
   requireAuth(),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { subscription, device_type, device_info, employee_id } = req.body;
     if (!subscription) {
       return res.status(400).json({ error: 'Subscription requis' });
@@ -9225,7 +9253,8 @@ app.post(
   '/api/alerts',
   requireAuth(),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const {
       alert_category,
       alert_type,
@@ -9314,7 +9343,8 @@ app.patch(
   '/api/alerts/:id/resolve',
   requireAuth(),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { id } = req.params;
     const { resolved_notes } = req.body;
     await run(
@@ -9377,7 +9407,8 @@ app.get(
   '/api/notifications',
   requireAuth(),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { status, notification_type, unread_only } = req.query;
     let query = `
       select n.*, a.title as alert_title, a.alert_category, a.severity
@@ -9411,7 +9442,8 @@ app.patch(
   '/api/notifications/:id/read',
   requireAuth(),
   asyncHandler(async (req, res) => {
-    const user = req.user as AuthPayload;
+    const authReq = req as AuthenticatedRequest;
+    const user = authReq.auth as AuthPayload;
     const { id } = req.params;
     await run(
       'update notifications set read_at = now(), status = case when status = \'pending\' then \'delivered\' else status end where id = $1 and (recipient_type = \'user\' and recipient_id = $2 or recipient_type = \'all\')',
