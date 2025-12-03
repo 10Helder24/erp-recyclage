@@ -93,7 +93,7 @@ export const MobileOperatorPage = () => {
             // Créer une nouvelle subscription
             subscription = await registration.pushManager.subscribe({
               userVisibleOnly: true,
-              applicationServerKey
+              applicationServerKey: applicationServerKey as unknown as BufferSource
             });
           }
           
