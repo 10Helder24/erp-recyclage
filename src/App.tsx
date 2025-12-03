@@ -26,6 +26,13 @@ import { CRMPage } from './pages/CRMPage';
 import { MobileOperatorPage } from './pages/MobileOperatorPage';
 import { AlertsPage } from './pages/AlertsPage';
 import { SecurityAlertsSettingsPage } from './pages/SecurityAlertsSettingsPage';
+import { ReportsPage } from './pages/ReportsPage';
+import { CompliancePage } from './pages/CompliancePage';
+import { LogisticsOptimizationPage } from './pages/LogisticsOptimizationPage';
+import { SuppliersPage } from './pages/SuppliersPage';
+import DocumentsPage from './pages/DocumentsPage';
+import IntegrationsPage from './pages/IntegrationsPage';
+import GamificationPage from './pages/GamificationPage';
 import { useAuth } from './hooks/useAuth';
 import { useOffline } from './hooks/useOffline';
 import { Api } from './lib/api';
@@ -56,7 +63,14 @@ const NAV_LINK_IDS = [
   'routes',
   'weighbridge',
   'logistics',
-  'pdfTemplates'
+  'pdfTemplates',
+  'reports',
+  'compliance',
+  'logistics-optimization',
+  'suppliers',
+  'documents',
+  'integrations',
+  'gamification'
 ] as const;
 type NavId = (typeof NAV_LINK_IDS)[number];
 
@@ -133,7 +147,14 @@ const NAV_SECTIONS: NavSection[] = [
       { id: 'materials', label: 'Gestion des matières', requiresManager: true, requiresPermissions: ['view_materials'] },
       { id: 'finance', label: 'Finance', requiresManager: true, requiresPermissions: ['view_customers'] },
       { id: 'stocks', label: 'Gestion des stocks', requiresManager: true, requiresPermissions: ['view_materials'] },
-      { id: 'crm', label: 'CRM', requiresManager: true, requiresPermissions: ['view_customers'] }
+      { id: 'crm', label: 'CRM', requiresManager: true, requiresPermissions: ['view_customers'] },
+      { id: 'reports', label: 'Rapports & Analytics', requiresManager: true, requiresPermissions: ['view_customers'] },
+      { id: 'compliance', label: 'Conformité & Traçabilité', requiresManager: true, requiresPermissions: ['view_customers'] },
+      { id: 'logistics-optimization', label: 'Optimisation Logistique', requiresManager: true, requiresPermissions: ['view_customers'] },
+      { id: 'suppliers', label: 'Gestion des Fournisseurs', requiresManager: true, requiresPermissions: ['view_customers'] },
+      { id: 'documents', label: 'Gestion Documentaire', requiresManager: true, requiresPermissions: ['view_customers'] },
+      { id: 'integrations', label: 'Intégrations Externes', requiresAdmin: true },
+      { id: 'gamification', label: 'Gamification', requiresManager: false }
     ]
   },
   {
@@ -397,6 +418,44 @@ const App = () => {
         ) : (
           <LeavePage initialTab="demandes" />
         );
+      case 'reports':
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_customers') ? (
+          <ReportsPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'compliance':
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_customers') ? (
+          <CompliancePage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'logistics-optimization':
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_customers') ? (
+          <LogisticsOptimizationPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'suppliers':
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_customers') ? (
+          <SuppliersPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'documents':
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_customers') ? (
+          <DocumentsPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'integrations':
+        return hasRole('admin') ? (
+          <IntegrationsPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
+      case 'gamification':
+        return <GamificationPage />;
       case 'dashboard':
         return <DashboardPage />;
       case 'rh':

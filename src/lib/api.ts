@@ -294,6 +294,14 @@ export type MapVehicle = {
   created_at?: string;
 };
 
+export type Vehicle = MapVehicle & {
+  max_weight_kg?: number | null;
+  max_volume_m3?: number | null;
+  vehicle_type?: string | null;
+  compatible_materials?: string[] | null;
+  is_active?: boolean | null;
+};
+
 export type MapRouteType = {
   id: string;
   status: string | null;
@@ -593,6 +601,143 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     }
     throw error;
   }
+}
+
+// ==========================================
+// GAMIFICATION ET MOTIVATION - TYPES
+// ==========================================
+
+export interface Badge {
+  id: string;
+  badge_code: string;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  category: 'volume' | 'quality' | 'efficiency' | 'attendance' | 'achievement' | 'special';
+  rarity: 'common' | 'rare' | 'epic' | 'legendary';
+  points: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface EmployeeBadge {
+  id: string;
+  employee_id: string;
+  badge_id: string;
+  earned_at: string;
+  earned_for: string | null;
+  points_earned: number;
+  // Badge details
+  badge_code?: string;
+  name?: string;
+  description?: string | null;
+  icon?: string | null;
+  category?: string;
+  rarity?: string;
+}
+
+export interface Reward {
+  id: string;
+  reward_code: string;
+  name: string;
+  description: string | null;
+  reward_type: 'points' | 'bonus' | 'gift' | 'recognition' | 'privilege';
+  points_cost: number | null;
+  monetary_value: number | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface RewardClaim {
+  id: string;
+  employee_id: string;
+  reward_id: string;
+  points_spent: number;
+  status: 'pending' | 'approved' | 'rejected' | 'fulfilled';
+  claimed_at: string;
+  approved_at: string | null;
+  approved_by: string | null;
+  fulfilled_at: string | null;
+  notes: string | null;
+}
+
+export interface MonthlyChallenge {
+  id: string;
+  challenge_code: string;
+  name: string;
+  description: string | null;
+  challenge_type: 'volume' | 'quality' | 'efficiency' | 'team' | 'individual';
+  target_value: number;
+  unit: string | null;
+  start_date: string;
+  end_date: string;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface ChallengeParticipant {
+  id: string;
+  challenge_id: string;
+  participant_type: 'team' | 'individual';
+  team_id: string | null;
+  employee_id: string | null;
+  current_value: number;
+  progress_percentage: number;
+  rank: number | null;
+  joined_at: string;
+  team_name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  employee_email?: string | null;
+}
+
+export interface EmployeeStatistics {
+  id: string;
+  employee_id: string;
+  period_type: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'all_time';
+  period_start: string | null;
+  period_end: string | null;
+  total_volume_kg: number;
+  total_routes: number;
+  total_customers_served: number;
+  average_quality_score: number | null;
+  on_time_delivery_rate: number | null;
+  total_points: number;
+  badges_count: number;
+  challenges_won: number;
+  updated_at: string;
+}
+
+export interface Leaderboard {
+  id: string;
+  leaderboard_type: 'volume' | 'quality' | 'efficiency' | 'points' | 'badges' | 'challenges';
+  period_type: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'all_time';
+  period_start: string | null;
+  period_end: string | null;
+  ranking_data: Array<{
+    employee_id: string;
+    rank: number;
+    value: number;
+    employee_name?: string;
+  }>;
+  updated_at: string;
+}
+
+export interface CreateChallengePayload {
+  challenge_code?: string;
+  name: string;
+  description?: string;
+  challenge_type: 'volume' | 'quality' | 'efficiency' | 'team' | 'individual';
+  target_value: number;
+  unit?: string;
+  start_date: string;
+  end_date: string;
+}
+
+export interface AwardBadgePayload {
+  badge_id: string;
+  earned_for?: string;
 }
 
 export const Api = {
@@ -1268,7 +1413,7 @@ export const Api = {
       method: 'PATCH',
       body: JSON.stringify(payload)
     }),
-  optimizeRoute: (id: string, payload: { apply?: boolean; startTime?: string }) =>
+  optimizeRouteById: (id: string, payload: { apply?: boolean; startTime?: string }) =>
     request<RouteOptimizationResponse>(`/routes/${id}/optimize`, {
       method: 'POST',
       body: JSON.stringify(payload)
@@ -1289,7 +1434,8 @@ export const Api = {
   deleteRouteStop: (id: string) => request<{ message: string }>(`/route-stops/${id}`, { method: 'DELETE' }),
   // PDF Templates
   fetchPdfTemplates: () => request<PdfTemplate[]>('/pdf-templates'),
-  fetchPdfTemplate: (module: string) => request<PdfTemplate>(`/pdf-templates/${module}`),
+  fetchPdfTemplate: (module: string, cacheBust?: boolean) => 
+    request<PdfTemplate>(`/pdf-templates/${module}${cacheBust ? `?t=${Date.now()}` : ''}`),
   updatePdfTemplate: (module: string, config: PdfTemplateConfig) =>
     request<PdfTemplate>(`/pdf-templates/${module}`, {
       method: 'PUT',
@@ -1772,7 +1918,435 @@ export const Api = {
       body: JSON.stringify(payload)
     }),
   deleteAlertCategoryRecipient: (id: string) =>
-    request<{ message: string }>(`/alert-category-recipients/${id}`, { method: 'DELETE' })
+    request<{ message: string }>(`/alert-category-recipients/${id}`, { method: 'DELETE' }),
+
+  // Reports & Analytics
+  fetchWeeklyReport: (filters?: { period?: string; startDate?: string; endDate?: string; department?: string; team?: string; materialType?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.period) params.set('period', filters.period);
+    if (filters?.startDate) params.set('start_date', filters.startDate);
+    if (filters?.endDate) params.set('end_date', filters.endDate);
+    if (filters?.department) params.set('department', filters.department);
+    if (filters?.team) params.set('team', filters.team);
+    if (filters?.materialType) params.set('material_type', filters.materialType);
+    const query = params.toString();
+    return request<WeeklyReport>(`/reports/weekly${query ? `?${query}` : ''}`);
+  },
+  fetchMonthlyReport: (filters?: { period?: string; startDate?: string; endDate?: string; department?: string; team?: string; materialType?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.period) params.set('period', filters.period);
+    if (filters?.startDate) params.set('start_date', filters.startDate);
+    if (filters?.endDate) params.set('end_date', filters.endDate);
+    if (filters?.department) params.set('department', filters.department);
+    if (filters?.team) params.set('team', filters.team);
+    if (filters?.materialType) params.set('material_type', filters.materialType);
+    const query = params.toString();
+    return request<MonthlyReport>(`/reports/monthly${query ? `?${query}` : ''}`);
+  },
+  fetchRegulatoryReport: (filters?: { period?: string; startDate?: string; endDate?: string; department?: string; team?: string; materialType?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.period) params.set('period', filters.period);
+    if (filters?.startDate) params.set('start_date', filters.startDate);
+    if (filters?.endDate) params.set('end_date', filters.endDate);
+    const query = params.toString();
+    return request<RegulatoryReport>(`/reports/regulatory${query ? `?${query}` : ''}`);
+  },
+  fetchPerformanceReport: (filters?: { period?: string; startDate?: string; endDate?: string; department?: string; team?: string; materialType?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.period) params.set('period', filters.period);
+    if (filters?.startDate) params.set('start_date', filters.startDate);
+    if (filters?.endDate) params.set('end_date', filters.endDate);
+    if (filters?.department) params.set('department', filters.department);
+    if (filters?.team) params.set('team', filters.team);
+    const query = params.toString();
+    return request<PerformanceReport>(`/reports/performance${query ? `?${query}` : ''}`);
+  },
+  fetchPredictiveAnalysis: (filters?: { period?: string; startDate?: string; endDate?: string; department?: string; team?: string; materialType?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.period) params.set('period', filters.period);
+    const query = params.toString();
+    return request<PredictiveAnalysis>(`/reports/predictive${query ? `?${query}` : ''}`);
+  },
+  exportReport: (payload: { reportType: string; format: 'excel' | 'pdf'; filters?: any }) =>
+    request<{ downloadUrl: string; message: string }>('/reports/export', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  scheduleReport: (payload: { reportType: string; frequency: 'weekly' | 'monthly'; recipients: string[]; filters?: any }) =>
+    request<{ message: string }>('/reports/schedule', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // Compliance & Traceability
+  fetchWasteTrackingSlips: (filters?: { status?: string; producer_id?: string; start_date?: string; end_date?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.producer_id) params.set('producer_id', filters.producer_id);
+    if (filters?.start_date) params.set('start_date', filters.start_date);
+    if (filters?.end_date) params.set('end_date', filters.end_date);
+    const query = params.toString();
+    return request<WasteTrackingSlip[]>(`/compliance/waste-tracking-slips${query ? `?${query}` : ''}`);
+  },
+  createWasteTrackingSlip: (payload: CreateWasteTrackingSlipPayload) =>
+    request<{ slip: WasteTrackingSlip }>('/compliance/waste-tracking-slips', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchTreatmentCertificates: (filters?: { customer_id?: string; compliance_status?: string; start_date?: string; end_date?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.customer_id) params.set('customer_id', filters.customer_id);
+    if (filters?.compliance_status) params.set('compliance_status', filters.compliance_status);
+    if (filters?.start_date) params.set('start_date', filters.start_date);
+    if (filters?.end_date) params.set('end_date', filters.end_date);
+    const query = params.toString();
+    return request<TreatmentCertificate[]>(`/compliance/treatment-certificates${query ? `?${query}` : ''}`);
+  },
+  createTreatmentCertificate: (payload: CreateTreatmentCertificatePayload) =>
+    request<{ certificate: TreatmentCertificate }>('/compliance/treatment-certificates', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchTraceabilityChain: (filters?: { slip_id?: string; chain_reference?: string; start_date?: string; end_date?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.slip_id) params.set('slip_id', filters.slip_id);
+    if (filters?.chain_reference) params.set('chain_reference', filters.chain_reference);
+    if (filters?.start_date) params.set('start_date', filters.start_date);
+    if (filters?.end_date) params.set('end_date', filters.end_date);
+    const query = params.toString();
+    return request<TraceabilityLink[]>(`/compliance/traceability-chain${query ? `?${query}` : ''}`);
+  },
+  createTraceabilityLink: (payload: CreateTraceabilityLinkPayload) =>
+    request<{ link: TraceabilityLink }>('/compliance/traceability-chain', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchComplianceChecks: (filters?: { entity_type?: string; entity_id?: string; check_status?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.entity_type) params.set('entity_type', filters.entity_type);
+    if (filters?.entity_id) params.set('entity_id', filters.entity_id);
+    if (filters?.check_status) params.set('check_status', filters.check_status);
+    const query = params.toString();
+    return request<ComplianceCheck[]>(`/compliance/compliance-checks${query ? `?${query}` : ''}`);
+  },
+  fetchRegulatoryDocuments: (filters?: { document_type?: string; related_entity_type?: string; related_entity_id?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.document_type) params.set('document_type', filters.document_type);
+    if (filters?.related_entity_type) params.set('related_entity_type', filters.related_entity_type);
+    if (filters?.related_entity_id) params.set('related_entity_id', filters.related_entity_id);
+    const query = params.toString();
+    return request<RegulatoryDocument[]>(`/compliance/regulatory-documents${query ? `?${query}` : ''}`);
+  },
+
+  // Logistics Optimization
+  optimizeRoute: (payload: { route_id?: string; customer_ids: string[]; vehicle_id?: string; algorithm?: string; constraints?: any }) =>
+    request<{ optimized_route: OptimizedRoute; optimized_order: any[]; metrics: RouteOptimizationMetrics }>('/logistics/optimize-route', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  simulateScenario: (payload: CreateScenarioPayload) =>
+    request<{ scenario: RouteScenario }>('/logistics/simulate-scenario', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchScenarios: (filters?: { scenario_type?: string; is_applied?: boolean }) => {
+    const params = new URLSearchParams();
+    if (filters?.scenario_type) params.set('scenario_type', filters.scenario_type);
+    if (filters?.is_applied !== undefined) params.set('is_applied', filters.is_applied.toString());
+    const query = params.toString();
+    return request<RouteScenario[]>(`/logistics/scenarios${query ? `?${query}` : ''}`);
+  },
+  optimizeLoad: (payload: { route_id?: string; vehicle_id: string; stops_data: Array<{ weight_kg?: number; volume_m3?: number }> }) =>
+    request<{ optimization: VehicleLoadOptimization; metrics: LoadOptimizationMetrics }>('/logistics/optimize-load', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchDemandForecasts: (filters?: { zone_id?: string; material_type?: string; start_date?: string; end_date?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.zone_id) params.set('zone_id', filters.zone_id);
+    if (filters?.material_type) params.set('material_type', filters.material_type);
+    if (filters?.start_date) params.set('start_date', filters.start_date);
+    if (filters?.end_date) params.set('end_date', filters.end_date);
+    const query = params.toString();
+    return request<DemandForecast[]>(`/logistics/demand-forecast${query ? `?${query}` : ''}`);
+  },
+  createDemandForecast: (payload: CreateDemandForecastPayload) =>
+    request<{ forecast: DemandForecast }>('/logistics/demand-forecast', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchRealTimeTracking: (filters?: { route_id?: string; vehicle_id?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.route_id) params.set('route_id', filters.route_id);
+    if (filters?.vehicle_id) params.set('vehicle_id', filters.vehicle_id);
+    const query = params.toString();
+    return request<RealTimeTracking[]>(`/logistics/real-time-tracking${query ? `?${query}` : ''}`);
+  },
+  updateRealTimeTracking: (payload: UpdateRealTimeTrackingPayload) =>
+    request<{ tracking: RealTimeTracking }>('/logistics/real-time-tracking', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchRoutingConstraints: (filters?: { constraint_type?: string; is_active?: boolean }) => {
+    const params = new URLSearchParams();
+    if (filters?.constraint_type) params.set('constraint_type', filters.constraint_type);
+    if (filters?.is_active !== undefined) params.set('is_active', filters.is_active.toString());
+    const query = params.toString();
+    return request<RoutingConstraint[]>(`/logistics/routing-constraints${query ? `?${query}` : ''}`);
+  },
+  createRoutingConstraint: (payload: CreateRoutingConstraintPayload) =>
+    request<{ constraint: RoutingConstraint }>('/logistics/routing-constraints', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // Suppliers Management
+  fetchSuppliers: (filters?: { supplier_type?: string; is_active?: boolean; search?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.supplier_type) params.set('supplier_type', filters.supplier_type);
+    if (filters?.is_active !== undefined) params.set('is_active', filters.is_active.toString());
+    if (filters?.search) params.set('search', filters.search);
+    const query = params.toString();
+    return request<Supplier[]>(`/suppliers${query ? `?${query}` : ''}`);
+  },
+  createSupplier: (payload: CreateSupplierPayload) =>
+    request<{ supplier: Supplier }>('/suppliers', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateSupplier: (id: string, payload: Partial<CreateSupplierPayload>) =>
+    request<{ supplier: Supplier }>(`/suppliers/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteSupplier: (id: string) =>
+    request<{ message: string }>(`/suppliers/${id}`, { method: 'DELETE' }),
+  fetchSupplierEvaluations: (supplierId: string) =>
+    request<SupplierEvaluation[]>(`/suppliers/${supplierId}/evaluations`),
+  createSupplierEvaluation: (supplierId: string, payload: CreateSupplierEvaluationPayload) =>
+    request<{ evaluation: SupplierEvaluation }>(`/suppliers/${supplierId}/evaluations`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchSupplierOrders: (filters?: { supplier_id?: string; status?: string; start_date?: string; end_date?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.supplier_id) params.set('supplier_id', filters.supplier_id);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.start_date) params.set('start_date', filters.start_date);
+    if (filters?.end_date) params.set('end_date', filters.end_date);
+    const query = params.toString();
+    return request<SupplierOrder[]>(`/supplier-orders${query ? `?${query}` : ''}`);
+  },
+  createSupplierOrder: (payload: CreateSupplierOrderPayload) =>
+    request<{ order: SupplierOrder }>('/supplier-orders', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  receiveSupplierOrder: (orderId: string, payload: ReceiveSupplierOrderPayload) =>
+    request<{ reception: SupplierReception }>(`/supplier-orders/${orderId}/receive`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchSupplierInvoices: (filters?: { supplier_id?: string; status?: string; start_date?: string; end_date?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.supplier_id) params.set('supplier_id', filters.supplier_id);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.start_date) params.set('start_date', filters.start_date);
+    if (filters?.end_date) params.set('end_date', filters.end_date);
+    const query = params.toString();
+    return request<SupplierInvoice[]>(`/supplier-invoices${query ? `?${query}` : ''}`);
+  },
+  createSupplierInvoice: (payload: CreateSupplierInvoicePayload) =>
+    request<{ invoice: SupplierInvoice }>('/supplier-invoices', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  paySupplierInvoice: (invoiceId: string, payload: PaySupplierInvoicePayload) =>
+    request<{ invoice: SupplierInvoice }>(`/supplier-invoices/${invoiceId}/pay`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  fetchTenderCalls: (filters?: { status?: string; tender_type?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.tender_type) params.set('tender_type', filters.tender_type);
+    const query = params.toString();
+    return request<TenderCall[]>(`/tender-calls${query ? `?${query}` : ''}`);
+  },
+  createTenderCall: (payload: CreateTenderCallPayload) =>
+    request<{ tender: TenderCall }>('/tender-calls', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchTenderOffers: (tenderCallId: string) =>
+    request<TenderOffer[]>(`/tender-calls/${tenderCallId}/offers`),
+  submitTenderOffer: (tenderCallId: string, payload: SubmitTenderOfferPayload) =>
+    request<{ offer: TenderOffer }>(`/tender-calls/${tenderCallId}/offers`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  evaluateTenderOffer: (offerId: string, payload: EvaluateTenderOfferPayload) =>
+    request<{ offer: TenderOffer }>(`/tender-offers/${offerId}/evaluate`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+
+  // Document Management (GED)
+  fetchDocuments: (filters?: { category?: string; status?: string; search?: string; tag?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.category) params.set('category', filters.category);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.search) params.set('search', filters.search);
+    if (filters?.tag) params.set('tag', filters.tag);
+    const query = params.toString();
+    return request<Document[]>(`/documents${query ? `?${query}` : ''}`);
+  },
+  fetchDocument: (id: string) =>
+    request<DocumentDetail>(`/documents/${id}`),
+  createDocument: (payload: CreateDocumentPayload) =>
+    request<Document>('/documents', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateDocument: (id: string, payload: Partial<CreateDocumentPayload>) =>
+    request<Document>(`/documents/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
+  deleteDocument: (id: string) =>
+    request<{ message: string }>(`/documents/${id}`, { method: 'DELETE' }),
+  createDocumentVersion: (id: string, payload: CreateDocumentVersionPayload) =>
+    request<DocumentVersion>(`/documents/${id}/versions`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  approveDocument: (id: string, payload: { comments?: string }) =>
+    request<{ message: string }>(`/documents/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  rejectDocument: (id: string, payload: { comments?: string }) =>
+    request<{ message: string }>(`/documents/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  archiveDocument: (id: string) =>
+    request<{ message: string }>(`/documents/${id}/archive`, {
+      method: 'POST'
+    }),
+  fetchDocumentAccessLogs: (id: string) =>
+    request<DocumentAccessLog[]>(`/documents/${id}/access-logs`),
+  fetchDocumentRetentionRules: () =>
+    request<DocumentRetentionRule[]>('/document-retention-rules'),
+  createDocumentRetentionRule: (payload: CreateDocumentRetentionRulePayload) =>
+    request<DocumentRetentionRule>('/document-retention-rules', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // External Integrations
+  fetchIntegrations: (filters?: { type?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.type) params.set('type', filters.type);
+    const query = params.toString();
+    return request<ExternalIntegration[]>(`/integrations${query ? `?${query}` : ''}`);
+  },
+  fetchIntegration: (id: string) =>
+    request<ExternalIntegration>(`/integrations/${id}`),
+  createIntegration: (payload: CreateIntegrationPayload) =>
+    request<ExternalIntegration>('/integrations', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateIntegration: (id: string, payload: Partial<CreateIntegrationPayload>) =>
+    request<ExternalIntegration>(`/integrations/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
+  deleteIntegration: (id: string) =>
+    request<{ message: string }>(`/integrations/${id}`, { method: 'DELETE' }),
+  testIntegration: (id: string) =>
+    request<{ success: boolean; executionTime?: number; error?: string }>(`/integrations/${id}/test`, {
+      method: 'POST'
+    }),
+  fetchIntegrationLogs: (id: string, limit?: number) => {
+    const params = new URLSearchParams();
+    if (limit) params.set('limit', limit.toString());
+    const query = params.toString();
+    return request<IntegrationLog[]>(`/integrations/${id}/logs${query ? `?${query}` : ''}`);
+  },
+
+  // Webhooks
+  fetchWebhooks: (filters?: { event_type?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.event_type) params.set('event_type', filters.event_type);
+    const query = params.toString();
+    return request<Webhook[]>(`/webhooks${query ? `?${query}` : ''}`);
+  },
+  createWebhook: (payload: CreateWebhookPayload) =>
+    request<Webhook>('/webhooks', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateWebhook: (id: string, payload: Partial<CreateWebhookPayload>) =>
+    request<Webhook>(`/webhooks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
+  deleteWebhook: (id: string) =>
+    request<{ message: string }>(`/webhooks/${id}`, { method: 'DELETE' }),
+
+  // ==========================================
+  // GAMIFICATION ET MOTIVATION
+  // ==========================================
+
+  // Badges
+  fetchBadges: (category?: string) =>
+    request<Badge[]>(`/badges${category ? `?category=${category}` : ''}`),
+  fetchEmployeeBadges: (employeeId: string) =>
+    request<EmployeeBadge[]>(`/employees/${employeeId}/badges`),
+  awardBadge: (employeeId: string, payload: AwardBadgePayload) =>
+    request<EmployeeBadge>(`/employees/${employeeId}/badges`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // Récompenses
+  fetchRewards: () =>
+    request<Reward[]>(`/rewards`),
+  claimReward: (rewardId: string) =>
+    request<RewardClaim>(`/rewards/${rewardId}/claim`, {
+      method: 'POST'
+    }),
+
+  // Défis
+  fetchChallenges: (active?: boolean) =>
+    request<MonthlyChallenge[]>(`/challenges${active !== undefined ? `?active=${active}` : ''}`),
+  fetchChallengeParticipants: (challengeId: string) =>
+    request<ChallengeParticipant[]>(`/challenges/${challengeId}/participants`),
+  createChallenge: (payload: CreateChallengePayload) =>
+    request<MonthlyChallenge>(`/challenges`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // Statistiques
+  fetchEmployeeStatistics: (employeeId: string, periodType?: string) =>
+    request<EmployeeStatistics | null>(`/employees/${employeeId}/statistics${periodType ? `?period_type=${periodType}` : ''}`),
+
+  // Classements
+  fetchLeaderboard: (type?: string, periodType?: string) =>
+    request<Leaderboard>(`/leaderboards${type || periodType ? `?type=${type || 'points'}&period_type=${periodType || 'monthly'}` : '?type=points&period_type=monthly'}`),
+  testWebhook: (id: string) =>
+    request<{ success: boolean; statusCode?: number; executionTime?: number; error?: string }>(`/webhooks/${id}/test`, {
+      method: 'POST'
+    }),
+  fetchWebhookLogs: (id: string, limit?: number) => {
+    const params = new URLSearchParams();
+    if (limit) params.set('limit', limit.toString());
+    const query = params.toString();
+    return request<WebhookLog[]>(`/webhooks/${id}/logs${query ? `?${query}` : ''}`);
+  }
 };
 
 // Alert & Notification types
@@ -2377,4 +2951,907 @@ export type CustomerStatistics = {
   segment: 'A' | 'B' | 'C';
   customer_type: 'prospect' | 'client' | 'inactive';
   currency?: string;
+};
+
+// Reports & Analytics types
+export type WeeklyReport = {
+  week_start: string;
+  week_end: string;
+  volumes: {
+    total: number;
+    by_material: Record<string, number>;
+  };
+  performance: {
+    routes_completed: number;
+    routes_total: number;
+    avg_duration: number;
+    vehicle_fill_rate: number;
+  };
+  financial: {
+    revenue: number;
+    costs: number;
+    margin: number;
+  };
+};
+
+export type MonthlyReport = {
+  month: string;
+  volumes: {
+    total: number;
+    by_material: Record<string, number>;
+    evolution: number;
+  };
+  performance: {
+    teams: Array<{
+      team_name: string;
+      routes_completed: number;
+      avg_duration: number;
+      efficiency_score: number;
+    }>;
+  };
+  financial: {
+    revenue: number;
+    costs: number;
+    margin: number;
+    margin_percentage: number;
+  };
+};
+
+export type RegulatoryReport = {
+  period_start: string;
+  period_end: string;
+  compliance_score: number;
+  waste_tracking: {
+    total_volume: number;
+    tracked_volume: number;
+    tracking_rate: number;
+  };
+  certificates: {
+    generated: number;
+    pending: number;
+    expired: number;
+  };
+  environmental_impact: {
+    co2_saved: number;
+    energy_saved: number;
+    landfill_diverted: number;
+  };
+};
+
+export type PerformanceReport = {
+  period_start: string;
+  period_end: string;
+  teams: Array<{
+    team_id: string;
+    team_name: string;
+    department: string;
+    metrics: {
+      routes_completed: number;
+      avg_duration_hours: number;
+      on_time_rate: number;
+      customer_satisfaction: number;
+      efficiency_score: number;
+    };
+  }>;
+  departments: Array<{
+    department_name: string;
+    total_routes: number;
+    completion_rate: number;
+    avg_efficiency: number;
+  }>;
+};
+
+export type PredictiveAnalysis = {
+  forecast_period: string;
+  volume_forecast: {
+    next_month: number;
+    next_quarter: number;
+    next_year: number;
+    confidence: number;
+  };
+  resource_needs: {
+    vehicles: {
+      current: number;
+      needed: number;
+      recommendation: string;
+    };
+    staff: {
+      current: number;
+      needed: number;
+      recommendation: string;
+    };
+    storage: {
+      current_capacity: number;
+      needed_capacity: number;
+      recommendation: string;
+    };
+  };
+  trends: Array<{
+    metric: string;
+    current_value: number;
+    predicted_value: number;
+    change_percent: number;
+  }>;
+};
+
+// Compliance & Traceability types
+export type WasteTrackingSlip = {
+  id: string;
+  slip_number: string;
+  slip_type: 'BSD' | 'BSDD' | 'BSDA' | 'BSDI';
+  producer_id: string | null;
+  producer_name: string;
+  producer_address: string | null;
+  producer_siret: string | null;
+  transporter_id: string | null;
+  transporter_name: string | null;
+  transporter_address: string | null;
+  transporter_siret: string | null;
+  recipient_id: string | null;
+  recipient_name: string;
+  recipient_address: string | null;
+  recipient_siret: string | null;
+  waste_code: string;
+  waste_description: string;
+  quantity: number;
+  unit: string;
+  collection_date: string;
+  transport_date: string | null;
+  delivery_date: string | null;
+  treatment_date: string | null;
+  treatment_method: string | null;
+  treatment_facility: string | null;
+  status: 'draft' | 'in_transit' | 'delivered' | 'treated' | 'archived';
+  pdf_data: Buffer | null;
+  pdf_filename: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateWasteTrackingSlipPayload = {
+  slip_type: 'BSD' | 'BSDD' | 'BSDA' | 'BSDI';
+  producer_id?: string;
+  producer_name: string;
+  producer_address?: string;
+  producer_siret?: string;
+  transporter_id?: string;
+  transporter_name?: string;
+  transporter_address?: string;
+  transporter_siret?: string;
+  recipient_id?: string;
+  recipient_name: string;
+  recipient_address?: string;
+  recipient_siret?: string;
+  waste_code: string;
+  waste_description: string;
+  quantity: number;
+  unit?: string;
+  collection_date: string;
+  transport_date?: string;
+  delivery_date?: string;
+  treatment_date?: string;
+  treatment_method?: string;
+  treatment_facility?: string;
+};
+
+export type TreatmentCertificate = {
+  id: string;
+  certificate_number: string;
+  waste_tracking_slip_id: string | null;
+  customer_id: string | null;
+  customer_name: string;
+  treatment_date: string;
+  treatment_method: string;
+  treatment_facility: string;
+  waste_code: string;
+  waste_description: string;
+  quantity_treated: number;
+  unit: string;
+  treatment_result: string | null;
+  compliance_status: 'compliant' | 'non_compliant' | 'pending_verification';
+  pdf_data: Buffer | null;
+  pdf_filename: string | null;
+  issued_by: string | null;
+  issued_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+  expires_at: string | null;
+};
+
+export type CreateTreatmentCertificatePayload = {
+  waste_tracking_slip_id?: string;
+  customer_id?: string;
+  customer_name: string;
+  treatment_date: string;
+  treatment_method: string;
+  treatment_facility: string;
+  waste_code: string;
+  waste_description: string;
+  quantity_treated: number;
+  unit?: string;
+  treatment_result?: string;
+  expires_at?: string;
+};
+
+export type TraceabilityLink = {
+  id: string;
+  chain_reference: string;
+  waste_tracking_slip_id: string | null;
+  origin_type: 'collection' | 'customer' | 'warehouse' | 'treatment' | 'valorization';
+  origin_id: string | null;
+  origin_name: string;
+  destination_type: 'warehouse' | 'treatment' | 'valorization' | 'disposal' | 'customer';
+  destination_id: string | null;
+  destination_name: string;
+  material_id: string | null;
+  material_name: string | null;
+  quantity: number;
+  unit: string;
+  transaction_date: string;
+  transaction_type: 'collection' | 'transfer' | 'treatment' | 'valorization' | 'disposal';
+  notes: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+};
+
+export type CreateTraceabilityLinkPayload = {
+  waste_tracking_slip_id?: string;
+  chain_reference?: string;
+  origin_type: 'collection' | 'customer' | 'warehouse' | 'treatment' | 'valorization';
+  origin_id?: string;
+  origin_name: string;
+  destination_type: 'warehouse' | 'treatment' | 'valorization' | 'disposal' | 'customer';
+  destination_id?: string;
+  destination_name: string;
+  material_id?: string;
+  material_name?: string;
+  quantity: number;
+  unit?: string;
+  transaction_date: string;
+  transaction_type: 'collection' | 'transfer' | 'treatment' | 'valorization' | 'disposal';
+  notes?: string;
+};
+
+export type ComplianceCheck = {
+  id: string;
+  entity_type: string;
+  entity_id: string | null;
+  rule_id: string | null;
+  check_type: 'automatic' | 'manual' | 'scheduled';
+  check_status: 'pending' | 'passed' | 'failed' | 'warning';
+  check_result: any;
+  checked_by: string | null;
+  checked_by_name: string | null;
+  checked_at: string | null;
+  created_at: string;
+  rule_name?: string;
+  rule_code?: string;
+  severity?: 'info' | 'warning' | 'error' | 'critical';
+};
+
+export type RegulatoryDocument = {
+  id: string;
+  document_type: 'BSD' | 'certificate' | 'compliance_report' | 'audit_report' | 'other';
+  document_number: string;
+  related_entity_type: string | null;
+  related_entity_id: string | null;
+  title: string;
+  description: string | null;
+  file_name: string;
+  file_mimetype: string | null;
+  file_size: number;
+  storage_location: string | null;
+  retention_period_years: number;
+  archived_at: string | null;
+  archived_by_name: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+// Logistics Optimization types
+export type OptimizedRoute = {
+  id: string;
+  route_id: string | null;
+  optimization_date: string;
+  optimization_algorithm: 'nearest_neighbor' | 'genetic' | 'simulated_annealing' | 'tabu_search' | 'custom';
+  total_distance_km: number | null;
+  total_duration_minutes: number | null;
+  total_cost: number | null;
+  vehicle_utilization_rate: number | null;
+  stops_count: number;
+  optimization_score: number | null;
+  optimization_config: any;
+  optimized_path: any;
+  created_by: string | null;
+  created_at: string;
+};
+
+export type RouteOptimizationMetrics = {
+  total_distance_km: number;
+  total_duration_minutes: number;
+  vehicle_utilization_rate: number | null;
+  stops_count: number;
+};
+
+export type RouteScenario = {
+  id: string;
+  scenario_name: string;
+  scenario_description: string | null;
+  base_route_id: string | null;
+  scenario_type: 'what_if' | 'comparison' | 'optimization_test' | 'constraint_test';
+  scenario_config: any;
+  simulated_route_data: any;
+  simulated_metrics: any;
+  comparison_results: any;
+  is_applied: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  base_route_date?: string | null;
+  created_by_name?: string | null;
+};
+
+export type CreateScenarioPayload = {
+  scenario_name: string;
+  scenario_description?: string;
+  base_route_id?: string;
+  scenario_type: 'what_if' | 'comparison' | 'optimization_test' | 'constraint_test';
+  scenario_config?: any;
+};
+
+export type VehicleLoadOptimization = {
+  id: string;
+  route_id: string | null;
+  vehicle_id: string;
+  optimization_date: string;
+  total_weight_kg: number | null;
+  total_volume_m3: number | null;
+  max_weight_capacity: number | null;
+  max_volume_capacity: number | null;
+  weight_utilization_rate: number | null;
+  volume_utilization_rate: number | null;
+  load_distribution: any;
+  compatibility_check: any;
+  optimization_recommendations: any;
+  created_by: string | null;
+  created_at: string;
+};
+
+export type LoadOptimizationMetrics = {
+  total_weight_kg: number;
+  total_volume_m3: number;
+  weight_utilization_rate: number;
+  volume_utilization_rate: number;
+  recommendations: string[];
+};
+
+export type DemandForecast = {
+  id: string;
+  forecast_date: string;
+  zone_id: string | null;
+  zone_name: string;
+  zone_coordinates: any;
+  material_type: string | null;
+  forecasted_volume: number;
+  forecasted_weight: number | null;
+  confidence_level: number | null;
+  forecast_method: 'historical' | 'trend' | 'seasonal' | 'ml' | 'manual' | null;
+  historical_data: any;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateDemandForecastPayload = {
+  forecast_date: string;
+  zone_id?: string;
+  zone_name: string;
+  zone_coordinates?: any;
+  material_type?: string;
+  forecasted_volume: number;
+  forecasted_weight?: number;
+  confidence_level?: number;
+  forecast_method?: 'historical' | 'trend' | 'seasonal' | 'ml' | 'manual';
+  historical_data?: any;
+};
+
+export type RealTimeTracking = {
+  id: string;
+  route_id: string | null;
+  vehicle_id: string | null;
+  current_stop_id: string | null;
+  current_latitude: number | null;
+  current_longitude: number | null;
+  current_speed_kmh: number | null;
+  estimated_arrival_time: string | null;
+  estimated_duration_minutes: number | null;
+  distance_to_destination_km: number | null;
+  traffic_conditions: string | null;
+  tracking_status: 'active' | 'paused' | 'completed' | 'cancelled';
+  last_update: string;
+  created_at: string;
+  route_date?: string | null;
+  vehicle_number?: string | null;
+  customer_id?: string | null;
+  customer_name?: string | null;
+};
+
+export type UpdateRealTimeTrackingPayload = {
+  route_id: string;
+  vehicle_id: string;
+  current_stop_id?: string;
+  current_latitude?: number;
+  current_longitude?: number;
+  current_speed_kmh?: number;
+  estimated_arrival_time?: string;
+  estimated_duration_minutes?: number;
+  distance_to_destination_km?: number;
+  traffic_conditions?: string;
+};
+
+export type RoutingConstraint = {
+  id: string;
+  constraint_type: 'customer_hours' | 'max_weight' | 'max_volume' | 'restricted_zone' | 'vehicle_compatibility' | 'driver_hours' | 'custom';
+  constraint_name: string;
+  constraint_description: string | null;
+  constraint_config: any;
+  is_active: boolean;
+  applies_to: string[];
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by_name?: string | null;
+};
+
+export type CreateRoutingConstraintPayload = {
+  constraint_type: 'customer_hours' | 'max_weight' | 'max_volume' | 'restricted_zone' | 'vehicle_compatibility' | 'driver_hours' | 'custom';
+  constraint_name: string;
+  constraint_description?: string;
+  constraint_config?: any;
+  applies_to?: string[];
+};
+
+// Suppliers Management types
+export type Supplier = {
+  id: string;
+  supplier_code: string;
+  name: string;
+  supplier_type: 'transporter' | 'service_provider' | 'material_supplier' | 'equipment_supplier' | 'other';
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  city: string | null;
+  postal_code: string | null;
+  country: string;
+  siret: string | null;
+  vat_number: string | null;
+  payment_terms: string | null;
+  bank_details: any;
+  notes: string | null;
+  is_active: boolean;
+  average_rating: number | null;
+  total_orders: number;
+  total_value: number;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+  evaluation_count?: number;
+  order_count?: number;
+};
+
+export type CreateSupplierPayload = {
+  supplier_code: string;
+  name: string;
+  supplier_type: 'transporter' | 'service_provider' | 'material_supplier' | 'equipment_supplier' | 'other';
+  contact_name?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  postal_code?: string;
+  country?: string;
+  siret?: string;
+  vat_number?: string;
+  payment_terms?: string;
+  bank_details?: any;
+  notes?: string;
+};
+
+export type SupplierEvaluation = {
+  id: string;
+  supplier_id: string;
+  evaluation_date: string;
+  evaluated_by: string | null;
+  evaluated_by_name: string | null;
+  quality_score: number | null;
+  delivery_time_score: number | null;
+  price_score: number | null;
+  communication_score: number | null;
+  overall_score: number | null;
+  comments: string | null;
+  order_id: string | null;
+  created_at: string;
+};
+
+export type CreateSupplierEvaluationPayload = {
+  evaluation_date?: string;
+  quality_score?: number;
+  delivery_time_score?: number;
+  price_score?: number;
+  communication_score?: number;
+  comments?: string;
+  order_id?: string;
+};
+
+export type SupplierOrder = {
+  id: string;
+  order_number: string;
+  supplier_id: string;
+  supplier_name: string;
+  order_date: string;
+  expected_delivery_date: string | null;
+  actual_delivery_date: string | null;
+  order_status: 'draft' | 'sent' | 'confirmed' | 'in_progress' | 'delivered' | 'cancelled' | 'completed';
+  order_type: 'material' | 'service' | 'transport' | 'equipment' | 'other' | null;
+  total_amount: number;
+  currency: string;
+  items: Array<{ description: string; quantity: number; unit_price: number; total: number }>;
+  notes: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateSupplierOrderPayload = {
+  supplier_id: string;
+  order_date?: string;
+  expected_delivery_date?: string;
+  order_type?: 'material' | 'service' | 'transport' | 'equipment' | 'other';
+  items: Array<{ description: string; quantity: number; unit_price: number }>;
+  notes?: string;
+};
+
+export type SupplierReception = {
+  id: string;
+  order_id: string;
+  reception_date: string;
+  reception_status: 'partial' | 'complete' | 'rejected';
+  received_items: any[];
+  quality_check_passed: boolean | null;
+  quality_check_notes: string | null;
+  received_by: string | null;
+  received_by_name: string | null;
+  notes: string | null;
+  created_at: string;
+};
+
+export type ReceiveSupplierOrderPayload = {
+  reception_date?: string;
+  reception_status?: 'partial' | 'complete' | 'rejected';
+  received_items: Array<{ item_id?: string; description: string; quantity_received: number }>;
+  quality_check_passed?: boolean;
+  quality_check_notes?: string;
+  notes?: string;
+};
+
+export type SupplierInvoice = {
+  id: string;
+  invoice_number: string;
+  supplier_id: string;
+  supplier_name: string;
+  order_id: string | null;
+  invoice_date: string;
+  due_date: string;
+  payment_date: string | null;
+  invoice_status: 'pending' | 'paid' | 'overdue' | 'cancelled' | 'disputed';
+  subtotal: number;
+  tax_amount: number;
+  total_amount: number;
+  currency: string;
+  payment_method: string | null;
+  payment_reference: string | null;
+  notes: string | null;
+  pdf_data: Buffer | null;
+  pdf_filename: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateSupplierInvoicePayload = {
+  invoice_number: string;
+  supplier_id: string;
+  order_id?: string;
+  invoice_date: string;
+  due_date: string;
+  subtotal?: number;
+  tax_amount?: number;
+  total_amount: number;
+  currency?: string;
+  notes?: string;
+};
+
+export type PaySupplierInvoicePayload = {
+  payment_date?: string;
+  payment_method?: string;
+  payment_reference?: string;
+};
+
+export type TenderCall = {
+  id: string;
+  tender_number: string;
+  title: string;
+  description: string | null;
+  tender_type: 'material' | 'service' | 'transport' | 'equipment' | 'other';
+  start_date: string;
+  end_date: string;
+  submission_deadline: string;
+  status: 'draft' | 'published' | 'closed' | 'awarded' | 'cancelled';
+  requirements: any;
+  evaluation_criteria: any;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+  offer_count?: number;
+};
+
+export type CreateTenderCallPayload = {
+  title: string;
+  description?: string;
+  tender_type: 'material' | 'service' | 'transport' | 'equipment' | 'other';
+  start_date: string;
+  end_date: string;
+  submission_deadline: string;
+  requirements?: any;
+  evaluation_criteria?: any;
+};
+
+export type TenderOffer = {
+  id: string;
+  tender_call_id: string;
+  supplier_id: string;
+  supplier_name: string;
+  offer_amount: number;
+  currency: string;
+  delivery_time_days: number | null;
+  validity_days: number | null;
+  offer_details: any;
+  technical_specifications: any;
+  offer_status: 'submitted' | 'under_review' | 'accepted' | 'rejected' | 'withdrawn';
+  evaluation_score: number | null;
+  evaluation_notes: string | null;
+  submitted_at: string;
+  evaluated_at: string | null;
+  evaluated_by: string | null;
+  evaluated_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SubmitTenderOfferPayload = {
+  supplier_id: string;
+  offer_amount: number;
+  currency?: string;
+  delivery_time_days?: number;
+  validity_days?: number;
+  offer_details?: any;
+  technical_specifications?: any;
+};
+
+export type EvaluateTenderOfferPayload = {
+  offer_status?: 'submitted' | 'under_review' | 'accepted' | 'rejected' | 'withdrawn';
+  evaluation_score?: number;
+  evaluation_notes?: string;
+};
+
+// Document Management Types
+export type Document = {
+  id: string;
+  document_number: string;
+  title: string;
+  description: string | null;
+  category: 'contract' | 'invoice' | 'report' | 'certificate' | 'compliance' | 'hr' | 'financial' | 'legal' | 'other';
+  file_name: string;
+  file_path: string;
+  file_size: number;
+  mime_type: string;
+  file_hash: string | null;
+  status: 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'archived' | 'deleted';
+  is_sensitive: boolean;
+  requires_approval: boolean;
+  current_version: number;
+  retention_rule_id: string | null;
+  archived_at: string | null;
+  archived_by: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  updated_by: string | null;
+  updated_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+  tags?: string[];
+  version_count?: number;
+  pending_approvals?: number;
+};
+
+export type DocumentVersion = {
+  id: string;
+  document_id: string;
+  version_number: number;
+  file_name: string;
+  file_path: string;
+  file_size: number;
+  mime_type: string;
+  file_hash: string | null;
+  change_summary: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+};
+
+export type DocumentApproval = {
+  id: string;
+  document_id: string;
+  approver_id: string;
+  approver_name: string;
+  approval_order: number;
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  comments: string | null;
+  approved_at: string | null;
+  created_at: string;
+};
+
+export type DocumentAccessLog = {
+  id: string;
+  document_id: string;
+  user_id: string | null;
+  user_name: string | null;
+  action: 'view' | 'download' | 'upload' | 'update' | 'delete' | 'approve' | 'reject' | 'archive';
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+};
+
+export type DocumentRetentionRule = {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  retention_years: number;
+  auto_archive: boolean;
+  archive_after_days: number | null;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DocumentDetail = Document & {
+  versions: DocumentVersion[];
+  tags: string[];
+  approvals: DocumentApproval[];
+};
+
+export type CreateDocumentPayload = {
+  title: string;
+  description?: string;
+  category: Document['category'];
+  file_name: string;
+  file_path: string;
+  file_size?: number;
+  mime_type?: string;
+  file_hash?: string;
+  is_sensitive?: boolean;
+  requires_approval?: boolean;
+  tags?: string[];
+  retention_rule_id?: string;
+};
+
+export type CreateDocumentVersionPayload = {
+  file_name: string;
+  file_path: string;
+  file_size?: number;
+  mime_type?: string;
+  file_hash?: string;
+  change_summary?: string;
+};
+
+export type CreateDocumentRetentionRulePayload = {
+  name: string;
+  description?: string;
+  category?: string;
+  retention_years?: number;
+  auto_archive?: boolean;
+  archive_after_days?: number;
+};
+
+// External Integrations Types
+export type ExternalIntegration = {
+  id: string;
+  integration_type: 'accounting' | 'email' | 'sms' | 'gps' | 'scale' | 'webhook' | 'other';
+  name: string;
+  provider: string;
+  is_active: boolean;
+  config: Record<string, any>;
+  credentials: Record<string, any>;
+  last_sync_at: string | null;
+  last_error: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateIntegrationPayload = {
+  integration_type: ExternalIntegration['integration_type'];
+  name: string;
+  provider: string;
+  is_active?: boolean;
+  config?: Record<string, any>;
+  credentials?: Record<string, any>;
+};
+
+export type IntegrationLog = {
+  id: string;
+  integration_id: string | null;
+  integration_type: string;
+  action: string;
+  status: 'success' | 'error' | 'pending';
+  request_data: Record<string, any> | null;
+  response_data: Record<string, any> | null;
+  error_message: string | null;
+  execution_time_ms: number | null;
+  created_at: string;
+};
+
+export type Webhook = {
+  id: string;
+  name: string;
+  url: string;
+  event_type: string;
+  http_method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  headers: Record<string, any>;
+  payload_template: Record<string, any> | null;
+  is_active: boolean;
+  secret_token: string | null;
+  retry_count: number;
+  timeout_seconds: number;
+  last_triggered_at: string | null;
+  last_status_code: number | null;
+  last_error: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateWebhookPayload = {
+  name: string;
+  url: string;
+  event_type: string;
+  http_method?: Webhook['http_method'];
+  headers?: Record<string, any>;
+  payload_template?: Record<string, any>;
+  secret_token?: string;
+  retry_count?: number;
+  timeout_seconds?: number;
+};
+
+export type WebhookLog = {
+  id: string;
+  webhook_id: string;
+  event_type: string;
+  payload: Record<string, any>;
+  response_status: number | null;
+  response_body: string | null;
+  error_message: string | null;
+  execution_time_ms: number | null;
+  triggered_at: string;
 };

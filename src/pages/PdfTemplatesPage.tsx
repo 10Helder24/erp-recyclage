@@ -140,6 +140,18 @@ const PdfTemplatesPage = () => {
     }
   };
 
+  // Notifier tous les onglets/fenêtres qu'un template a été mis à jour
+  const notifyTemplateUpdate = () => {
+    if (typeof window !== 'undefined') {
+      // Utiliser localStorage pour notifier les autres onglets
+      localStorage.setItem('pdf_template_updated', Date.now().toString());
+      localStorage.removeItem('pdf_template_updated'); // Retirer immédiatement pour permettre de nouvelles notifications
+      
+      // Notifier aussi la fenêtre actuelle
+      window.dispatchEvent(new Event('pdf_template_updated'));
+    }
+  };
+
   const handleSave = async () => {
     if (!selectedModule) return;
     try {
@@ -150,6 +162,8 @@ const PdfTemplatesPage = () => {
         return [...existing, updated];
       });
       toast.success('Template enregistré');
+      // Notifier tous les utilisateurs que le template a été mis à jour
+      notifyTemplateUpdate();
     } catch (error) {
       console.error(error);
       toast.error('Enregistrement impossible');
