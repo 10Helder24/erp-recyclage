@@ -43,16 +43,18 @@ export const usePdfTemplate = (module: string) => {
 
   const fetchTemplate = useCallback(async (force = false) => {
     try {
-      // Ajouter un timestamp pour éviter le cache du navigateur
-      const timestamp = force ? Date.now() : lastCheckRef.current;
-      setState((prev) => ({ ...prev, loading: true }));
+      // Ne pas afficher le loading si c'est juste une vérification périodique
+      if (force) {
+        setState((prev) => ({ ...prev, loading: true }));
+      }
       
-      // Ajouter un paramètre de cache-busting à la requête si forcé
-      const template = await Api.fetchPdfTemplate(module, force);
+      // Toujours utiliser cache-busting pour détecter les changements même lors des vérifications périodiques
+      const template = await Api.fetchPdfTemplate(module, true);
       
-      // Vérifier si le template a été mis à jour
+      // Vérifier si le template a été mis à jour en comparant le timestamp
       const templateUpdated = template.updated_at ? new Date(template.updated_at).getTime() : 0;
-      const shouldUpdate = force || !state.lastUpdated || templateUpdated > state.lastUpdated;
+      const currentLastUpdated = state.lastUpdated || 0;
+      const shouldUpdate = force || templateUpdated > currentLastUpdated;
       
       if (shouldUpdate) {
         setState({
@@ -63,7 +65,9 @@ export const usePdfTemplate = (module: string) => {
         });
         lastCheckRef.current = Date.now();
       } else {
+        // Pas de changement, juste mettre à jour le timestamp de vérification
         setState((prev) => ({ ...prev, loading: false }));
+        lastCheckRef.current = Date.now();
       }
     } catch (error) {
       setState({
@@ -84,10 +88,13 @@ export const usePdfTemplate = (module: string) => {
       fetchTemplate(true);
     });
     
-    // Vérifier périodiquement si le template a été mis à jour (toutes les 30 secondes)
+    // Vérifier périodiquement si le template a été mis à jour (toutes les 10 secondes pour détecter rapidement les changements)
     intervalRef.current = setInterval(() => {
-      fetchTemplate(false);
-    }, 30000);
+      // Vérifier seulement si assez de temps s'est écoulé depuis la dernière vérification
+      if (Date.now() - lastCheckRef.current > 8000) { // Au moins 8 secondes entre les vérifications
+        fetchTemplate(false);
+      }
+    }, 10000); // Vérifier toutes les 10 secondes
     
     return () => {
       cleanup();

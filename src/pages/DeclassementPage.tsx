@@ -112,6 +112,10 @@ const DeclassementPage = () => {
   const handlePreview = async () => {
     const pdfInput = getPdfInput();
     if (!pdfInput) return;
+    if (templateLoading) {
+      toast.error('Chargement du template en cours...');
+      return;
+    }
 
     try {
       const pdf = await buildPdf(pdfInput, templateConfig || undefined);
@@ -124,6 +128,10 @@ const DeclassementPage = () => {
   const handleSubmit = async () => {
     const pdfInput = getPdfInput();
     if (!pdfInput) return;
+    if (templateLoading) {
+      toast.error('Chargement du template en cours...');
+      return;
+    }
 
     setLoading(true);
     try {

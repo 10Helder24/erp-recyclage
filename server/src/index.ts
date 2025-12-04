@@ -6399,7 +6399,7 @@ app.get(
 
 app.get(
   '/api/pdf-templates/:module',
-  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_pdf_templates', 'view_pdf_templates'] }),
+  requireAuth(), // Tous les utilisateurs authentifiés peuvent lire les templates
   asyncHandler(async (req, res) => {
     const module = req.params.module;
     const template = await getPdfTemplate(module);
@@ -10512,12 +10512,16 @@ const generateAlerts = async () => {
   try {
     // 1. Alertes opérationnelles - Stocks faibles
     const lowStockAlerts = await run(`
-      select st.material_id, st.warehouse_id, COALESCE(m.description, m.abrege) as material_name, w.name as warehouse_name,
-             COALESCE(sl.quantity, 0) as current_quantity, st.min_quantity as min_threshold
+      select COALESCE(sl.material_id, st.material_id) as material_id, 
+             COALESCE(sl.warehouse_id, st.warehouse_id) as warehouse_id, 
+             COALESCE(m.description, m.abrege) as material_name, 
+             w.name as warehouse_name,
+             COALESCE(sl.quantity, 0) as current_quantity, 
+             st.min_quantity as min_threshold
       from stock_thresholds st
       join materials m on m.id = st.material_id
       left join warehouses w on w.id = st.warehouse_id
-      left join stock_levels sl on sl.material_id = st.material_id and sl.warehouse_id = st.warehouse_id
+      left join stock_levels sl on sl.material_id = st.material_id and (sl.warehouse_id = st.warehouse_id or (sl.warehouse_id is null and st.warehouse_id is null))
       where COALESCE(sl.quantity, 0) < st.min_quantity
         and st.alert_enabled = true
         and not exists (
@@ -10529,6 +10533,7 @@ const generateAlerts = async () => {
         )
     `);
     for (const stock of lowStockAlerts) {
+      if (!stock.material_id) continue; // Skip if no material_id
       await run(
         `insert into alerts (
           alert_category, alert_type, severity, title, message,
@@ -10537,12 +10542,12 @@ const generateAlerts = async () => {
         [
           'operational',
           'low_stock',
-          stock.current_quantity < stock.min_threshold * 0.5 ? 'critical' : 'high',
-          `Stock faible: ${stock.material_name}`,
-          `Le stock de ${stock.material_name}${stock.warehouse_name ? ` dans ${stock.warehouse_name}` : ''} est en dessous du seuil minimum (${stock.current_quantity} < ${stock.min_threshold})`,
+          (stock.current_quantity || 0) < (stock.min_threshold || 0) * 0.5 ? 'critical' : 'high',
+          `Stock faible: ${stock.material_name || 'Matière inconnue'}`,
+          `Le stock de ${stock.material_name || 'Matière inconnue'}${stock.warehouse_name ? ` dans ${stock.warehouse_name}` : ''} est en dessous du seuil minimum (${stock.current_quantity || 0} < ${stock.min_threshold || 0})`,
           'stock',
           stock.material_id,
-          JSON.stringify({ warehouse_id: stock.warehouse_id, current_quantity: stock.current_quantity, min_threshold: stock.min_threshold })
+          JSON.stringify({ warehouse_id: stock.warehouse_id, current_quantity: stock.current_quantity || 0, min_threshold: stock.min_threshold || 0 })
         ]
       );
     }

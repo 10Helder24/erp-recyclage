@@ -171,6 +171,10 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
   };
 
   const handleDownload = async (data: Record<string, string>, dateLabel: string) => {
+    if (templateLoading) {
+      toast.error('Chargement du template en cours...');
+      return;
+    }
     try {
       const pdf = await buildCDTPdf(data, dateLabel, templateConfig || undefined);
       pdf.doc.save(pdf.filename);
@@ -180,6 +184,10 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
   };
 
   const handlePreview = async (data: Record<string, string>, dateLabel: string) => {
+    if (templateLoading) {
+      toast.error('Chargement du template en cours...');
+      return;
+    }
     try {
       const pdf = await buildCDTPdf(data, dateLabel, templateConfig || undefined);
       openPdfPreview({ doc: pdf.doc as unknown as jsPDF, filename: pdf.filename });
@@ -189,6 +197,10 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
   };
 
   const handleSendEmail = async (data: Record<string, string>, dateLabel: string) => {
+    if (templateLoading) {
+      toast.error('Chargement du template en cours...');
+      return;
+    }
     setLoading(true);
     try {
       const pdf = await buildCDTPdf(data, dateLabel, templateConfig || undefined);

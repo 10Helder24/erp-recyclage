@@ -258,7 +258,7 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
       });
     }
   }, [reportDate]);
-  const { config: templateConfig } = usePdfTemplate('inventory');
+  const { config: templateConfig, loading: templateLoading } = usePdfTemplate('inventory');
 
   // Fonction pour sauvegarder toutes les données
   const saveAllData = async () => {
@@ -728,6 +728,10 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
 
   const handleDownloadPdf = async () => {
     try {
+      if (templateLoading) {
+        toast.error('Chargement du template en cours...');
+        return;
+      }
       const pdf = await buildInventoryPdf(reportDateLabel, getSnapshot(), templateConfig || undefined);
       pdf.doc.save(pdf.filename);
     } catch (error) {
@@ -782,6 +786,10 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
 
   const handlePreviewPdf = async () => {
     try {
+      if (templateLoading) {
+        toast.error('Chargement du template en cours...');
+        return;
+      }
       const pdf = await buildInventoryPdf(reportDateLabel, getSnapshot(), templateConfig || undefined);
       openPdfPreview({ doc: pdf.doc as unknown as jsPDF, filename: pdf.filename });
     } catch (error) {
@@ -800,6 +808,10 @@ export function InventorySheet({ articles, user, signOut }: InventorySheetProps)
   const handleSendEmail = async () => {
     setIsSending(true);
     try {
+      if (templateLoading) {
+        toast.error('Chargement du template en cours...');
+        return;
+      }
       const pdf = await buildInventoryPdf(reportDateLabel, getSnapshot(), templateConfig || undefined);
       const excel = buildInventoryExcelBase64(reportDateLabel, getSnapshot());
       await Api.sendInventorySheet({

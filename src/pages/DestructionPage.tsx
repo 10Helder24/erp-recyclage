@@ -359,6 +359,10 @@ const DestructionMatieres: React.FC = () => {
       toast.error('Veuillez ajouter une signature.');
       return;
     }
+    if (templateLoading) {
+      toast.error('Chargement du template en cours...');
+      return;
+    }
 
     try {
       const pdf = await buildPDF(templateConfig || undefined);
@@ -375,6 +379,10 @@ const DestructionMatieres: React.FC = () => {
     }
     if (!signatureImage) {
       toast.error('Veuillez ajouter une signature.');
+      return;
+    }
+    if (templateLoading) {
+      toast.error('Chargement du template en cours...');
       return;
     }
 
@@ -415,6 +423,10 @@ const DestructionMatieres: React.FC = () => {
     }
     if (!signatureImage) {
       toast.error('Veuillez ajouter une signature.');
+      return;
+    }
+    if (templateLoading) {
+      toast.error('Chargement du template en cours...');
       return;
     }
 
