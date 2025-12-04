@@ -181,18 +181,7 @@ const App = () => {
   const [geoWatchId, setGeoWatchId] = useState<number | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker
-        .register('/sw.js')
-        .then((registration) => {
-          console.log('Service Worker registered:', registration);
-        })
-        .catch((error) => {
-          console.error('Service Worker registration failed:', error);
-        });
-    }
-  }, []);
+  // Service Worker est déjà enregistré dans main.tsx, pas besoin de le refaire ici
 
   const toggleGroup = (groupId: string) => {
     setOpenGroups((prev) => ({
