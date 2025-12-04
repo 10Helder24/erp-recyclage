@@ -2008,9 +2008,13 @@ const ensureSchema = async () => {
       current_value numeric not null default 0,
       progress_percentage numeric not null default 0,
       rank integer,
-      joined_at timestamptz not null default now(),
-      unique(challenge_id, coalesce(team_id, ''), coalesce(employee_id::text, ''))
+      joined_at timestamptz not null default now()
     )
+  `);
+  // Index unique avec COALESCE pour gérer les NULL
+  await run(`
+    create unique index if not exists challenge_participants_unique_idx 
+    on challenge_participants(challenge_id, coalesce(team_id, ''), coalesce(employee_id::text, ''))
   `);
   await run('create index if not exists challenge_participants_challenge_idx on challenge_participants(challenge_id, rank)');
   await run('create index if not exists challenge_participants_team_idx on challenge_participants(team_id) where team_id is not null');
@@ -2531,6 +2535,23 @@ const ensureSchema = async () => {
   await run('create index if not exists stock_movements_warehouse_idx on stock_movements(warehouse_id, created_at desc)');
   await run('create index if not exists stock_movements_type_idx on stock_movements(movement_type, created_at desc)');
   await run('create index if not exists stock_movements_reference_idx on stock_movements(reference_type, reference_id)');
+
+  // Niveaux de stock actuels (vue agrégée des mouvements)
+  await run(`
+    create table if not exists stock_levels (
+      id uuid primary key default gen_random_uuid(),
+      material_id uuid not null references materials(id) on delete cascade,
+      warehouse_id uuid references warehouses(id) on delete cascade,
+      quantity numeric not null default 0,
+      unit text,
+      last_movement_id uuid references stock_movements(id) on delete set null,
+      last_updated timestamptz not null default now(),
+      unique(material_id, warehouse_id)
+    )
+  `);
+  await run('create index if not exists stock_levels_material_idx on stock_levels(material_id)');
+  await run('create index if not exists stock_levels_warehouse_idx on stock_levels(warehouse_id)');
+  await run('create index if not exists stock_levels_quantity_idx on stock_levels(quantity) where quantity > 0');
 
   // Valorisation des stocks
   await run(`
