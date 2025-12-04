@@ -10576,11 +10576,12 @@ const generateAlerts = async () => {
     // 2. Alertes opérationnelles - Véhicules en retard
     const lateVehicles = await run(`
       select r.id, r.vehicle_id, v.plate_number, v.internal_number,
-             r.date, r.estimated_completion_time, now() as current_time
+             r.date, r.estimated_end_time, now() as current_time
       from routes r
       join vehicles v on v.id = r.vehicle_id
       where r.status = 'in_progress'
-        and r.estimated_completion_time < now()
+        and r.estimated_end_time is not null
+        and r.estimated_end_time < now()
         and not exists (
           select 1 from alerts a
           where a.entity_type = 'route'
@@ -10603,7 +10604,7 @@ const generateAlerts = async () => {
           `Le véhicule ${vehicle.plate_number || vehicle.internal_number || 'N/A'} est en retard sur sa tournée prévue`,
           'route',
           vehicle.id,
-          JSON.stringify({ vehicle_id: vehicle.vehicle_id, estimated_completion: vehicle.estimated_completion_time })
+          JSON.stringify({ vehicle_id: vehicle.vehicle_id, estimated_completion: vehicle.estimated_end_time })
         ]
       );
     }
@@ -14479,7 +14480,7 @@ app.get(
     const participants = await run(
       `select cp.*,
               cp.team_id as team_name, -- team_id contient directement le nom du département
-              e.first_name, e.last_name, e.employee_email
+              e.first_name, e.last_name, e.email as employee_email
        from challenge_participants cp
        left join employees e on e.id = cp.employee_id
        where cp.challenge_id = $1
@@ -14531,7 +14532,7 @@ app.get(
       let sql = '';
       if (leaderboardType === 'points') {
         sql = `
-          select e.id, e.first_name, e.last_name, e.employee_email,
+          select e.id, e.first_name, e.last_name, e.email as employee_email,
                  coalesce(es.total_points, 0) as value
           from employees e
           left join employee_statistics es on es.employee_id = e.id and es.period_type = $1
@@ -14541,7 +14542,7 @@ app.get(
         `;
       } else if (leaderboardType === 'volume') {
         sql = `
-          select e.id, e.first_name, e.last_name, e.employee_email,
+          select e.id, e.first_name, e.last_name, e.email as employee_email,
                  coalesce(es.total_volume_kg, 0) as value
           from employees e
           left join employee_statistics es on es.employee_id = e.id and es.period_type = $1
@@ -14551,12 +14552,12 @@ app.get(
         `;
       } else if (leaderboardType === 'badges') {
         sql = `
-          select e.id, e.first_name, e.last_name, e.employee_email,
+          select e.id, e.first_name, e.last_name, e.email as employee_email,
                  count(eb.id) as value
           from employees e
           left join employee_badges eb on eb.employee_id = e.id
           where e.is_active = true
-          group by e.id, e.first_name, e.last_name, e.employee_email
+          group by e.id, e.first_name, e.last_name, e.email
           order by count(eb.id) desc
           limit 100
         `;
