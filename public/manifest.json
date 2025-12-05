@@ -2,7 +2,7 @@
   "name": "ERP RETRIPA - Application Mobile",
   "short_name": "ERP Mobile",
   "description": "Application mobile pour les opérateurs terrain",
-  "start_url": "/",
+  "start_url": "/?v=",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#2563eb",

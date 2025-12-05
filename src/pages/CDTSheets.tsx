@@ -293,17 +293,23 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
                 {binTypes.map((item, index) => (
                       <tr key={index}>
                         <td className="sticky">{item.name}</td>
-                    {['7m3', '10m3', '20m3', '36m3', '24m3', 'benne', 'vrac', 'vider'].map((size) => (
+                    {['7m3', '10m3', '20m3', '36m3', '24m3', 'benne', 'vrac', 'vider'].map((size) => {
+                          const fieldId = `cdt_${item.name.replace(/\s+/g, '_')}_${size}`;
+                          const fieldName = `${item.name}_${size}`;
+                          return (
                           <td key={size}>
                         <input
                           type="text"
-                              className="destruction-input"
-                          value={formData[`${item.name}_${size}`] || ''}
-                          onChange={(e) => handleInputChange(`${item.name}_${size}`, e.target.value)}
+                          id={fieldId}
+                          name={fieldName}
+                          className="destruction-input"
+                          value={formData[fieldName] || ''}
+                          onChange={(e) => handleInputChange(fieldName, e.target.value)}
                           placeholder="-"
                         />
                       </td>
-                    ))}
+                    );
+                    })}
                   </tr>
                 ))}
               </tbody>
@@ -338,18 +344,24 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
                             { key: 'benne', label: 'en benne' },
                             { key: 'vrac', label: 'en vrac estimé' },
                             { key: 'vider', label: 'A vider sur site' }
-                          ].map(({ key, label }) => (
+                          ].map(({ key, label }) => {
+                            const fieldId = `cdt_mobile_${item.name.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '')}_${key}`;
+                            const fieldName = `${item.name}_${key}`;
+                            return (
                             <div key={key} className="cdt-mobile-field">
-                              <label className="cdt-mobile-field-label">{label}</label>
+                              <label htmlFor={fieldId} className="cdt-mobile-field-label">{label}</label>
                   <input
                     type="text"
-                                className="destruction-input"
-                                value={formData[`${item.name}_${key}`] || ''}
-                                onChange={(e) => handleInputChange(`${item.name}_${key}`, e.target.value)}
+                    id={fieldId}
+                    name={fieldName}
+                    className="destruction-input"
+                    value={formData[fieldName] || ''}
+                    onChange={(e) => handleInputChange(fieldName, e.target.value)}
                     placeholder="-"
                   />
                 </div>
-              ))}
+              );
+              })}
             </div>
                       )}
                     </div>
@@ -363,18 +375,23 @@ export default function CDTSheets({ user, signOut }: SortingSheetProps) {
                 <h2>Retour matériel client</h2>
               </div>
               <div className="destruction-grid">
-                {clientReturns.map((item, index) => (
-                  <label key={index} className="destruction-field">
+                {clientReturns.map((item, index) => {
+                  const fieldId = `cdt_client_${item.name.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '')}`;
+                  return (
+                  <label key={index} htmlFor={fieldId} className="destruction-field">
                     <span>{item.name}</span>
                     <input
                       type="text"
+                      id={fieldId}
+                      name={item.name}
                       className="destruction-input"
                       value={formData[item.name] || item.defaultValue}
                       onChange={(e) => handleInputChange(item.name, e.target.value)}
                       placeholder="-"
                     />
                   </label>
-                ))}
+                );
+                })}
               </div>
             </section>
           </div>

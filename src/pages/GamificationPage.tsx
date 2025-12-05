@@ -405,11 +405,17 @@ export default function GamificationPage() {
               </div>
 
               {selectedChallenge && (
-                <div className="challenge-details-modal">
-                  <div className="modal-content">
+                <div className="modal-backdrop" onClick={() => setSelectedChallenge(null)}>
+                  <div className="modal-panel unified-modal" onClick={(e) => e.stopPropagation()}>
                     <div className="modal-header">
-                      <h2>{selectedChallenge.name}</h2>
-                      <button onClick={() => setSelectedChallenge(null)}>×</button>
+                      <h2 className="modal-title">{selectedChallenge.name}</h2>
+                      <button
+                        type="button"
+                        className="modal-close"
+                        onClick={() => setSelectedChallenge(null)}
+                      >
+                        ×
+                      </button>
                     </div>
                     <div className="modal-body">
                       <p>{selectedChallenge.description}</p>
@@ -505,146 +511,189 @@ export default function GamificationPage() {
 
       {/* MODAL: Award Badge */}
       {showAwardBadgeModal && (
-        <div className="modal-overlay" onClick={() => setShowAwardBadgeModal(false)}>
-          <div className="modal-content compliance-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-backdrop" onClick={() => setShowAwardBadgeModal(false)}>
+          <div className="modal-panel unified-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>Attribuer un badge</h2>
-              <button onClick={() => setShowAwardBadgeModal(false)}>×</button>
-            </div>
-            <div className="modal-body">
-              <div className="form-section">
-                <label>Employé</label>
-                <select
-                  value={selectedEmployee || ''}
-                  onChange={(e) => setSelectedEmployee(e.target.value)}
-                >
-                  <option value="">Sélectionner un employé</option>
-                  {employees.map((e) => (
-                    <option key={e.id} value={e.id}>
-                      {e.first_name} {e.last_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-section">
-                <label>Badge</label>
-                <select
-                  value={awardBadgeForm.badge_id}
-                  onChange={(e) => setAwardBadgeForm({ ...awardBadgeForm, badge_id: e.target.value })}
-                >
-                  <option value="">Sélectionner un badge</option>
-                  {badges.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-section">
-                <label>Raison (optionnel)</label>
-                <textarea
-                  value={awardBadgeForm.earned_for || ''}
-                  onChange={(e) => setAwardBadgeForm({ ...awardBadgeForm, earned_for: e.target.value })}
-                  rows={3}
-                  placeholder="Pourquoi ce badge est attribué..."
-                />
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setShowAwardBadgeModal(false)}>
-                Annuler
-              </button>
-              <button className="btn-primary" onClick={handleAwardBadge}>
-                Attribuer
+              <h2 className="modal-title">Attribuer un badge</h2>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => setShowAwardBadgeModal(false)}
+              >
+                ×
               </button>
             </div>
+            <form className="modal-body" onSubmit={(e) => { e.preventDefault(); handleAwardBadge(); }}>
+              <div className="form-section">
+                <div className="form-group">
+                  <label htmlFor="award-employee">Employé</label>
+                  <select
+                    id="award-employee"
+                    value={selectedEmployee || ''}
+                    onChange={(e) => setSelectedEmployee(e.target.value)}
+                  >
+                    <option value="">Sélectionner un employé</option>
+                    {employees.map((e) => (
+                      <option key={e.id} value={e.id}>
+                        {e.first_name} {e.last_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="award-badge">Badge</label>
+                  <select
+                    id="award-badge"
+                    value={awardBadgeForm.badge_id}
+                    onChange={(e) => setAwardBadgeForm({ ...awardBadgeForm, badge_id: e.target.value })}
+                  >
+                    <option value="">Sélectionner un badge</option>
+                    {badges.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="award-reason">Raison (optionnel)</label>
+                  <textarea
+                    id="award-reason"
+                    value={awardBadgeForm.earned_for || ''}
+                    onChange={(e) => setAwardBadgeForm({ ...awardBadgeForm, earned_for: e.target.value })}
+                    rows={3}
+                    placeholder="Pourquoi ce badge est attribué..."
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setShowAwardBadgeModal(false)}>
+                  Annuler
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  Attribuer
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
 
       {/* MODAL: Create Challenge */}
       {showChallengeModal && (
-        <div className="modal-overlay" onClick={() => setShowChallengeModal(false)}>
-          <div className="modal-content compliance-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-backdrop" onClick={() => setShowChallengeModal(false)}>
+          <div className="modal-panel unified-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>Créer un défi</h2>
-              <button onClick={() => setShowChallengeModal(false)}>×</button>
-            </div>
-            <div className="modal-body">
-              <div className="form-section">
-                <label>Nom du défi *</label>
-                <input
-                  type="text"
-                  value={challengeForm.name}
-                  onChange={(e) => setChallengeForm({ ...challengeForm, name: e.target.value })}
-                  placeholder="Ex: Défi Volume Mensuel"
-                />
-              </div>
-              <div className="form-section">
-                <label>Description</label>
-                <textarea
-                  value={challengeForm.description || ''}
-                  onChange={(e) => setChallengeForm({ ...challengeForm, description: e.target.value })}
-                  rows={3}
-                  placeholder="Description du défi..."
-                />
-              </div>
-              <div className="form-section">
-                <label>Type de défi *</label>
-                <select
-                  value={challengeForm.challenge_type}
-                  onChange={(e) => setChallengeForm({ ...challengeForm, challenge_type: e.target.value as any })}
-                >
-                  <option value="volume">Volume</option>
-                  <option value="quality">Qualité</option>
-                  <option value="efficiency">Efficacité</option>
-                  <option value="team">Équipe</option>
-                  <option value="individual">Individuel</option>
-                </select>
-              </div>
-              <div className="form-section">
-                <label>Valeur cible *</label>
-                <input
-                  type="number"
-                  value={challengeForm.target_value}
-                  onChange={(e) => setChallengeForm({ ...challengeForm, target_value: parseFloat(e.target.value) })}
-                  placeholder="1000"
-                />
-              </div>
-              <div className="form-section">
-                <label>Unité</label>
-                <input
-                  type="text"
-                  value={challengeForm.unit || ''}
-                  onChange={(e) => setChallengeForm({ ...challengeForm, unit: e.target.value })}
-                  placeholder="kg, %, etc."
-                />
-              </div>
-              <div className="form-section">
-                <label>Date de début *</label>
-                <input
-                  type="date"
-                  value={challengeForm.start_date}
-                  onChange={(e) => setChallengeForm({ ...challengeForm, start_date: e.target.value })}
-                />
-              </div>
-              <div className="form-section">
-                <label>Date de fin *</label>
-                <input
-                  type="date"
-                  value={challengeForm.end_date}
-                  onChange={(e) => setChallengeForm({ ...challengeForm, end_date: e.target.value })}
-                />
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setShowChallengeModal(false)}>
-                Annuler
-              </button>
-              <button className="btn-primary" onClick={handleCreateChallenge}>
-                Créer
+              <h2 className="modal-title">Créer un défi</h2>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => setShowChallengeModal(false)}
+              >
+                ×
               </button>
             </div>
+            <form className="modal-body" onSubmit={(e) => { e.preventDefault(); handleCreateChallenge(); }}>
+              <div className="form-section">
+                <div className="form-group">
+                  <label htmlFor="challenge-name">
+                    Nom du défi <span className="required-indicator">*</span>
+                  </label>
+                  <input
+                    id="challenge-name"
+                    type="text"
+                    value={challengeForm.name}
+                    onChange={(e) => setChallengeForm({ ...challengeForm, name: e.target.value })}
+                    placeholder="Ex: Défi Volume Mensuel"
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="challenge-description">Description</label>
+                  <textarea
+                    id="challenge-description"
+                    value={challengeForm.description || ''}
+                    onChange={(e) => setChallengeForm({ ...challengeForm, description: e.target.value })}
+                    rows={3}
+                    placeholder="Description du défi..."
+                  />
+                </div>
+                <div className="form-grid-2-cols">
+                  <div className="form-group">
+                    <label htmlFor="challenge-type">
+                      Type de défi <span className="required-indicator">*</span>
+                    </label>
+                    <select
+                      id="challenge-type"
+                      value={challengeForm.challenge_type}
+                      onChange={(e) => setChallengeForm({ ...challengeForm, challenge_type: e.target.value as any })}
+                      required
+                    >
+                      <option value="volume">Volume</option>
+                      <option value="quality">Qualité</option>
+                      <option value="efficiency">Efficacité</option>
+                      <option value="team">Équipe</option>
+                      <option value="individual">Individuel</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="challenge-target">
+                      Valeur cible <span className="required-indicator">*</span>
+                    </label>
+                    <input
+                      id="challenge-target"
+                      type="number"
+                      value={challengeForm.target_value}
+                      onChange={(e) => setChallengeForm({ ...challengeForm, target_value: parseFloat(e.target.value) })}
+                      placeholder="1000"
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="challenge-unit">Unité</label>
+                    <input
+                      id="challenge-unit"
+                      type="text"
+                      value={challengeForm.unit || ''}
+                      onChange={(e) => setChallengeForm({ ...challengeForm, unit: e.target.value })}
+                      placeholder="kg, %, etc."
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="challenge-start-date">
+                      Date de début <span className="required-indicator">*</span>
+                    </label>
+                    <input
+                      id="challenge-start-date"
+                      type="date"
+                      value={challengeForm.start_date}
+                      onChange={(e) => setChallengeForm({ ...challengeForm, start_date: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="challenge-end-date">
+                      Date de fin <span className="required-indicator">*</span>
+                    </label>
+                    <input
+                      id="challenge-end-date"
+                      type="date"
+                      value={challengeForm.end_date}
+                      onChange={(e) => setChallengeForm({ ...challengeForm, end_date: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setShowChallengeModal(false)}>
+                  Annuler
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  Créer
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

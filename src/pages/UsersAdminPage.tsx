@@ -297,97 +297,105 @@ const UsersAdminPage = () => {
 
       {modalOpen && (
         <div className="modal-backdrop">
-          <div className="modal-panel">
+          <div className="modal-panel unified-modal">
             <div className="modal-header">
-              <h3 className="modal-title">{form.id ? 'Modifier un utilisateur' : 'Nouvel utilisateur'}</h3>
-              <button className="icon-button" onClick={closeModal} aria-label="Fermer">
-                ✕
+              <h2 className="modal-title">{form.id ? 'Modifier un utilisateur' : 'Nouvel utilisateur'}</h2>
+              <button className="modal-close" onClick={closeModal} aria-label="Fermer">
+                ×
               </button>
             </div>
-            <form className="form-grid" onSubmit={handleSubmit}>
-              <label className="destruction-field">
-                <span>Email</span>
-                <input
-                  className="destruction-input"
-                  type="email"
-                  value={form.email}
-                  onChange={(event) => handleInputChange('email', event.target.value)}
-                  required
-                />
-              </label>
-              <label className="destruction-field">
-                <span>Nom complet</span>
-                <input
-                  className="destruction-input"
-                  value={form.full_name}
-                  onChange={(event) => handleInputChange('full_name', event.target.value)}
-                />
-              </label>
-              <label className="destruction-field">
-                <span>Rôle</span>
-                <select
-                  className="destruction-input"
-                  value={form.role}
-                  onChange={(event) => handleInputChange('role', event.target.value as UserRole)}
-                >
-                  {(Object.keys(roleLabels) as UserRole[]).map((role) => (
-                    <option key={role} value={role}>
-                      {roleLabels[role]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="destruction-field">
-                <span>Département</span>
-                <input
-                  className="destruction-input"
-                  value={form.department}
-                  onChange={(event) => handleInputChange('department', event.target.value)}
-                />
-              </label>
-              <label className="destruction-field">
-                <span>Responsable visible</span>
-                <input
-                  className="destruction-input"
-                  value={form.manager_name}
-                  onChange={(event) => handleInputChange('manager_name', event.target.value)}
-                />
-              </label>
-              <label className="destruction-field">
-                <span>{form.id ? 'Nouveau mot de passe (optionnel)' : 'Mot de passe'}</span>
-                <input
-                  className="destruction-input"
-                  type="password"
-                  value={form.password}
-                  onChange={(event) => handleInputChange('password', event.target.value)}
-                  placeholder={form.id ? 'Laisser vide pour ne pas changer' : ''}
-                  required={!form.id}
-                />
-              </label>
-              <div className="permissions-wrapper">
-                <p className="permissions-title">Autorisations fines</p>
-                <div className="permissions-grid">
-                  {PERMISSION_GROUPS.map((group) => (
-                    <div key={group.label} className="permissions-group">
-                      <p>{group.label}</p>
-                      <div className="permissions-options">
-                        {group.permissions.map((permission) => (
-                          <label key={permission.id} className="checkbox-chip">
-                            <input
-                              type="checkbox"
-                              checked={form.permissions.includes(permission.id)}
-                              onChange={() => togglePermission(permission.id)}
-                            />
-                            <span>{permission.label}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+            <form className="modal-body" onSubmit={handleSubmit}>
+              <div className="form-section">
+                <div className="form-group">
+                  <label htmlFor="user-email">
+                    Email <span className="required-indicator">*</span>
+                  </label>
+                  <input
+                    id="user-email"
+                    type="email"
+                    value={form.email}
+                    onChange={(event) => handleInputChange('email', event.target.value)}
+                    required
+                  />
                 </div>
-                <p className="muted-text">Les autorisations complètent les rôles et permettent d’ouvrir l’accès module par module.</p>
+                <div className="form-group">
+                  <label htmlFor="user-full-name">Nom complet</label>
+                  <input
+                    id="user-full-name"
+                    value={form.full_name}
+                    onChange={(event) => handleInputChange('full_name', event.target.value)}
+                  />
+                </div>
+                <div className="form-grid-2-cols">
+                  <div className="form-group">
+                    <label htmlFor="user-role">Rôle</label>
+                    <select
+                      id="user-role"
+                      value={form.role}
+                      onChange={(event) => handleInputChange('role', event.target.value as UserRole)}
+                    >
+                      {(Object.keys(roleLabels) as UserRole[]).map((role) => (
+                        <option key={role} value={role}>
+                          {roleLabels[role]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="user-department">Département</label>
+                    <input
+                      id="user-department"
+                      value={form.department}
+                      onChange={(event) => handleInputChange('department', event.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="user-manager-name">Responsable visible</label>
+                  <input
+                    id="user-manager-name"
+                    value={form.manager_name}
+                    onChange={(event) => handleInputChange('manager_name', event.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="user-password">
+                    {form.id ? 'Nouveau mot de passe (optionnel)' : 'Mot de passe'} {!form.id && <span className="required-indicator">*</span>}
+                  </label>
+                  <input
+                    id="user-password"
+                    type="password"
+                    value={form.password}
+                    onChange={(event) => handleInputChange('password', event.target.value)}
+                    placeholder={form.id ? 'Laisser vide pour ne pas changer' : ''}
+                    required={!form.id}
+                  />
+                </div>
+                <div className="permissions-wrapper">
+                  <p className="permissions-title">Autorisations fines</p>
+                  <div className="permissions-grid">
+                    {PERMISSION_GROUPS.map((group) => (
+                      <div key={group.label} className="permissions-group">
+                        <p>{group.label}</p>
+                        <div className="permissions-options">
+                          {group.permissions.map((permission) => (
+                            <label key={permission.id} className="checkbox-chip">
+                              <input
+                                type="checkbox"
+                                checked={form.permissions.includes(permission.id)}
+                                onChange={() => togglePermission(permission.id)}
+                              />
+                              <span>{permission.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="muted-text">Les autorisations complètent les rôles et permettent d'ouvrir l'accès module par module.</p>
+                </div>
               </div>
-              <div className="modal-actions">
+              <div className="modal-footer">
                 <button type="button" className="btn btn-outline" onClick={closeModal} disabled={saving}>
                   Annuler
                 </button>

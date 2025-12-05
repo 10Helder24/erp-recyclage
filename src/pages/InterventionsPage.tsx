@@ -268,73 +268,74 @@ export const InterventionsPage = () => {
       {/* Modal édition */}
       {showModal && editingIntervention && (
         <div className="modal-backdrop" onClick={() => setShowModal(false)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+          <div className="modal-panel unified-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2 className="modal-title">Modifier l'intervention</h2>
               <button
                 type="button"
                 className="modal-close"
                 onClick={() => setShowModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer' }}
               >
                 ×
               </button>
             </div>
-            <form onSubmit={handleSubmit} style={{ padding: '24px' }}>
-              <div className="destruction-field">
-                <label className="destruction-label">Statut</label>
-                <select
-                  className="destruction-input"
-                  value={form.status}
-                  onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value }))}
-                >
-                  {STATUS_OPTIONS.map((s) => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
+            <form onSubmit={handleSubmit} className="modal-body">
+              <div className="form-section">
+                <div className="form-group">
+                  <label htmlFor="intervention-status">Statut</label>
+                  <select
+                    id="intervention-status"
+                    value={form.status}
+                    onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value }))}
+                  >
+                    {STATUS_OPTIONS.map((s) => (
+                      <option key={s.value} value={s.value}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="intervention-priority">Priorité</label>
+                  <select
+                    id="intervention-priority"
+                    value={form.priority}
+                    onChange={(e) => setForm((prev) => ({ ...prev, priority: e.target.value }))}
+                  >
+                    {PRIORITY_OPTIONS.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="intervention-assigned">Assigné à</label>
+                  <select
+                    id="intervention-assigned"
+                    value={form.assigned_to}
+                    onChange={(e) => setForm((prev) => ({ ...prev, assigned_to: e.target.value }))}
+                  >
+                    <option value="">Non assigné</option>
+                    {employees.map((emp) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.first_name} {emp.last_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="intervention-notes">Notes</label>
+                  <textarea
+                    id="intervention-notes"
+                    rows={4}
+                    value={form.notes}
+                    onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
+                    placeholder="Notes supplémentaires"
+                  />
+                </div>
               </div>
-              <div className="destruction-field">
-                <label className="destruction-label">Priorité</label>
-                <select
-                  className="destruction-input"
-                  value={form.priority}
-                  onChange={(e) => setForm((prev) => ({ ...prev, priority: e.target.value }))}
-                >
-                  {PRIORITY_OPTIONS.map((p) => (
-                    <option key={p.value} value={p.value}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="destruction-field">
-                <label className="destruction-label">Assigné à</label>
-                <select
-                  className="destruction-input"
-                  value={form.assigned_to}
-                  onChange={(e) => setForm((prev) => ({ ...prev, assigned_to: e.target.value }))}
-                >
-                  <option value="">Non assigné</option>
-                  {employees.map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.first_name} {emp.last_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="destruction-field">
-                <label className="destruction-label">Notes</label>
-                <textarea
-                  className="destruction-input"
-                  rows={4}
-                  value={form.notes}
-                  onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
-                  placeholder="Notes supplémentaires"
-                />
-              </div>
-              <div className="modal-actions">
+              <div className="modal-footer">
                 <button type="button" className="btn btn-outline" onClick={() => setShowModal(false)}>
                   Annuler
                 </button>

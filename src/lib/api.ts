@@ -2346,7 +2346,76 @@ export const Api = {
     if (limit) params.set('limit', limit.toString());
     const query = params.toString();
     return request<WebhookLog[]>(`/webhooks/${id}/logs${query ? `?${query}` : ''}`);
-  }
+  },
+
+  // ==========================================
+  // RECHERCHE GLOBALE ET FILTRES AVANCÉS
+  // ==========================================
+
+  // Recherche globale
+  globalSearch: (query: string, filters?: any) => {
+    const params = new URLSearchParams();
+    params.set('q', query);
+    if (filters) {
+      if (filters.types && filters.types.length > 0) {
+        params.set('types', filters.types.join(','));
+      }
+      if (filters.dateRange?.start) {
+        params.set('date_start', filters.dateRange.start);
+      }
+      if (filters.dateRange?.end) {
+        params.set('date_end', filters.dateRange.end);
+      }
+      if (filters.status) {
+        params.set('status', filters.status);
+      }
+      if (filters.department) {
+        params.set('department', filters.department);
+      }
+    }
+    return request<SearchResult[]>(`/search/global?${params.toString()}`);
+  },
+
+  // Recherche sémantique
+  semanticSearch: (query: string, filters?: any) => {
+    const params = new URLSearchParams();
+    params.set('q', query);
+    if (filters) {
+      if (filters.types && filters.types.length > 0) {
+        params.set('types', filters.types.join(','));
+      }
+      if (filters.dateRange?.start) {
+        params.set('date_start', filters.dateRange.start);
+      }
+      if (filters.dateRange?.end) {
+        params.set('date_end', filters.dateRange.end);
+      }
+    }
+    return request<SearchResult[]>(`/search/semantic?${params.toString()}`);
+  },
+
+  // Suggestions intelligentes
+  searchSuggestions: (query: string) => {
+    return request<string[]>(`/search/suggestions?q=${encodeURIComponent(query)}`);
+  },
+
+  // Filtres sauvegardables
+  fetchSavedFilters: () =>
+    request<SavedFilter[]>(`/search/saved-filters`),
+  saveFilter: (payload: CreateSavedFilterPayload) =>
+    request<SavedFilter>(`/search/saved-filters`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  deleteSavedFilter: (id: string) =>
+    request<void>(`/search/saved-filters/${id}`, {
+      method: 'DELETE'
+    }),
+  updateSavedFilter: (id: string, payload: Partial<CreateSavedFilterPayload>) =>
+    request<SavedFilter>(`/search/saved-filters/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    })
 };
 
 // Alert & Notification types
@@ -3854,4 +3923,34 @@ export type WebhookLog = {
   error_message: string | null;
   execution_time_ms: number | null;
   triggered_at: string;
+};
+
+// Global Search types
+export type SearchResult = {
+  type: 'customer' | 'invoice' | 'intervention' | 'material' | 'employee' | 'vehicle' | 'document' | 'supplier' | 'route';
+  id: string;
+  title: string;
+  subtitle: string;
+  metadata?: string[];
+  icon?: string;
+  url?: string;
+};
+
+export type SavedFilter = {
+  id: string;
+  name: string;
+  query: string;
+  filters: Record<string, any>;
+  is_favorite: boolean;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateSavedFilterPayload = {
+  name: string;
+  query: string;
+  filters: Record<string, any>;
+  is_favorite?: boolean;
 };

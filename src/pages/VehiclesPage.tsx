@@ -201,40 +201,41 @@ export const VehiclesPage = () => {
       {/* Modal création/édition */}
       {showModal && (
         <div className="modal-backdrop" onClick={() => setShowModal(false)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+          <div className="modal-panel unified-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2 className="modal-title">{editingVehicle ? 'Modifier le véhicule' : 'Nouveau véhicule'}</h2>
               <button
                 type="button"
                 className="modal-close"
                 onClick={() => setShowModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer' }}
               >
                 ×
               </button>
             </div>
-            <form onSubmit={handleSubmit} style={{ padding: '24px' }}>
-              <div className="destruction-field">
-                <label className="destruction-label">Numéro interne</label>
-                <input
-                  type="text"
-                  className="destruction-input"
-                  value={form.internal_number}
-                  onChange={(e) => setForm((prev) => ({ ...prev, internal_number: e.target.value }))}
-                  placeholder="Ex: Camion 12"
-                />
+            <form onSubmit={handleSubmit} className="modal-body">
+              <div className="form-section">
+                <div className="form-group">
+                  <label htmlFor="vehicle-internal-number">Numéro interne</label>
+                  <input
+                    id="vehicle-internal-number"
+                    type="text"
+                    value={form.internal_number}
+                    onChange={(e) => setForm((prev) => ({ ...prev, internal_number: e.target.value }))}
+                    placeholder="Ex: Camion 12"
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="vehicle-plate-number">Plaque d'immatriculation</label>
+                  <input
+                    id="vehicle-plate-number"
+                    type="text"
+                    value={form.plate_number}
+                    onChange={(e) => setForm((prev) => ({ ...prev, plate_number: e.target.value }))}
+                    placeholder="Ex: VD123456"
+                  />
+                </div>
               </div>
-              <div className="destruction-field">
-                <label className="destruction-label">Plaque d'immatriculation</label>
-                <input
-                  type="text"
-                  className="destruction-input"
-                  value={form.plate_number}
-                  onChange={(e) => setForm((prev) => ({ ...prev, plate_number: e.target.value }))}
-                  placeholder="Ex: VD123456"
-                />
-              </div>
-              <div className="modal-actions">
+              <div className="modal-footer">
                 <button type="button" className="btn btn-outline" onClick={() => setShowModal(false)}>
                   Annuler
                 </button>

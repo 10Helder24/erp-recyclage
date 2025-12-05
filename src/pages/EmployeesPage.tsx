@@ -382,92 +382,98 @@ const EmployeesPage = () => {
 
       {modalOpen && (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal-panel">
+          <div className="modal-panel unified-modal">
             <div className="modal-header">
-              <h3 className="modal-title">{title}</h3>
-              <button className="icon-button" onClick={closeModal} aria-label="Fermer">
-                ✕
+              <h2 className="modal-title">{title}</h2>
+              <button className="modal-close" onClick={closeModal} aria-label="Fermer">
+                ×
               </button>
             </div>
 
-            <form className="form-grid" onSubmit={handleSubmit}>
-              <section className="employees-form-section">
-                <h4>Identité & contact</h4>
-                <div className="destruction-grid">
-                  <label className="destruction-field">
-                    <span>Matricule / ID interne</span>
-                    <input className="destruction-input" value={form.employee_code} onChange={(e) => setForm((prev) => ({ ...prev, employee_code: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Prénom</span>
+            <form className="modal-body" onSubmit={handleSubmit}>
+              <div className="form-section">
+                <h3>Identité & contact</h3>
+                <div className="form-grid-2-cols">
+                  <div className="form-group">
+                    <label htmlFor="employee-code">Matricule / ID interne</label>
+                    <input id="employee-code" value={form.employee_code} onChange={(e) => setForm((prev) => ({ ...prev, employee_code: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-first-name">
+                      Prénom <span className="required-indicator">*</span>
+                    </label>
                     <input
-                      className="destruction-input"
+                      id="employee-first-name"
                       required
                       value={form.first_name}
                       onChange={(e) => setForm((prev) => ({ ...prev, first_name: e.target.value }))}
                     />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Nom</span>
-                    <input className="destruction-input" required value={form.last_name} onChange={(e) => setForm((prev) => ({ ...prev, last_name: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Email professionnel</span>
-                    <input className="destruction-input" type="email" required value={form.email} onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Email personnel</span>
-                    <input className="destruction-input" type="email" value={form.personal_email} onChange={(e) => setForm((prev) => ({ ...prev, personal_email: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Téléphone professionnel</span>
-                    <input className="destruction-input" type="tel" value={form.phone} onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Téléphone personnel</span>
-                    <input className="destruction-input" type="tel" value={form.personal_phone} onChange={(e) => setForm((prev) => ({ ...prev, personal_phone: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Date de naissance</span>
-                    <input className="destruction-input" type="date" value={form.birth_date} onChange={(e) => setForm((prev) => ({ ...prev, birth_date: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Lieu de naissance</span>
-                    <input className="destruction-input" value={form.birth_location} onChange={(e) => setForm((prev) => ({ ...prev, birth_location: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Nationalité</span>
-                    <input className="destruction-input" value={form.nationality} onChange={(e) => setForm((prev) => ({ ...prev, nationality: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>État civil</span>
-                    <input className="destruction-input" value={form.marital_status} onChange={(e) => setForm((prev) => ({ ...prev, marital_status: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Enfants à charge</span>
-                    <input className="destruction-input" value={form.dependent_children} onChange={(e) => setForm((prev) => ({ ...prev, dependent_children: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>N° document d'identité</span>
-                    <input className="destruction-input" value={form.id_document_number} onChange={(e) => setForm((prev) => ({ ...prev, id_document_number: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>AVS</span>
-                    <input className="destruction-input" value={form.ahv_number} onChange={(e) => setForm((prev) => ({ ...prev, ahv_number: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>IBAN</span>
-                    <input className="destruction-input" value={form.iban} onChange={(e) => setForm((prev) => ({ ...prev, iban: e.target.value }))} />
-                  </label>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-last-name">
+                      Nom <span className="required-indicator">*</span>
+                    </label>
+                    <input id="employee-last-name" required value={form.last_name} onChange={(e) => setForm((prev) => ({ ...prev, last_name: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-email">
+                      Email professionnel <span className="required-indicator">*</span>
+                    </label>
+                    <input id="employee-email" type="email" required value={form.email} onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-personal-email">Email personnel</label>
+                    <input id="employee-personal-email" type="email" value={form.personal_email} onChange={(e) => setForm((prev) => ({ ...prev, personal_email: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-phone">Téléphone professionnel</label>
+                    <input id="employee-phone" type="tel" value={form.phone} onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-personal-phone">Téléphone personnel</label>
+                    <input id="employee-personal-phone" type="tel" value={form.personal_phone} onChange={(e) => setForm((prev) => ({ ...prev, personal_phone: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-birth-date">Date de naissance</label>
+                    <input id="employee-birth-date" type="date" value={form.birth_date} onChange={(e) => setForm((prev) => ({ ...prev, birth_date: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-birth-location">Lieu de naissance</label>
+                    <input id="employee-birth-location" value={form.birth_location} onChange={(e) => setForm((prev) => ({ ...prev, birth_location: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-nationality">Nationalité</label>
+                    <input id="employee-nationality" value={form.nationality} onChange={(e) => setForm((prev) => ({ ...prev, nationality: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-marital-status">État civil</label>
+                    <input id="employee-marital-status" value={form.marital_status} onChange={(e) => setForm((prev) => ({ ...prev, marital_status: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-dependent-children">Enfants à charge</label>
+                    <input id="employee-dependent-children" value={form.dependent_children} onChange={(e) => setForm((prev) => ({ ...prev, dependent_children: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-id-document">N° document d'identité</label>
+                    <input id="employee-id-document" value={form.id_document_number} onChange={(e) => setForm((prev) => ({ ...prev, id_document_number: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-ahv">AVS</label>
+                    <input id="employee-ahv" value={form.ahv_number} onChange={(e) => setForm((prev) => ({ ...prev, ahv_number: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-iban">IBAN</label>
+                    <input id="employee-iban" value={form.iban} onChange={(e) => setForm((prev) => ({ ...prev, iban: e.target.value }))} />
+                  </div>
                 </div>
-              </section>
+              </div>
 
-              <section className="employees-form-section">
-                <h4>Contrat & organisation</h4>
-                <div className="destruction-grid">
-                  <label className="destruction-field">
-                    <span>Département</span>
-                    <select className="destruction-input" value={form.department} onChange={(e) => setForm((prev) => ({ ...prev, department: e.target.value }))}>
+              <div className="form-section">
+                <h3>Contrat & organisation</h3>
+                <div className="form-grid-2-cols">
+                  <div className="form-group">
+                    <label htmlFor="employee-department">Département</label>
+                    <select id="employee-department" value={form.department} onChange={(e) => setForm((prev) => ({ ...prev, department: e.target.value }))}>
                       <option value="">Sélectionner</option>
                       {DEPARTMENTS.map((dept) => (
                         <option key={dept} value={dept}>
@@ -475,14 +481,14 @@ const EmployeesPage = () => {
                         </option>
                       ))}
                     </select>
-                  </label>
-                  <label className="destruction-field">
-                    <span>Poste</span>
-                    <input className="destruction-input" value={form.role} onChange={(e) => setForm((prev) => ({ ...prev, role: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Type de contrat</span>
-                    <select className="destruction-input" value={form.contract_type} onChange={(e) => setForm((prev) => ({ ...prev, contract_type: e.target.value }))}>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-role">Poste</label>
+                    <input id="employee-role" value={form.role} onChange={(e) => setForm((prev) => ({ ...prev, role: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-contract-type">Type de contrat</label>
+                    <select id="employee-contract-type" value={form.contract_type} onChange={(e) => setForm((prev) => ({ ...prev, contract_type: e.target.value }))}>
                       <option value="">Sélectionner</option>
                       {CONTRACT_TYPES.map((type) => (
                         <option key={type} value={type}>
@@ -490,10 +496,10 @@ const EmployeesPage = () => {
                         </option>
                       ))}
                     </select>
-                  </label>
-                  <label className="destruction-field">
-                    <span>Statut</span>
-                    <select className="destruction-input" value={form.employment_status} onChange={(e) => setForm((prev) => ({ ...prev, employment_status: e.target.value }))}>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-employment-status">Statut</label>
+                    <select id="employee-employment-status" value={form.employment_status} onChange={(e) => setForm((prev) => ({ ...prev, employment_status: e.target.value }))}>
                       <option value="">Sélectionner</option>
                       {EMPLOYMENT_STATUSES.map((status) => (
                         <option key={status} value={status}>
@@ -501,11 +507,11 @@ const EmployeesPage = () => {
                         </option>
                       ))}
                     </select>
-                  </label>
-                  <label className="destruction-field">
-                    <span>Taux d'activité (%)</span>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-work-rate">Taux d'activité (%)</label>
                     <input
-                      className="destruction-input"
+                      id="employee-work-rate"
                       type="number"
                       min="0"
                       max="100"
@@ -513,18 +519,18 @@ const EmployeesPage = () => {
                       value={form.work_rate}
                       onChange={(e) => setForm((prev) => ({ ...prev, work_rate: e.target.value }))}
                     />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Horaire / rythme</span>
-                    <input className="destruction-input" value={form.work_schedule} onChange={(e) => setForm((prev) => ({ ...prev, work_schedule: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Manager référent</span>
-                    <input className="destruction-input" value={form.manager_name} onChange={(e) => setForm((prev) => ({ ...prev, manager_name: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Site / localisation</span>
-                    <select className="destruction-input" value={form.location} onChange={(e) => setForm((prev) => ({ ...prev, location: e.target.value }))}>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-work-schedule">Horaire / rythme</label>
+                    <input id="employee-work-schedule" value={form.work_schedule} onChange={(e) => setForm((prev) => ({ ...prev, work_schedule: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-manager">Manager référent</label>
+                    <input id="employee-manager" value={form.manager_name} onChange={(e) => setForm((prev) => ({ ...prev, manager_name: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-location">Site / localisation</label>
+                    <select id="employee-location" value={form.location} onChange={(e) => setForm((prev) => ({ ...prev, location: e.target.value }))}>
                       <option value="">Sélectionner</option>
                       {SITES.map((site) => (
                         <option key={site} value={site}>
@@ -532,67 +538,67 @@ const EmployeesPage = () => {
                         </option>
                       ))}
                     </select>
-                  </label>
-                  <label className="destruction-field">
-                    <span>Date de début</span>
-                    <input className="destruction-input" type="date" value={form.start_date} onChange={(e) => setForm((prev) => ({ ...prev, start_date: e.target.value }))} />
-                  </label>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-start-date">Date de début</label>
+                    <input id="employee-start-date" type="date" value={form.start_date} onChange={(e) => setForm((prev) => ({ ...prev, start_date: e.target.value }))} />
+                  </div>
                 </div>
-              </section>
+              </div>
 
-              <section className="employees-form-section">
-                <h4>Adresse & permis</h4>
-                <div className="destruction-grid">
-                  <label className="destruction-field">
-                    <span>Adresse (ligne 1)</span>
-                    <input className="destruction-input" value={form.address_line1} onChange={(e) => setForm((prev) => ({ ...prev, address_line1: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Adresse (ligne 2)</span>
-                    <input className="destruction-input" value={form.address_line2} onChange={(e) => setForm((prev) => ({ ...prev, address_line2: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>NPA</span>
-                    <input className="destruction-input" value={form.postal_code} onChange={(e) => setForm((prev) => ({ ...prev, postal_code: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Ville</span>
-                    <input className="destruction-input" value={form.city} onChange={(e) => setForm((prev) => ({ ...prev, city: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Pays</span>
-                    <input className="destruction-input" value={form.country} onChange={(e) => setForm((prev) => ({ ...prev, country: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Permis / autorisation</span>
-                    <input className="destruction-input" value={form.work_permit} onChange={(e) => setForm((prev) => ({ ...prev, work_permit: e.target.value }))} />
-                  </label>
+              <div className="form-section">
+                <h3>Adresse & permis</h3>
+                <div className="form-grid-2-cols">
+                  <div className="form-group">
+                    <label htmlFor="employee-address-line1">Adresse (ligne 1)</label>
+                    <input id="employee-address-line1" value={form.address_line1} onChange={(e) => setForm((prev) => ({ ...prev, address_line1: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-address-line2">Adresse (ligne 2)</label>
+                    <input id="employee-address-line2" value={form.address_line2} onChange={(e) => setForm((prev) => ({ ...prev, address_line2: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-postal-code">NPA</label>
+                    <input id="employee-postal-code" value={form.postal_code} onChange={(e) => setForm((prev) => ({ ...prev, postal_code: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-city">Ville</label>
+                    <input id="employee-city" value={form.city} onChange={(e) => setForm((prev) => ({ ...prev, city: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-country">Pays</label>
+                    <input id="employee-country" value={form.country} onChange={(e) => setForm((prev) => ({ ...prev, country: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-work-permit">Permis / autorisation</label>
+                    <input id="employee-work-permit" value={form.work_permit} onChange={(e) => setForm((prev) => ({ ...prev, work_permit: e.target.value }))} />
+                  </div>
                 </div>
-              </section>
+              </div>
 
-              <section className="employees-form-section">
-                <h4>Urgence & notes</h4>
-                <div className="destruction-grid">
-                  <label className="destruction-field">
-                    <span>Contact d'urgence</span>
-                    <input className="destruction-input" value={form.emergency_contact_name} onChange={(e) => setForm((prev) => ({ ...prev, emergency_contact_name: e.target.value }))} />
-                  </label>
-                  <label className="destruction-field">
-                    <span>Téléphone d'urgence</span>
+              <div className="form-section">
+                <h3>Urgence & notes</h3>
+                <div className="form-grid-2-cols">
+                  <div className="form-group">
+                    <label htmlFor="employee-emergency-contact">Contact d'urgence</label>
+                    <input id="employee-emergency-contact" value={form.emergency_contact_name} onChange={(e) => setForm((prev) => ({ ...prev, emergency_contact_name: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="employee-emergency-phone">Téléphone d'urgence</label>
                     <input
-                      className="destruction-input"
+                      id="employee-emergency-phone"
                       value={form.emergency_contact_phone}
                       onChange={(e) => setForm((prev) => ({ ...prev, emergency_contact_phone: e.target.value }))}
                     />
-                  </label>
-                  <label className="destruction-field" style={{ gridColumn: 'span 2' }}>
-                    <span>Notes RH</span>
-                    <textarea className="destruction-input" rows={3} value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))} />
-                  </label>
+                  </div>
+                  <div className="form-group full-width">
+                    <label htmlFor="employee-notes">Notes RH</label>
+                    <textarea id="employee-notes" rows={3} value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))} />
+                  </div>
                 </div>
-              </section>
+              </div>
 
-              <div className="modal-actions">
+              <div className="modal-footer">
                 <button type="button" className="btn btn-outline" onClick={closeModal} disabled={saving}>
                   Annuler
                 </button>

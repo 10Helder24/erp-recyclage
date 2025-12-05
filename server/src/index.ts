@@ -3205,6 +3205,21 @@ const ensureSchema = async () => {
   await run(`alter table interventions add column if not exists completion_time timestamptz`);
   await run(`alter table interventions add column if not exists voice_note_id uuid references voice_notes(id) on delete set null`);
   await run('create index if not exists interventions_assigned_idx on interventions(assigned_to, status)');
+
+  // Table pour les filtres de recherche sauvegardés
+  await run(`
+    create table if not exists saved_search_filters (
+      id uuid primary key default gen_random_uuid(),
+      name text not null,
+      query text not null,
+      filters jsonb not null default '{}',
+      is_favorite boolean not null default false,
+      created_by uuid references users(id) on delete cascade,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists saved_search_filters_created_by_idx on saved_search_filters(created_by)');
 };
 
 // Fonction pour générer un numéro de facture séquentiel
@@ -14627,6 +14642,499 @@ app.post(
     );
 
     res.status(201).json(challenge);
+  })
+);
+
+// ==========================================
+// RECHERCHE GLOBALE ET FILTRES AVANCÉS
+// ==========================================
+
+// GET /api/search/global - Recherche globale
+app.get(
+  '/api/search/global',
+  requireAuth({ roles: ['admin', 'manager', 'user'] }),
+  asyncHandler(async (req, res) => {
+    const query = (req.query.q as string) || '';
+    const types = req.query.types ? (req.query.types as string).split(',') : [];
+    const dateStart = req.query.date_start as string;
+    const dateEnd = req.query.date_end as string;
+    const status = req.query.status as string;
+    const department = req.query.department as string;
+
+    if (!query.trim()) {
+      return res.json([]);
+    }
+
+    const searchTerm = `%${query.toLowerCase()}%`;
+    const results: any[] = [];
+
+    // Recherche dans les clients
+    if (types.length === 0 || types.includes('customer')) {
+      let sql = `select id, name, address, created_at from customers where lower(name) like $1 or lower(coalesce(address, '')) like $1`;
+      const params: any[] = [searchTerm];
+      if (dateStart) {
+        sql += ` and created_at >= $${params.length + 1}`;
+        params.push(dateStart);
+      }
+      if (dateEnd) {
+        sql += ` and created_at <= $${params.length + 1}`;
+        params.push(dateEnd + ' 23:59:59');
+      }
+      sql += ' limit 20';
+      const customers = await run(sql, params);
+      customers.forEach((c: any) => {
+        results.push({
+          type: 'customer',
+          id: c.id,
+          title: c.name,
+          subtitle: c.address || 'Aucune adresse',
+          metadata: [`Créé le ${new Date(c.created_at).toLocaleDateString('fr-FR')}`],
+          url: `/customers?selected=${c.id}`
+        });
+      });
+    }
+
+    // Recherche dans les factures
+    if (types.length === 0 || types.includes('invoice')) {
+      let sql = `select id, invoice_number, customer_name, issue_date, status, total_amount, currency from invoices where lower(invoice_number) like $1 or lower(coalesce(customer_name, '')) like $1`;
+      const params: any[] = [searchTerm];
+      if (dateStart) {
+        sql += ` and issue_date >= $${params.length + 1}`;
+        params.push(dateStart);
+      }
+      if (dateEnd) {
+        sql += ` and issue_date <= $${params.length + 1}`;
+        params.push(dateEnd);
+      }
+      if (status) {
+        sql += ` and status = $${params.length + 1}`;
+        params.push(status);
+      }
+      sql += ' limit 20';
+      const invoices = await run(sql, params);
+      invoices.forEach((inv: any) => {
+        results.push({
+          type: 'invoice',
+          id: inv.id,
+          title: `Facture ${inv.invoice_number}`,
+          subtitle: inv.customer_name || 'Client inconnu',
+          metadata: [
+            `${inv.total_amount.toFixed(2)} ${inv.currency}`,
+            `Émise le ${new Date(inv.issue_date).toLocaleDateString('fr-FR')}`,
+            inv.status
+          ],
+          url: `/finance?selected=${inv.id}`
+        });
+      });
+    }
+
+    // Recherche dans les interventions
+    if (types.length === 0 || types.includes('intervention')) {
+      let sql = `select i.id, i.title, i.status, i.priority, i.customer_name, i.created_at from interventions i where lower(i.title) like $1 or lower(coalesce(i.description, '')) like $1 or lower(coalesce(i.customer_name, '')) like $1`;
+      const params: any[] = [searchTerm];
+      if (dateStart) {
+        sql += ` and i.created_at >= $${params.length + 1}`;
+        params.push(dateStart);
+      }
+      if (dateEnd) {
+        sql += ` and i.created_at <= $${params.length + 1}`;
+        params.push(dateEnd + ' 23:59:59');
+      }
+      if (status) {
+        sql += ` and i.status = $${params.length + 1}`;
+        params.push(status);
+      }
+      sql += ' limit 20';
+      const interventions = await run(sql, params);
+      interventions.forEach((int: any) => {
+        results.push({
+          type: 'intervention',
+          id: int.id,
+          title: int.title,
+          subtitle: int.customer_name || 'Client inconnu',
+          metadata: [int.status, int.priority, `Créée le ${new Date(int.created_at).toLocaleDateString('fr-FR')}`],
+          url: `/interventions?selected=${int.id}`
+        });
+      });
+    }
+
+    // Recherche dans les matières
+    if (types.length === 0 || types.includes('material')) {
+      let sql = `select id, abrege, description, unite, famille from materials where lower(coalesce(abrege, '')) like $1 or lower(coalesce(description, '')) like $1 or lower(coalesce(famille, '')) like $1 limit 20`;
+      const materials = await run(sql, [searchTerm]);
+      materials.forEach((m: any) => {
+        results.push({
+          type: 'material',
+          id: m.id,
+          title: m.abrege || m.description || 'Matière sans nom',
+          subtitle: m.description || m.famille || '',
+          metadata: m.unite ? [`Unité: ${m.unite}`] : [],
+          url: `/materials?selected=${m.id}`
+        });
+      });
+    }
+
+    // Recherche dans les employés
+    if (types.length === 0 || types.includes('employee')) {
+      let sql = `select id, first_name, last_name, email, department, role from employees where lower(first_name) like $1 or lower(last_name) like $1 or lower(email) like $1`;
+      const params: any[] = [searchTerm];
+      if (department) {
+        sql += ` and department = $${params.length + 1}`;
+        params.push(department);
+      }
+      sql += ' limit 20';
+      const employees = await run(sql, params);
+      employees.forEach((e: any) => {
+        results.push({
+          type: 'employee',
+          id: e.id,
+          title: `${e.first_name} ${e.last_name}`,
+          subtitle: e.email || '',
+          metadata: [e.department || '', e.role || ''],
+          url: `/employees?selected=${e.id}`
+        });
+      });
+    }
+
+    // Recherche dans les véhicules
+    if (types.length === 0 || types.includes('vehicle')) {
+      let sql = `select id, internal_number, plate_number from vehicles where lower(coalesce(internal_number, '')) like $1 or lower(coalesce(plate_number, '')) like $1 limit 20`;
+      const vehicles = await run(sql, [searchTerm]);
+      vehicles.forEach((v: any) => {
+        results.push({
+          type: 'vehicle',
+          id: v.id,
+          title: v.internal_number || v.plate_number || 'Véhicule sans nom',
+          subtitle: v.plate_number || '',
+          metadata: [],
+          url: `/vehicles?selected=${v.id}`
+        });
+      });
+    }
+
+    // Recherche dans les documents
+    if (types.length === 0 || types.includes('document')) {
+      let sql = `select id, title, document_number, category, status from documents where lower(title) like $1 or lower(coalesce(description, '')) like $1 or lower(document_number) like $1`;
+      const params: any[] = [searchTerm];
+      if (dateStart) {
+        sql += ` and created_at >= $${params.length + 1}`;
+        params.push(dateStart);
+      }
+      if (dateEnd) {
+        sql += ` and created_at <= $${params.length + 1}`;
+        params.push(dateEnd + ' 23:59:59');
+      }
+      sql += ' limit 20';
+      const documents = await run(sql, params);
+      documents.forEach((d: any) => {
+        results.push({
+          type: 'document',
+          id: d.id,
+          title: d.title,
+          subtitle: d.document_number || '',
+          metadata: [d.category || '', d.status || ''],
+          url: `/documents?selected=${d.id}`
+        });
+      });
+    }
+
+    // Recherche dans les fournisseurs
+    if (types.length === 0 || types.includes('supplier')) {
+      let sql = `select id, name, supplier_type, contact_email from suppliers where lower(name) like $1 or lower(coalesce(contact_email, '')) like $1 limit 20`;
+      const suppliers = await run(sql, [searchTerm]);
+      suppliers.forEach((s: any) => {
+        results.push({
+          type: 'supplier',
+          id: s.id,
+          title: s.name,
+          subtitle: s.contact_email || '',
+          metadata: [s.supplier_type || ''],
+          url: `/suppliers?selected=${s.id}`
+        });
+      });
+    }
+
+    res.json(results);
+  })
+);
+
+// GET /api/search/semantic - Recherche sémantique
+app.get(
+  '/api/search/semantic',
+  requireAuth({ roles: ['admin', 'manager', 'user'] }),
+  asyncHandler(async (req, res) => {
+    const query = (req.query.q as string) || '';
+    const types = req.query.types ? (req.query.types as string).split(',') : [];
+    const dateStart = req.query.date_start as string;
+    const dateEnd = req.query.date_end as string;
+
+    if (!query.trim()) {
+      return res.json([]);
+    }
+
+    const queryLower = query.toLowerCase();
+    const results: any[] = [];
+
+    // Analyse sémantique basique
+    const isClientQuery = queryLower.includes('client') || queryLower.includes('customer');
+    const isInterventionQuery = queryLower.includes('intervention') || queryLower.includes('ticket');
+    const isFactureQuery = queryLower.includes('facture') || queryLower.includes('invoice');
+    const isSemaineQuery = queryLower.includes('semaine') || queryLower.includes('week');
+    const isMoisQuery = queryLower.includes('mois') || queryLower.includes('month');
+
+    // Calculer les dates si nécessaire
+    let startDate: string | null = null;
+    let endDate: string | null = null;
+    if (isSemaineQuery) {
+      const now = new Date();
+      const start = new Date(now);
+      start.setDate(now.getDate() - 7);
+      startDate = start.toISOString().split('T')[0];
+      endDate = now.toISOString().split('T')[0];
+    } else if (isMoisQuery) {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      startDate = start.toISOString().split('T')[0];
+      endDate = now.toISOString().split('T')[0];
+    }
+
+    if (dateStart) startDate = dateStart;
+    if (dateEnd) endDate = dateEnd;
+
+    // Recherche clients avec interventions cette semaine/mois
+    if (isClientQuery && (isInterventionQuery || isSemaineQuery || isMoisQuery)) {
+      let sql = `
+        select distinct c.id, c.name, c.address, count(i.id) as intervention_count
+        from customers c
+        left join interventions i on i.customer_id = c.id
+        where 1=1
+      `;
+      const params: any[] = [];
+      if (startDate) {
+        sql += ` and i.created_at >= $${params.length + 1}`;
+        params.push(startDate);
+      }
+      if (endDate) {
+        sql += ` and i.created_at <= $${params.length + 1}`;
+        params.push(endDate + ' 23:59:59');
+      }
+      sql += ` group by c.id, c.name, c.address having count(i.id) > 0 limit 20`;
+      const customers = await run(sql, params);
+      customers.forEach((c: any) => {
+        results.push({
+          type: 'customer',
+          id: c.id,
+          title: c.name,
+          subtitle: `${c.intervention_count} intervention(s)`,
+          metadata: [c.address || ''],
+          url: `/customers?selected=${c.id}`
+        });
+      });
+    }
+
+    // Si pas de résultats sémantiques, faire une recherche normale
+    if (results.length === 0) {
+      const searchResults = await run(
+        `select 'customer' as type, id::text, name as title, coalesce(address, '') as subtitle from customers where lower(name) like $1 limit 10`,
+        [`%${queryLower}%`]
+      );
+      searchResults.forEach((r: any) => {
+        results.push({
+          type: r.type,
+          id: r.id,
+          title: r.title,
+          subtitle: r.subtitle,
+          metadata: [],
+          url: `/customers?selected=${r.id}`
+        });
+      });
+    }
+
+    res.json(results);
+  })
+);
+
+// GET /api/search/suggestions - Suggestions intelligentes
+app.get(
+  '/api/search/suggestions',
+  requireAuth({ roles: ['admin', 'manager', 'user'] }),
+  asyncHandler(async (req, res) => {
+    const query = (req.query.q as string) || '';
+    if (!query.trim() || query.length < 2) {
+      return res.json([]);
+    }
+
+    const searchTerm = `%${query.toLowerCase()}%`;
+    const suggestions: string[] = [];
+
+    // Suggestions depuis les clients
+    const customers = await run(`select distinct name from customers where lower(name) like $1 limit 5`, [searchTerm]);
+    customers.forEach((c: any) => suggestions.push(c.name));
+
+    // Suggestions depuis les factures
+    const invoices = await run(`select distinct invoice_number from invoices where lower(invoice_number) like $1 limit 5`, [searchTerm]);
+    invoices.forEach((inv: any) => suggestions.push(`Facture ${inv.invoice_number}`));
+
+    // Suggestions depuis les matières
+    const materials = await run(`select distinct abrege from materials where lower(coalesce(abrege, '')) like $1 limit 5`, [searchTerm]);
+    materials.forEach((m: any) => {
+      if (m.abrege) suggestions.push(m.abrege);
+    });
+
+    // Suggestions depuis les employés
+    const employees = await run(`select distinct first_name, last_name from employees where lower(first_name) like $1 or lower(last_name) like $1 limit 5`, [searchTerm]);
+    employees.forEach((e: any) => {
+      suggestions.push(`${e.first_name} ${e.last_name}`);
+    });
+
+    res.json([...new Set(suggestions)].slice(0, 10));
+  })
+);
+
+// GET /api/search/saved-filters - Liste des filtres sauvegardés
+app.get(
+  '/api/search/saved-filters',
+  requireAuth({ roles: ['admin', 'manager', 'user'] }),
+  asyncHandler(async (req, res) => {
+    const auth = (req as AuthenticatedRequest).auth;
+    if (!auth) {
+      return res.status(401).json({ message: 'Authentification requise' });
+    }
+
+    // S'assurer que la table existe (au cas où ensureSchema n'a pas été exécuté)
+    try {
+      await run(`
+        create table if not exists saved_search_filters (
+          id uuid primary key default gen_random_uuid(),
+          name text not null,
+          query text not null,
+          filters jsonb not null default '{}',
+          is_favorite boolean not null default false,
+          created_by uuid references users(id) on delete cascade,
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now()
+        )
+      `);
+      await run('create index if not exists saved_search_filters_created_by_idx on saved_search_filters(created_by)');
+    } catch (error: any) {
+      // Ignorer l'erreur si la table existe déjà
+      if (!error.message?.includes('already exists')) {
+        console.warn('Erreur lors de la création de saved_search_filters:', error.message);
+      }
+    }
+
+    const filters = await run(
+      `select sf.*, u.full_name as created_by_name
+       from saved_search_filters sf
+       left join users u on u.id = sf.created_by
+       where sf.created_by = $1
+       order by sf.is_favorite desc, sf.created_at desc`,
+      [auth.id]
+    );
+
+    res.json(filters);
+  })
+);
+
+// POST /api/search/saved-filters - Créer un filtre sauvegardé
+app.post(
+  '/api/search/saved-filters',
+  requireAuth({ roles: ['admin', 'manager', 'user'] }),
+  asyncHandler(async (req, res) => {
+    const auth = (req as AuthenticatedRequest).auth;
+    if (!auth) {
+      return res.status(401).json({ message: 'Authentification requise' });
+    }
+
+    // S'assurer que la table existe
+    try {
+      await run(`
+        create table if not exists saved_search_filters (
+          id uuid primary key default gen_random_uuid(),
+          name text not null,
+          query text not null,
+          filters jsonb not null default '{}',
+          is_favorite boolean not null default false,
+          created_by uuid references users(id) on delete cascade,
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now()
+        )
+      `);
+      await run('create index if not exists saved_search_filters_created_by_idx on saved_search_filters(created_by)');
+    } catch (error: any) {
+      if (!error.message?.includes('already exists')) {
+        console.warn('Erreur lors de la création de saved_search_filters:', error.message);
+      }
+    }
+
+    const { name, query, filters, is_favorite } = req.body;
+
+    if (!name || !query) {
+      return res.status(400).json({ message: 'Nom et requête requis' });
+    }
+
+    const [savedFilter] = await run(
+      `insert into saved_search_filters (name, query, filters, is_favorite, created_by)
+       values ($1, $2, $3, $4, $5)
+       returning *`,
+      [name, query, JSON.stringify(filters || {}), is_favorite || false, auth.id]
+    );
+
+    res.status(201).json(savedFilter);
+  })
+);
+
+// PUT /api/search/saved-filters/:id - Modifier un filtre sauvegardé
+app.put(
+  '/api/search/saved-filters/:id',
+  requireAuth({ roles: ['admin', 'manager', 'user'] }),
+  asyncHandler(async (req, res) => {
+    const auth = (req as AuthenticatedRequest).auth;
+    if (!auth) {
+      return res.status(401).json({ message: 'Authentification requise' });
+    }
+
+    const { id } = req.params;
+    const { name, query, filters, is_favorite } = req.body;
+
+    const [savedFilter] = await run(
+      `update saved_search_filters
+       set name = coalesce($1, name),
+           query = coalesce($2, query),
+           filters = coalesce($3::jsonb, filters),
+           is_favorite = coalesce($4, is_favorite),
+           updated_at = now()
+       where id = $5 and created_by = $6
+       returning *`,
+      [name, query, filters ? JSON.stringify(filters) : null, is_favorite, id, auth.id]
+    );
+
+    if (!savedFilter) {
+      return res.status(404).json({ message: 'Filtre non trouvé' });
+    }
+
+    res.json(savedFilter);
+  })
+);
+
+// DELETE /api/search/saved-filters/:id - Supprimer un filtre sauvegardé
+app.delete(
+  '/api/search/saved-filters/:id',
+  requireAuth({ roles: ['admin', 'manager', 'user'] }),
+  asyncHandler(async (req, res) => {
+    const auth = (req as AuthenticatedRequest).auth;
+    if (!auth) {
+      return res.status(401).json({ message: 'Authentification requise' });
+    }
+
+    const { id } = req.params;
+
+    await run(
+      `delete from saved_search_filters where id = $1 and created_by = $2`,
+      [id, auth.id]
+    );
+
+    res.status(204).send();
   })
 );
 

@@ -259,79 +259,82 @@ export const CustomersPage = () => {
       {/* Modal création/édition */}
       {showModal && (
         <div className="modal-backdrop" onClick={() => setShowModal(false)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+          <div className="modal-panel unified-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2 className="modal-title">{editingCustomer ? 'Modifier le client' : 'Nouveau client'}</h2>
               <button
                 type="button"
                 className="modal-close"
                 onClick={() => setShowModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer' }}
               >
                 ×
               </button>
             </div>
-            <form onSubmit={handleSubmit} style={{ padding: '24px' }}>
-              <div className="destruction-field">
-                <label className="destruction-label">Nom du client *</label>
-                <input
-                  type="text"
-                  className="destruction-input"
-                  value={form.name}
-                  onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
-                  required
-                />
-              </div>
-              <div className="destruction-field">
-                <label className="destruction-label">Adresse</label>
-                <input
-                  type="text"
-                  className="destruction-input"
-                  value={form.address}
-                  onChange={(e) => setForm((prev) => ({ ...prev, address: e.target.value }))}
-                  placeholder="Adresse complète"
-                />
-              </div>
-              <div className="destruction-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-                <div className="destruction-field">
-                  <label className="destruction-label">Latitude</label>
+            <form onSubmit={handleSubmit} className="modal-body">
+              <div className="form-section">
+                <div className="form-group">
+                  <label htmlFor="customer-name">
+                    Nom du client <span className="required-indicator">*</span>
+                  </label>
                   <input
-                    type="number"
-                    step="any"
-                    className="destruction-input"
-                    value={form.latitude}
-                    onChange={(e) => setForm((prev) => ({ ...prev, latitude: e.target.value }))}
-                    placeholder="46.548452"
+                    id="customer-name"
+                    type="text"
+                    value={form.name}
+                    onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                    required
                   />
                 </div>
-                <div className="destruction-field">
-                  <label className="destruction-label">Longitude</label>
+                <div className="form-group">
+                  <label htmlFor="customer-address">Adresse</label>
                   <input
-                    type="number"
-                    step="any"
-                    className="destruction-input"
-                    value={form.longitude}
-                    onChange={(e) => setForm((prev) => ({ ...prev, longitude: e.target.value }))}
-                    placeholder="6.572221"
+                    id="customer-address"
+                    type="text"
+                    value={form.address}
+                    onChange={(e) => setForm((prev) => ({ ...prev, address: e.target.value }))}
+                    placeholder="Adresse complète"
                   />
                 </div>
+                <div className="form-grid-2-cols">
+                  <div className="form-group">
+                    <label htmlFor="customer-latitude">Latitude</label>
+                    <input
+                      id="customer-latitude"
+                      type="number"
+                      step="any"
+                      value={form.latitude}
+                      onChange={(e) => setForm((prev) => ({ ...prev, latitude: e.target.value }))}
+                      placeholder="46.548452"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="customer-longitude">Longitude</label>
+                    <input
+                      id="customer-longitude"
+                      type="number"
+                      step="any"
+                      value={form.longitude}
+                      onChange={(e) => setForm((prev) => ({ ...prev, longitude: e.target.value }))}
+                      placeholder="6.572221"
+                    />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="customer-risk-level">Niveau de risque</label>
+                  <select
+                    id="customer-risk-level"
+                    value={form.risk_level}
+                    onChange={(e) => setForm((prev) => ({ ...prev, risk_level: e.target.value }))}
+                  >
+                    <option value="">Normal</option>
+                    <option value="low">Faible</option>
+                    <option value="medium">Moyen</option>
+                    <option value="sensitive">Sensible</option>
+                    <option value="high">Élevé</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                </div>
               </div>
-              <div className="destruction-field">
-                <label className="destruction-label">Niveau de risque</label>
-                <select
-                  className="destruction-input"
-                  value={form.risk_level}
-                  onChange={(e) => setForm((prev) => ({ ...prev, risk_level: e.target.value }))}
-                >
-                  <option value="">Normal</option>
-                  <option value="low">Faible</option>
-                  <option value="medium">Moyen</option>
-                  <option value="sensitive">Sensible</option>
-                  <option value="high">Élevé</option>
-                  <option value="urgent">Urgent</option>
-                </select>
-              </div>
-              <div className="modal-actions">
+              <div className="modal-footer">
                 <button type="button" className="btn btn-outline" onClick={() => setShowModal(false)}>
                   Annuler
                 </button>

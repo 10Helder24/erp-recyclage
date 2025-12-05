@@ -33,8 +33,10 @@ import { SuppliersPage } from './pages/SuppliersPage';
 import DocumentsPage from './pages/DocumentsPage';
 import IntegrationsPage from './pages/IntegrationsPage';
 import GamificationPage from './pages/GamificationPage';
+import GlobalSearchPage from './pages/GlobalSearchPage';
 import { useAuth } from './hooks/useAuth';
 import { useOffline } from './hooks/useOffline';
+import { useServiceWorkerUpdate } from './hooks/useServiceWorkerUpdate';
 import { Api } from './lib/api';
 
 const NAV_LINK_IDS = [
@@ -70,7 +72,8 @@ const NAV_LINK_IDS = [
   'suppliers',
   'documents',
   'integrations',
-  'gamification'
+  'gamification',
+  'global-search'
 ] as const;
 type NavId = (typeof NAV_LINK_IDS)[number];
 
@@ -96,6 +99,7 @@ type NavSection =
 const NAV_SECTIONS: NavSection[] = [
   { type: 'link', id: 'dashboard', label: 'Tableau de bord' },
   { type: 'link', id: 'alerts', label: 'Alertes' },
+  { type: 'link', id: 'global-search', label: 'Recherche Globale' },
   {
     type: 'group',
     id: 'rhPlus',
@@ -172,6 +176,7 @@ const NAV_SECTIONS: NavSection[] = [
 const App = () => {
   const { user, loading, logout, hasRole, hasPermission } = useAuth();
   const { pendingCount } = useOffline();
+  const { checkForUpdate } = useServiceWorkerUpdate(); // Vérifie automatiquement les mises à jour
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeNav, setActiveNav] = useState<NavId>('rh');
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
@@ -445,6 +450,8 @@ const App = () => {
         );
       case 'gamification':
         return <GamificationPage />;
+      case 'global-search':
+        return <GlobalSearchPage />;
       case 'dashboard':
         return <DashboardPage />;
       case 'rh':
