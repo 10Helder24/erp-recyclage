@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Search, Filter, Save, X, Clock, Star, TrendingUp, Users, FileText, Package, MapPin, AlertCircle, Building2, Truck, Calendar, Award, Briefcase } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { Api, type SearchResult, type SavedFilter } from '../lib/api';
+import { Api, type SearchResult, type SavedFilter, type CreateSavedFilterPayload } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
 
 // Types importés depuis api.ts
@@ -135,7 +135,7 @@ export default function GlobalSearchPage() {
         query: searchQuery,
         filters,
         is_favorite: false
-      } as CreateSavedFilterPayload);
+      } satisfies CreateSavedFilterPayload);
       toast.success('Vue personnalisée sauvegardée');
       loadSavedFilters();
     } catch (error: any) {
@@ -145,7 +145,14 @@ export default function GlobalSearchPage() {
 
   const handleLoadFilter = async (filter: SavedFilter) => {
     setSearchQuery(filter.query);
-    setFilters(filter.filters);
+    // Convertir filter.filters (Record<string, any>) en SearchFilters
+    const convertedFilters: SearchFilters = {
+      types: Array.isArray(filter.filters.types) ? filter.filters.types : [],
+      dateRange: filter.filters.dateRange,
+      status: filter.filters.status,
+      department: filter.filters.department
+    };
+    setFilters(convertedFilters);
     performSearch(filter.query);
   };
 
@@ -435,7 +442,7 @@ export default function GlobalSearchPage() {
                   </div>
                   <div className="results-list">
                     {typeResults.map((result) => {
-                      const ResultIcon = result.icon;
+                      const ResultIcon = getTypeIcon(result.type);
                       return (
                         <div key={result.id} className="result-item">
                           <div className="result-icon">
