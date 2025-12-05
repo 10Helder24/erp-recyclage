@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import toast from 'react-hot-toast';
 
 export function useServiceWorkerUpdate(): {
@@ -67,18 +67,24 @@ export function useServiceWorkerUpdate(): {
               // Nouvelle version disponible
               setUpdateAvailable(true);
               toast(
-                (t) => (
-                  <div>
-                    <p style={{ marginBottom: '8px', fontWeight: 600 }}>
-                      Nouvelle version disponible
-                    </p>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button
-                        onClick={() => {
-                          toast.dismiss(t.id);
-                          handleUpdate();
-                        }}
-                        style={{
+                (t) => {
+                  const handleUpdateClick = () => {
+                    toast.dismiss(t.id);
+                    handleUpdate();
+                  };
+                  const handleLaterClick = () => {
+                    toast.dismiss(t.id);
+                    setUpdateAvailable(false);
+                  };
+                  
+                  return React.createElement('div', null,
+                    React.createElement('p', { style: { marginBottom: '8px', fontWeight: 600 } },
+                      'Nouvelle version disponible'
+                    ),
+                    React.createElement('div', { style: { display: 'flex', gap: '8px' } },
+                      React.createElement('button', {
+                        onClick: handleUpdateClick,
+                        style: {
                           padding: '6px 12px',
                           background: '#3b82f6',
                           color: 'white',
@@ -87,16 +93,11 @@ export function useServiceWorkerUpdate(): {
                           cursor: 'pointer',
                           fontSize: '0.875rem',
                           fontWeight: 500
-                        }}
-                      >
-                        Mettre à jour
-                      </button>
-                      <button
-                        onClick={() => {
-                          toast.dismiss(t.id);
-                          setUpdateAvailable(false);
-                        }}
-                        style={{
+                        }
+                      }, 'Mettre à jour'),
+                      React.createElement('button', {
+                        onClick: handleLaterClick,
+                        style: {
                           padding: '6px 12px',
                           background: '#e5e7eb',
                           color: '#374151',
@@ -104,13 +105,11 @@ export function useServiceWorkerUpdate(): {
                           borderRadius: '6px',
                           cursor: 'pointer',
                           fontSize: '0.875rem'
-                        }}
-                      >
-                        Plus tard
-                      </button>
-                    </div>
-                  </div>
-                ),
+                        }
+                      }, 'Plus tard')
+                    )
+                  );
+                },
                 {
                   duration: Infinity,
                   icon: '🔄',
