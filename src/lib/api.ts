@@ -933,17 +933,19 @@ export const Api = {
     if (params?.employee_id) search.set('employee_id', params.employee_id);
     if (params?.limit) search.set('limit', String(params.limit));
     const qs = search.toString();
-    return request<any[]>(`/hr/time-clock${qs ? `?${qs}` : ''}`);
+    return request<TimeClockEvent[]>(`/hr/time-clock${qs ? `?${qs}` : ''}`);
   },
   createTimeClockEvent: (payload: {
     employee_id: string;
     position_id?: string;
-    event_type: 'in' | 'out' | 'pause_in' | 'pause_out' | 'position_change';
+    event_type?: TimeClockEvent['event_type'];
     source?: string;
     device_id?: string;
     occurred_at?: string;
   }) =>
-    request<any>('/hr/time-clock', { method: 'POST', body: JSON.stringify(payload) }),
+    request<TimeClockEvent>('/hr/time-clock', { method: 'POST', body: JSON.stringify(payload) }),
+  batchTimeClockEvents: (events: Array<Omit<TimeClockEvent, 'id' | 'created_at'>>) =>
+    request<{ inserted: number }>('/hr/time-clock/batch', { method: 'POST', body: JSON.stringify({ events }) }),
 
   fetchLeaves: (query: string) => request<Leave[]>(`/leaves${query ? `?${query}` : ''}`),
   fetchPendingLeaves: () => request<Leave[]>('/leaves/pending'),
@@ -2771,7 +2773,202 @@ export const Api = {
     request<any>('/user/preferences', {
       method: 'PATCH',
       body: JSON.stringify(payload)
-    })
+    }),
+
+  // ===== RH avancé - Chauffeurs =====
+  fetchDriverDuty: (employeeId: string, start_date?: string, end_date?: string) =>
+    request<DriverDutyRecord[]>(`/api/hr/employees/${employeeId}/driver-duty${buildQuery({ start_date, end_date })}`),
+  fetchDriverDutyRecords: async (employeeId: string, start_date?: string, end_date?: string) => {
+    const records = await Api.fetchDriverDuty(employeeId, start_date, end_date);
+    return records.map((r: DriverDutyRecord) => ({
+      ...r,
+      total_hours: (r as any).total_hours ?? r.duty_hours ?? 0,
+      break_minutes: (r as any).break_minutes ?? r.breaks_minutes ?? 0,
+      is_compliant: (r as any).is_compliant ?? r.legal_ok ?? false
+    }));
+  },
+  upsertDriverDuty: (employeeId: string, payload: Partial<DriverDutyRecord>) =>
+    request<DriverDutyRecord>(`/api/hr/employees/${employeeId}/driver-duty`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchDriverIncidents: (employeeId: string) =>
+    request<DriverIncident[]>(`/api/hr/employees/${employeeId}/driver-incidents`),
+  createDriverIncident: (employeeId: string, payload: Omit<DriverIncident, 'id' | 'employee_id' | 'created_at'>) =>
+    request<DriverIncident>(`/api/hr/employees/${employeeId}/driver-incidents`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchEcoDriving: (employeeId: string) =>
+    request<EcoDrivingScore[]>(`/api/hr/employees/${employeeId}/eco-driving`),
+  fetchEcoDrivingScores: async (employeeId: string) => {
+    const scores = await Api.fetchEcoDriving(employeeId);
+    return scores.map((s: EcoDrivingScore) => ({
+      ...s,
+      period_start: (s as any).period_start || s.created_at,
+      period_end: (s as any).period_end || s.created_at,
+      fuel_consumption_l_per_100km: s.fuel_consumption ?? (s as any).fuel_consumption_l_per_100km ?? null
+    }));
+  },
+  createEcoDriving: (employeeId: string, payload: Omit<EcoDrivingScore, 'id' | 'employee_id' | 'created_at'>) =>
+    request<EcoDrivingScore>(`/api/hr/employees/${employeeId}/eco-driving`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // ===== RH avancé - Recrutement =====
+  fetchJobPositions: () => request<JobPosition[]>('/api/hr/recruitment/positions'),
+  createJobPosition: (payload: Partial<JobPosition>) =>
+    request<JobPosition>('/api/hr/recruitment/positions', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchJobApplicants: (params?: { position_id?: string; status?: string }) =>
+    request<JobApplicant[]>(`/api/hr/recruitment/applicants${buildQuery(params || {})}`),
+  createJobApplicant: (payload: Partial<JobApplicant>) =>
+    request<JobApplicant>('/api/hr/recruitment/applicants', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateJobApplicant: (id: string, payload: { status?: string; score?: number }) =>
+    request<JobApplicant>(`/api/hr/recruitment/applicants/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  fetchApplicantTests: (applicantId?: string) => {
+    if (applicantId) {
+      return request<ApplicantTest[]>(`/api/hr/recruitment/applicants/${applicantId}/tests`);
+    }
+    // Si aucun applicantId, charger tous les tests pour tous les candidats
+    return Api.fetchJobApplicants({}).then(async (applicants) => {
+      const allTests: ApplicantTest[] = [];
+      for (const app of applicants) {
+        try {
+          const tests = await request<ApplicantTest[]>(`/api/hr/recruitment/applicants/${app.id}/tests`);
+          allTests.push(...tests);
+        } catch {
+          // Ignore errors for individual applicants
+        }
+      }
+      return allTests;
+    });
+  },
+  createApplicantTest: (applicantId: string, payload: Partial<ApplicantTest>) =>
+    request<ApplicantTest>(`/api/hr/recruitment/applicants/${applicantId}/tests`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // ===== RH avancé - Formations continues =====
+  fetchTrainingModules: () => request<TrainingModule[]>('/api/hr/training/modules'),
+  createTrainingModule: (payload: Partial<TrainingModule>) =>
+    request<TrainingModule>('/api/hr/training/modules', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchTrainingProgress: (employeeId?: string) => {
+    if (employeeId) {
+      return request<TrainingProgress[]>(`/api/hr/employees/${employeeId}/training-progress`);
+    }
+    // Si aucun employeeId, charger toute la progression pour tous les employés
+    return Api.fetchEmployees().then(async (employees) => {
+      const allProgress: TrainingProgress[] = [];
+      for (const emp of employees) {
+        try {
+          const progress = await request<TrainingProgress[]>(`/api/hr/employees/${emp.id}/training-progress`);
+          allProgress.push(...progress);
+        } catch {
+          // Ignore errors for individual employees
+        }
+      }
+      return allProgress;
+    });
+  },
+  upsertTrainingProgress: (employeeId: string, payload: Partial<TrainingProgress>) =>
+    request<TrainingProgress>(`/api/hr/employees/${employeeId}/training-progress`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  generateTrainingReminders: () =>
+    request<{ created: number }>('/api/hr/training/reminders/generate', {
+      method: 'POST'
+    }),
+  fetchTrainingReminders: () => request<TrainingReminder[]>('/api/hr/training/reminders'),
+
+  // ===== RH avancé - Paie / contrats =====
+  fetchContracts: (params?: { employee_id?: string; status?: string }) =>
+    request<EmploymentContract[]>(`/api/hr/contracts${buildQuery(params || {})}`),
+  fetchEmploymentContracts: (params?: { employee_id?: string; status?: string }) =>
+    Api.fetchContracts(params),
+  createContract: (payload: Partial<EmploymentContract>) =>
+    request<EmploymentContract>('/api/hr/contracts', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  createEmploymentContract: (payload: Partial<EmploymentContract>) => Api.createContract(payload),
+  updateEmploymentContract: (id: string, payload: Partial<EmploymentContract>) =>
+    request<EmploymentContract>(`/api/hr/contracts/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteEmploymentContract: (id: string) =>
+    request<{ message: string }>(`/api/hr/contracts/${id}`, {
+      method: 'DELETE'
+    }),
+  fetchContractAllowances: (contractId?: string) => {
+    if (contractId) {
+      return request<ContractAllowance[]>(`/api/hr/contracts/${contractId}/allowances`);
+    }
+    // Si aucun contractId, charger toutes les indemnités pour tous les contrats
+    return Api.fetchContracts({}).then(async (contracts) => {
+      const allAllowances: ContractAllowance[] = [];
+      for (const contract of contracts) {
+        try {
+          const allowances = await request<ContractAllowance[]>(`/api/hr/contracts/${contract.id}/allowances`);
+          allAllowances.push(...allowances);
+        } catch {
+          // Ignore errors for individual contracts
+        }
+      }
+      return allAllowances;
+    });
+  },
+  createContractAllowance: (contractId: string, payload: Partial<ContractAllowance>) =>
+    request<ContractAllowance>(`/api/hr/contracts/${contractId}/allowances`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchOvertime: (params?: { employee_id?: string; start_date?: string; end_date?: string }) =>
+    request<OvertimeEntry[]>(`/api/hr/overtime${buildQuery(params || {})}`),
+  fetchOvertimeEntries: (params?: { employee_id?: string; start_date?: string; end_date?: string }) =>
+    Api.fetchOvertime(params),
+  createOvertime: (payload: Partial<OvertimeEntry>) =>
+    request<OvertimeEntry>('/api/hr/overtime', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchPayroll: (params?: { employee_id?: string; period_start?: string; period_end?: string }) =>
+    request<PayrollEntry[]>(`/api/hr/payroll${buildQuery(params || {})}`),
+  fetchPayrollEntries: (params?: { employee_id?: string; period_start?: string; period_end?: string }) =>
+    Api.fetchPayroll(params),
+  createPayroll: (payload: Partial<PayrollEntry>) =>
+    request<PayrollEntry>('/api/hr/payroll', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  createPayrollEntry: (payload: Partial<PayrollEntry>) => Api.createPayroll(payload),
+  updatePayrollEntry: (id: string, payload: Partial<PayrollEntry>) =>
+    request<PayrollEntry>(`/api/hr/payroll/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deletePayrollEntry: (id: string) =>
+    request<{ message: string }>(`/api/hr/payroll/${id}`, {
+      method: 'DELETE'
+    }),
+
+  // ===== RH avancé - Dashboard RH =====
+  fetchHrDashboard: () => request<HrDashboard>('/api/hr/dashboard')
 };
 
 // Alert & Notification types
@@ -4465,6 +4662,10 @@ export type DriverDutyRecord = {
   overtime_minutes: number;
   legal_ok: boolean;
   notes: string | null;
+  // Aliases for UI compatibility
+  total_hours?: number | null;
+  break_minutes?: number | null;
+  is_compliant?: boolean;
 };
 
 export type DriverIncident = {
@@ -4477,6 +4678,9 @@ export type DriverIncident = {
   description: string | null;
   customer_feedback: string | null;
   resolved: boolean;
+  // Aliases for UI compatibility
+  incident_date?: string;
+  incident_type?: string | null;
 };
 
 export type EcoDrivingScore = {
@@ -4489,6 +4693,10 @@ export type EcoDrivingScore = {
   harsh_acceleration: number;
   idle_time_minutes: number;
   created_at: string;
+  // Aliases for UI compatibility
+  period_start?: string;
+  period_end?: string;
+  fuel_consumption_l_per_100km?: number | null;
 };
 
 export type JobPosition = {
@@ -4512,6 +4720,11 @@ export type JobApplicant = {
   status: string;
   score: number | null;
   created_at: string;
+  // Aliases for UI compatibility
+  first_name?: string | null;
+  last_name?: string | null;
+  test_score?: number | null;
+  applied_at?: string | null;
 };
 
 export type ApplicantTest = {
@@ -4521,18 +4734,22 @@ export type ApplicantTest = {
   score: number | null;
   result: string | null;
   created_at: string;
+  // Aliases for UI compatibility
+  completed_at?: string | null;
 };
 
 export type TrainingModule = {
   id: string;
   title: string;
-  module_type: 'video' | 'checklist' | 'document';
+  module_type: 'video' | 'checklist' | 'document' | 'quiz';
   media_url: string | null;
   checklist_items: string[] | null;
   mandatory: boolean;
   refresh_months: number | null;
   duration_minutes: number | null;
   created_at: string;
+  // Aliases for UI compatibility
+  is_mandatory?: boolean;
 };
 
 export type TrainingProgress = {
@@ -4549,6 +4766,8 @@ export type TrainingProgress = {
   module_type?: TrainingModule['module_type'];
   mandatory?: boolean;
   refresh_months?: number | null;
+  // Alias for UI compatibility
+  completion_percentage?: number | null;
 };
 
 export type TrainingReminder = {
@@ -4561,6 +4780,8 @@ export type TrainingReminder = {
   created_at: string;
   title?: string;
   module_type?: TrainingModule['module_type'];
+  // Alias for UI compatibility
+  reason?: string | null;
 };
 
 export type EmploymentContract = {
@@ -4575,6 +4796,9 @@ export type EmploymentContract = {
   site_id: string | null;
   status: string;
   created_at: string;
+  // Aliases for UI compatibility
+  work_rate?: number | null;
+  notes?: string | null;
 };
 
 export type ContractAllowance = {
@@ -4583,6 +4807,11 @@ export type ContractAllowance = {
   label: string;
   amount: number;
   periodicity: string;
+  // Aliases for UI compatibility
+  allowance_type?: string | null;
+  currency?: string | null;
+  period_start?: string | null;
+  period_end?: string | null;
 };
 
 export type OvertimeEntry = {
@@ -4593,6 +4822,10 @@ export type OvertimeEntry = {
   rate_multiplier: number;
   approved: boolean;
   created_at: string;
+  // Aliases for UI compatibility
+  overtime_date?: string;
+  amount?: number | null;
+  currency?: string | null;
 };
 
 export type PayrollEntry = {
@@ -4607,6 +4840,21 @@ export type PayrollEntry = {
   overtime_hours: number | null;
   status: string;
   created_at: string;
+  // Aliases for UI compatibility
+  base_salary?: number | null;
+  allowances?: number | null;
+  net_salary?: number | null;
+};
+
+export type TimeClockEvent = {
+  id: string;
+  employee_id: string;
+  position_id: string | null;
+  event_type: 'in' | 'out' | 'pause_in' | 'pause_out' | 'position_change';
+  source: string | null;
+  device_id: string | null;
+  occurred_at: string;
+  created_at: string;
 };
 
 export type HrDashboard = {
@@ -4619,108 +4867,3 @@ export type HrDashboard = {
   overtimeLast30Hours: number;
 };
 
-// ===== RH avancé - API frontend (extension de Api) =====
-Object.assign(Api, {
-  // Chauffeurs
-  fetchDriverDuty: (employeeId: string, start_date?: string, end_date?: string) =>
-    request<DriverDutyRecord[]>(`/api/hr/employees/${employeeId}/driver-duty${buildQuery({ start_date, end_date })}`),
-  upsertDriverDuty: (employeeId: string, payload: Partial<DriverDutyRecord>) =>
-    request<DriverDutyRecord>(`/api/hr/employees/${employeeId}/driver-duty`, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
-  fetchDriverIncidents: (employeeId: string) =>
-    request<DriverIncident[]>(`/api/hr/employees/${employeeId}/driver-incidents`),
-  createDriverIncident: (employeeId: string, payload: Omit<DriverIncident, 'id' | 'employee_id' | 'created_at'>) =>
-    request<DriverIncident>(`/api/hr/employees/${employeeId}/driver-incidents`, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
-  fetchEcoDriving: (employeeId: string) =>
-    request<EcoDrivingScore[]>(`/api/hr/employees/${employeeId}/eco-driving`),
-  createEcoDriving: (employeeId: string, payload: Omit<EcoDrivingScore, 'id' | 'employee_id' | 'created_at'>) =>
-    request<EcoDrivingScore>(`/api/hr/employees/${employeeId}/eco-driving`, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
-
-  // Recrutement
-  fetchJobPositions: () => request<JobPosition[]>('/api/hr/recruitment/positions'),
-  createJobPosition: (payload: Partial<JobPosition>) =>
-    request<JobPosition>('/api/hr/recruitment/positions', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
-  fetchJobApplicants: (params?: { position_id?: string; status?: string }) =>
-    request<JobApplicant[]>(`/api/hr/recruitment/applicants${buildQuery(params || {})}`),
-  createJobApplicant: (payload: Partial<JobApplicant>) =>
-    request<JobApplicant>('/api/hr/recruitment/applicants', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
-  updateJobApplicant: (id: string, payload: { status?: string; score?: number }) =>
-    request<JobApplicant>(`/api/hr/recruitment/applicants/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload)
-    }),
-  fetchApplicantTests: (applicantId: string) =>
-    request<ApplicantTest[]>(`/api/hr/recruitment/applicants/${applicantId}/tests`),
-  createApplicantTest: (applicantId: string, payload: Partial<ApplicantTest>) =>
-    request<ApplicantTest>(`/api/hr/recruitment/applicants/${applicantId}/tests`, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
-
-  // Formations continues
-  fetchTrainingModules: () => request<TrainingModule[]>('/api/hr/training/modules'),
-  createTrainingModule: (payload: Partial<TrainingModule>) =>
-    request<TrainingModule>('/api/hr/training/modules', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
-  fetchTrainingProgress: (employeeId: string) =>
-    request<TrainingProgress[]>(`/api/hr/employees/${employeeId}/training-progress`),
-  upsertTrainingProgress: (employeeId: string, payload: Partial<TrainingProgress>) =>
-    request<TrainingProgress>(`/api/hr/employees/${employeeId}/training-progress`, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
-  generateTrainingReminders: () =>
-    request<{ created: number }>('/api/hr/training/reminders/generate', {
-      method: 'POST'
-    }),
-  fetchTrainingReminders: () => request<TrainingReminder[]>('/api/hr/training/reminders'),
-
-  // Paie / contrats
-  fetchContracts: (params?: { employee_id?: string; status?: string }) =>
-    request<EmploymentContract[]>(`/api/hr/contracts${buildQuery(params || {})}`),
-  createContract: (payload: Partial<EmploymentContract>) =>
-    request<EmploymentContract>('/api/hr/contracts', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
-  fetchContractAllowances: (contractId: string) =>
-    request<ContractAllowance[]>(`/api/hr/contracts/${contractId}/allowances`),
-  createContractAllowance: (contractId: string, payload: Partial<ContractAllowance>) =>
-    request<ContractAllowance>(`/api/hr/contracts/${contractId}/allowances`, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
-  fetchOvertime: (params?: { employee_id?: string; start_date?: string; end_date?: string }) =>
-    request<OvertimeEntry[]>(`/api/hr/overtime${buildQuery(params || {})}`),
-  createOvertime: (payload: Partial<OvertimeEntry>) =>
-    request<OvertimeEntry>('/api/hr/overtime', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
-  fetchPayroll: (params?: { employee_id?: string; period_start?: string; period_end?: string }) =>
-    request<PayrollEntry[]>(`/api/hr/payroll${buildQuery(params || {})}`),
-  createPayroll: (payload: Partial<PayrollEntry>) =>
-    request<PayrollEntry>('/api/hr/payroll', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
-
-  // Dashboard RH
-  fetchHrDashboard: () => request<HrDashboard>('/api/hr/dashboard')
-});

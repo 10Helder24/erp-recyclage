@@ -50,7 +50,13 @@ export const TrainingPage = () => {
 
   const handleSaveModule = async () => {
     try {
-      await Api.createTrainingModule(moduleForm);
+      await Api.createTrainingModule({
+        title: moduleForm.title,
+        module_type: moduleForm.module_type,
+        media_url: moduleForm.content_url || null,
+        mandatory: moduleForm.is_mandatory,
+        duration_minutes: moduleForm.duration_minutes || null
+      });
       toast.success('Module créé');
       setShowModuleModal(false);
       setModuleForm({ title: '', description: '', module_type: 'video', content_url: '', duration_minutes: 0, is_mandatory: false });
@@ -113,7 +119,7 @@ export const TrainingPage = () => {
                       <td>{module.title}</td>
                       <td><span className="badge">{module.module_type}</span></td>
                       <td>{module.duration_minutes} min</td>
-                      <td>{module.is_mandatory ? 'Oui' : 'Non'}</td>
+                      <td>{module.is_mandatory ?? module.mandatory ? 'Oui' : 'Non'}</td>
                       <td>
                         {isManager && (
                           <>
@@ -150,7 +156,7 @@ export const TrainingPage = () => {
                         <td>{emp ? `${emp.first_name} ${emp.last_name}` : 'N/A'}</td>
                         <td>{mod?.title || 'N/A'}</td>
                         <td><span className={`badge ${p.status}`}>{p.status}</span></td>
-                        <td>{p.completion_percentage}%</td>
+                        <td>{p.completion_percentage ?? (p.status === 'completed' ? 100 : 0)}%</td>
                         <td>{p.completed_at ? format(new Date(p.completed_at), 'dd.MM.yyyy', { locale: fr }) : '-'}</td>
                       </tr>
                     );
@@ -180,7 +186,7 @@ export const TrainingPage = () => {
                       <tr key={r.id}>
                         <td>{emp ? `${emp.first_name} ${emp.last_name}` : 'N/A'}</td>
                         <td>{mod?.title || 'N/A'}</td>
-                        <td>{r.reason}</td>
+                        <td>{r.reason ?? 'Formation à compléter'}</td>
                         <td>{format(new Date(r.due_date), 'dd.MM.yyyy', { locale: fr })}</td>
                         <td><span className={`badge ${r.status}`}>{r.status}</span></td>
                       </tr>

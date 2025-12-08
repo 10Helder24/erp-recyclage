@@ -266,12 +266,12 @@ export const PayrollContractsPage = () => {
                         <td><span className="badge">{contract.contract_type}</span></td>
                         <td>{format(new Date(contract.start_date), 'dd.MM.yyyy', { locale: fr })}</td>
                         <td>{contract.end_date ? format(new Date(contract.end_date), 'dd.MM.yyyy', { locale: fr }) : 'Indéterminé'}</td>
-                        <td>{contract.work_rate}%</td>
-                        <td>{contract.base_salary.toFixed(2)} {contract.currency}</td>
+                        <td>{contract.work_rate ?? 100}%</td>
+                        <td>{contract.base_salary?.toFixed(2) ?? '0.00'} {contract.currency}</td>
                         <td>
                           {canEdit && (
                             <>
-                              <button className="icon-btn" onClick={() => { setEditingContract(contract); setContractForm({ ...contract, end_date: contract.end_date || null }); setShowContractModal(true); }}>
+                              <button className="icon-btn" onClick={() => { setEditingContract(contract); setContractForm({ employee_id: contract.employee_id, contract_type: contract.contract_type as 'CDI' | 'CDD' | 'interim' | 'stage', start_date: contract.start_date, end_date: contract.end_date || null, work_rate: contract.work_rate ?? 100, base_salary: contract.base_salary ?? 0, currency: contract.currency, site_id: contract.site_id, notes: contract.notes || '' }); setShowContractModal(true); }}>
                                 <Edit2 size={16} />
                               </button>
                               <button className="icon-btn danger" onClick={() => handleDeleteContract(contract.id)}>
@@ -310,14 +310,14 @@ export const PayrollContractsPage = () => {
                       <tr key={payroll.id}>
                         <td>{emp ? `${emp.first_name} ${emp.last_name}` : 'N/A'}</td>
                         <td>{format(new Date(payroll.period_start), 'dd.MM.yyyy', { locale: fr })} - {format(new Date(payroll.period_end), 'dd.MM.yyyy', { locale: fr })}</td>
-                        <td>{payroll.base_salary.toFixed(2)} {payroll.currency}</td>
-                        <td>{payroll.overtime_hours}h</td>
-                        <td>{payroll.allowances.toFixed(2)} {payroll.currency}</td>
-                        <td><strong>{payroll.net_salary.toFixed(2)} {payroll.currency}</strong></td>
+                        <td>{payroll.base_salary?.toFixed(2) ?? payroll.gross_amount?.toFixed(2) ?? '0.00'} {payroll.currency}</td>
+                        <td>{payroll.overtime_hours ?? 0}h</td>
+                        <td>{payroll.allowances?.toFixed(2) ?? '0.00'} {payroll.currency}</td>
+                        <td><strong>{payroll.net_salary?.toFixed(2) ?? payroll.net_amount?.toFixed(2) ?? '0.00'} {payroll.currency}</strong></td>
                         <td><span className={`badge ${payroll.status}`}>{payroll.status}</span></td>
                         <td>
                           {canEdit && (
-                            <button className="icon-btn" onClick={() => { setEditingPayroll(payroll); setPayrollForm(payroll); setShowPayrollModal(true); }}>
+                            <button className="icon-btn" onClick={() => { setEditingPayroll(payroll); setPayrollForm({ employee_id: payroll.employee_id, period_start: payroll.period_start, period_end: payroll.period_end, base_salary: payroll.base_salary ?? payroll.gross_amount ?? 0, overtime_hours: payroll.overtime_hours ?? 0, overtime_rate: 1.25, allowances: payroll.allowances ?? 0, deductions: 0, net_salary: payroll.net_salary ?? payroll.net_amount ?? 0, currency: payroll.currency, status: payroll.status as 'draft' | 'approved' | 'paid' }); setShowPayrollModal(true); }}>
                               <Edit2 size={16} />
                             </button>
                           )}
@@ -349,8 +349,8 @@ export const PayrollContractsPage = () => {
                     return (
                       <tr key={allowance.id}>
                         <td>{emp ? `${emp.first_name} ${emp.last_name}` : 'N/A'}</td>
-                        <td>{allowance.allowance_type}</td>
-                        <td>{allowance.amount.toFixed(2)} {allowance.currency}</td>
+                        <td>{allowance.allowance_type ?? allowance.label}</td>
+                        <td>{allowance.amount.toFixed(2)} {allowance.currency ?? 'CHF'}</td>
                         <td>{allowance.period_start ? format(new Date(allowance.period_start), 'dd.MM.yyyy', { locale: fr }) : 'Permanent'}</td>
                         <td>
                           {canEdit && (
@@ -386,10 +386,10 @@ export const PayrollContractsPage = () => {
                     return (
                       <tr key={overtime.id}>
                         <td>{emp ? `${emp.first_name} ${emp.last_name}` : 'N/A'}</td>
-                        <td>{format(new Date(overtime.overtime_date), 'dd.MM.yyyy', { locale: fr })}</td>
+                        <td>{format(new Date(overtime.overtime_date ?? overtime.entry_date), 'dd.MM.yyyy', { locale: fr })}</td>
                         <td>{overtime.hours}h</td>
                         <td>{overtime.rate_multiplier}x</td>
-                        <td>{overtime.amount.toFixed(2)} {overtime.currency}</td>
+                        <td>{overtime.amount?.toFixed(2) ?? '0.00'} {overtime.currency ?? 'CHF'}</td>
                         <td>
                           {canEdit && (
                             <button className="icon-btn" onClick={() => {/* TODO */}}>

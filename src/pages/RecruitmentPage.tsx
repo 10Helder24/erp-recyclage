@@ -136,11 +136,11 @@ export const RecruitmentPage = () => {
                     const pos = positions.find(p => p.id === app.position_id);
                     return (
                       <tr key={app.id}>
-                        <td>{app.first_name} {app.last_name}</td>
+                        <td>{app.first_name ?? app.full_name.split(' ')[0]} {app.last_name ?? app.full_name.split(' ').slice(1).join(' ')}</td>
                         <td>{pos?.title || 'N/A'}</td>
                         <td><span className={`badge ${app.status}`}>{app.status}</span></td>
-                        <td>{app.test_score || '-'}</td>
-                        <td>{format(new Date(app.applied_at), 'dd.MM.yyyy', { locale: fr })}</td>
+                        <td>{app.test_score ?? app.score ?? '-'}</td>
+                        <td>{app.applied_at ? format(new Date(app.applied_at), 'dd.MM.yyyy', { locale: fr }) : format(new Date(app.created_at), 'dd.MM.yyyy', { locale: fr })}</td>
                       </tr>
                     );
                   })}
@@ -165,10 +165,10 @@ export const RecruitmentPage = () => {
                     const app = applicants.find(a => a.id === test.applicant_id);
                     return (
                       <tr key={test.id}>
-                        <td>{app ? `${app.first_name} ${app.last_name}` : 'N/A'}</td>
+                        <td>{app ? `${app.first_name ?? app.full_name.split(' ')[0]} ${app.last_name ?? app.full_name.split(' ').slice(1).join(' ')}` : 'N/A'}</td>
                         <td>{test.test_type}</td>
-                        <td>{test.score}%</td>
-                        <td>{format(new Date(test.completed_at), 'dd.MM.yyyy', { locale: fr })}</td>
+                        <td>{test.score ?? 0}%</td>
+                        <td>{test.completed_at ? format(new Date(test.completed_at), 'dd.MM.yyyy', { locale: fr }) : format(new Date(test.created_at), 'dd.MM.yyyy', { locale: fr })}</td>
                       </tr>
                     );
                   })}

@@ -101,10 +101,10 @@ export const DriversHSETimeClockPage = () => {
                       return (
                         <tr key={duty.id}>
                           <td>{emp ? `${emp.first_name} ${emp.last_name}` : 'N/A'}</td>
-                          <td>{format(new Date(duty.duty_date), 'dd.MM.yyyy', { locale: fr })}</td>
-                          <td>{duty.total_hours}h</td>
-                          <td>{duty.break_minutes} min</td>
-                          <td><span className={`badge ${duty.is_compliant ? 'approved' : 'draft'}`}>{duty.is_compliant ? 'Oui' : 'Non'}</span></td>
+                      <td>{format(new Date(duty.duty_date), 'dd.MM.yyyy', { locale: fr })}</td>
+                      <td>{(duty.total_hours ?? duty.duty_hours ?? duty.driving_hours ?? 0)}h</td>
+                      <td>{duty.break_minutes ?? duty.breaks_minutes ?? 0} min</td>
+                      <td><span className={`badge ${(duty.is_compliant ?? duty.legal_ok) ? 'approved' : 'draft'}`}>{(duty.is_compliant ?? duty.legal_ok) ? 'Oui' : 'Non'}</span></td>
                         </tr>
                       );
                     })}
@@ -129,8 +129,8 @@ export const DriversHSETimeClockPage = () => {
                       return (
                         <tr key={inc.id}>
                           <td>{emp ? `${emp.first_name} ${emp.last_name}` : 'N/A'}</td>
-                          <td>{format(new Date(inc.incident_date), 'dd.MM.yyyy', { locale: fr })}</td>
-                          <td>{inc.incident_type}</td>
+                      <td>{format(new Date(inc.incident_date || inc.occurred_at), 'dd.MM.yyyy', { locale: fr })}</td>
+                      <td>{inc.incident_type || inc.type}</td>
                           <td>{inc.description}</td>
                         </tr>
                       );
@@ -156,9 +156,9 @@ export const DriversHSETimeClockPage = () => {
                       return (
                         <tr key={eco.id}>
                           <td>{emp ? `${emp.first_name} ${emp.last_name}` : 'N/A'}</td>
-                          <td>{format(new Date(eco.period_start), 'dd.MM.yyyy', { locale: fr })} - {format(new Date(eco.period_end), 'dd.MM.yyyy', { locale: fr })}</td>
-                          <td><strong>{eco.score}/100</strong></td>
-                          <td>{eco.fuel_consumption_l_per_100km?.toFixed(2) || '-'} L/100km</td>
+                      <td>{format(new Date(eco.period_start || eco.created_at), 'dd.MM.yyyy', { locale: fr })} - {format(new Date(eco.period_end || eco.created_at), 'dd.MM.yyyy', { locale: fr })}</td>
+                      <td><strong>{eco.score ?? '-'} /100</strong></td>
+                      <td>{(eco.fuel_consumption_l_per_100km ?? eco.fuel_consumption ?? 0)?.toFixed?.(2) || '-'} L/100km</td>
                         </tr>
                       );
                     })}

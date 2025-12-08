@@ -498,8 +498,6 @@ const App = () => {
         ) : (
           <LeavePage initialTab="demandes" />
         );
-      case 'dashboard':
-        return <DashboardPage />;
       case 'rh':
       case 'Inventaires':
       default:

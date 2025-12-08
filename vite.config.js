@@ -4,6 +4,12 @@ export default defineConfig({
     plugins: [react()],
     server: {
         port: 5173,
+        open: true,
+        headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        },
         proxy: {
             '/api': {
                 target: 'http://localhost:4000',
