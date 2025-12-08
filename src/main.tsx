@@ -5,6 +5,34 @@ import './index.css';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './context/AuthContext';
 
+// Correctif pour les avertissements "non-passive event listener"
+// Intercepte addEventListener pour marquer automatiquement les événements de scroll/touch comme passifs
+if (typeof window !== 'undefined') {
+  const originalAddEventListener = EventTarget.prototype.addEventListener;
+  const passiveEvents = ['touchstart', 'touchmove', 'touchend', 'touchcancel', 'wheel', 'mousewheel'];
+  
+  EventTarget.prototype.addEventListener = function(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions
+  ) {
+    // Si c'est un événement de scroll/touch et que les options ne sont pas explicitement définies
+    if (passiveEvents.includes(type.toLowerCase())) {
+      if (typeof options === 'boolean') {
+        options = { capture: options, passive: true };
+      } else if (options && typeof options === 'object') {
+        // Si passive n'est pas explicitement défini à false, le mettre à true
+        if (options.passive === undefined) {
+          options = { ...options, passive: true };
+        }
+      } else {
+        options = { passive: true };
+      }
+    }
+    return originalAddEventListener.call(this, type, listener, options);
+  };
+}
+
 // Enregistrer le Service Worker pour le mode offline avec gestion des mises à jour
 if ('serviceWorker' in navigator && typeof window !== 'undefined') {
   window.addEventListener('load', () => {
@@ -60,11 +88,14 @@ if ('serviceWorker' in navigator && typeof window !== 'undefined') {
   // Vérifier les mises à jour au focus de la fenêtre
   window.addEventListener('focus', () => {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistration().then((registration) => {
-        if (registration) {
-          registration.update();
-        }
-      });
+      navigator.serviceWorker
+        .getRegistration()
+        .then((registration) => {
+          if (registration) {
+            registration.update().catch((err) => console.error('SW update error (focus)', err));
+          }
+        })
+        .catch((err) => console.error('SW getRegistration error (focus)', err));
     }
   });
 }

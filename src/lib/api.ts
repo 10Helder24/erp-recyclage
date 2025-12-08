@@ -1,6 +1,7 @@
 ﻿import type { Employee } from '../types/employees';
 import type { AuthUser, UserRole } from '../types/auth';
 import type { Leave, LeaveBalance, LeaveRequestPayload, LeaveStatus } from '../types/leaves';
+import { request, setAuthToken as setAuthTokenBase, API_URL, getAuthToken } from './api/base';
 
 export type MapUserLocation = {
   employee_id: string;
@@ -47,6 +48,17 @@ export type Material = {
   description: string | null;
   unite: string | null;
   me_bez: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MaterialQuality = {
+  id: string;
+  material_id: string;
+  name: string;
+  description: string | null;
+  deduction_pct: number;
+  is_default: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -534,75 +546,6 @@ type VacationNotificationPayload = {
   pdfFilename?: string;
 };
 
-const API_URL = import.meta.env.VITE_API_URL ?? '/api';
-let authToken: string | null = null;
-
-const buildHeaders = (options: RequestInit) => {
-  const baseHeaders: Record<string, string> = {
-    ...(options.headers as Record<string, string>) ?? {}
-  };
-  const isFormData = options.body instanceof FormData;
-  if (!isFormData && !baseHeaders['Content-Type']) {
-    baseHeaders['Content-Type'] = 'application/json';
-  }
-  if (authToken) {
-    baseHeaders.Authorization = `Bearer ${authToken}`;
-  }
-  return baseHeaders;
-};
-
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const isOffline = !navigator.onLine;
-  const method = options.method || 'GET';
-  const isMutation = method !== 'GET' && method !== 'HEAD';
-
-  if (isOffline && isMutation) {
-    const { offlineStorage } = await import('../utils/offlineStorage');
-    await offlineStorage.init();
-    const actionId = await offlineStorage.savePendingAction({
-      type: 'api_request',
-      endpoint: `${API_URL}${path}`,
-      method,
-      payload: options.body ? (typeof options.body === 'string' ? JSON.parse(options.body) : options.body) : undefined
-    });
-    throw new Error(`OFFLINE_QUEUED:${actionId}`);
-  }
-
-  try {
-  const response = await fetch(`${API_URL}${path}`, {
-      headers: buildHeaders(options),
-    ...options
-  });
-
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || 'Erreur serveur');
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return response.json();
-  } catch (error) {
-    if (error instanceof TypeError && error.message.includes('fetch')) {
-      if (isMutation) {
-        const { offlineStorage } = await import('../utils/offlineStorage');
-        await offlineStorage.init();
-        const actionId = await offlineStorage.savePendingAction({
-          type: 'api_request',
-          endpoint: `${API_URL}${path}`,
-          method,
-          payload: options.body ? (typeof options.body === 'string' ? JSON.parse(options.body) : options.body) : undefined
-        });
-        throw new Error(`OFFLINE_QUEUED:${actionId}`);
-      }
-      throw new Error('Pas de connexion internet');
-    }
-    throw error;
-  }
-}
-
 // ==========================================
 // GAMIFICATION ET MOTIVATION - TYPES
 // ==========================================
@@ -742,7 +685,7 @@ export interface AwardBadgePayload {
 
 export const Api = {
   setAuthToken: (token: string | null) => {
-    authToken = token;
+    setAuthTokenBase(token);
   },
   login: (payload: { email: string; password: string }) =>
     request<{ token: string; user: AuthUser }>('/auth/login', {
@@ -876,6 +819,132 @@ export const Api = {
       method: 'PATCH',
       body: JSON.stringify(payload)
     }),
+  // HR+ : Skills
+  fetchSkills: () => request<any[]>('/hr/skills'),
+  createSkill: (payload: { name: string; description?: string }) =>
+    request<any>('/hr/skills', { method: 'POST', body: JSON.stringify(payload) }),
+  updateSkill: (id: string, payload: { name?: string; description?: string }) =>
+    request<any>(`/hr/skills/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteSkill: (id: string) => request<{ message: string }>(`/hr/skills/${id}`, { method: 'DELETE' }),
+  fetchEmployeeSkills: (employeeId: string) => request<any[]>(`/hr/employees/${employeeId}/skills`),
+  upsertEmployeeSkill: (
+    employeeId: string,
+    payload: { skill_id: string; level?: number; validated_at?: string; expires_at?: string }
+  ) =>
+    request<any>(`/hr/employees/${employeeId}/skills`, { method: 'POST', body: JSON.stringify(payload) }),
+  deleteEmployeeSkill: (employeeId: string, skillId: string) =>
+    request<{ message: string }>(`/hr/employees/${employeeId}/skills/${skillId}`, { method: 'DELETE' }),
+
+  // HR+ : Certifications
+  fetchCertifications: () => request<any[]>('/hr/certifications'),
+  createCertification: (payload: { code: string; name: string; description?: string; validity_months?: number }) =>
+    request<any>('/hr/certifications', { method: 'POST', body: JSON.stringify(payload) }),
+  fetchEmployeeCertifications: (employeeId: string) => request<any[]>(`/hr/employees/${employeeId}/certifications`),
+  upsertEmployeeCertification: (
+    employeeId: string,
+    payload: { certification_id: string; obtained_at?: string; expires_at?: string; reminder_days?: number }
+  ) =>
+    request<any>(`/hr/employees/${employeeId}/certifications`, { method: 'POST', body: JSON.stringify(payload) }),
+  deleteEmployeeCertification: (employeeId: string, certId: string) =>
+    request<{ message: string }>(`/hr/employees/${employeeId}/certifications/${certId}`, { method: 'DELETE' }),
+
+  // HR+ : Trainings
+  fetchTrainings: () => request<any[]>('/hr/trainings'),
+  createTraining: (payload: { title: string; description?: string; mandatory?: boolean; validity_months?: number }) =>
+    request<any>('/hr/trainings', { method: 'POST', body: JSON.stringify(payload) }),
+  fetchEmployeeTrainings: (employeeId: string) => request<any[]>(`/hr/employees/${employeeId}/trainings`),
+  upsertEmployeeTraining: (
+    employeeId: string,
+    payload: { training_id: string; status?: string; taken_at?: string; expires_at?: string; reminder_days?: number }
+  ) =>
+    request<any>(`/hr/employees/${employeeId}/trainings`, { method: 'POST', body: JSON.stringify(payload) }),
+  deleteEmployeeTraining: (employeeId: string, trainingId: string) =>
+    request<{ message: string }>(`/hr/employees/${employeeId}/trainings/${trainingId}`, { method: 'DELETE' }),
+
+  // HR+ : EPI
+  fetchEpis: () => request<any[]>('/hr/epis'),
+  createEpi: (payload: { name: string; category?: string; lifetime_months?: number }) =>
+    request<any>('/hr/epis', { method: 'POST', body: JSON.stringify(payload) }),
+  fetchEmployeeEpis: (employeeId: string) => request<any[]>(`/hr/employees/${employeeId}/epis`),
+  assignEmployeeEpi: (
+    employeeId: string,
+    payload: { epi_id: string; assigned_at?: string; expires_at?: string; status?: string }
+  ) =>
+    request<any>(`/hr/employees/${employeeId}/epis`, { method: 'POST', body: JSON.stringify(payload) }),
+  deleteEmployeeEpi: (employeeId: string, epiId: string) =>
+    request<{ message: string }>(`/hr/employees/${employeeId}/epis/${epiId}`, { method: 'DELETE' }),
+
+  // HR+ : HSE incidents
+  fetchHseIncidents: (params?: { employee_id?: string; status?: string }) => {
+    const search = new URLSearchParams();
+    if (params?.employee_id) search.set('employee_id', params.employee_id);
+    if (params?.status) search.set('status', params.status);
+    const qs = search.toString();
+    return request<any[]>(`/hr/hse/incidents${qs ? `?${qs}` : ''}`);
+  },
+  createHseIncident: (payload: {
+    employee_id?: string;
+    type_id?: string;
+    description?: string;
+    occurred_at?: string;
+    location?: string;
+    status?: string;
+    root_cause?: string;
+    actions?: string;
+  }) =>
+    request<any>('/hr/hse/incidents', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // HR+ : Performance
+  fetchEmployeePerformance: (employeeId: string) =>
+    request<any[]>(`/hr/employees/${employeeId}/performance`),
+  upsertEmployeePerformance: (
+    employeeId: string,
+    payload: {
+      period_start: string;
+      period_end: string;
+      throughput_per_hour?: number;
+      quality_score?: number;
+      safety_score?: number;
+      versatility_score?: number;
+      incidents_count?: number;
+    }
+  ) =>
+    request<any>(`/hr/employees/${employeeId}/performance`, { method: 'POST', body: JSON.stringify(payload) }),
+
+  // HR+ : Chauffeurs
+  fetchEmployeeDriverCompliance: (employeeId: string) =>
+    request<any[]>(`/hr/employees/${employeeId}/driver-compliance`),
+  upsertEmployeeDriverCompliance: (
+    employeeId: string,
+    payload: {
+      period_start: string;
+      period_end: string;
+      driving_hours?: number;
+      incidents?: number;
+      punctuality_score?: number;
+      fuel_efficiency_score?: number;
+    }
+  ) =>
+    request<any>(`/hr/employees/${employeeId}/driver-compliance`, { method: 'POST', body: JSON.stringify(payload) }),
+
+  // HR+ : Pointage
+  fetchTimeClockEvents: (params?: { employee_id?: string; limit?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.employee_id) search.set('employee_id', params.employee_id);
+    if (params?.limit) search.set('limit', String(params.limit));
+    const qs = search.toString();
+    return request<any[]>(`/hr/time-clock${qs ? `?${qs}` : ''}`);
+  },
+  createTimeClockEvent: (payload: {
+    employee_id: string;
+    position_id?: string;
+    event_type: 'in' | 'out' | 'pause_in' | 'pause_out' | 'position_change';
+    source?: string;
+    device_id?: string;
+    occurred_at?: string;
+  }) =>
+    request<any>('/hr/time-clock', { method: 'POST', body: JSON.stringify(payload) }),
+
   fetchLeaves: (query: string) => request<Leave[]>(`/leaves${query ? `?${query}` : ''}`),
   fetchPendingLeaves: () => request<Leave[]>('/leaves/pending'),
   fetchCalendarLeaves: (params: { start: string; end: string }) =>
@@ -1045,6 +1114,28 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
+  fetchMaterialQualities: (materialId?: string) => {
+    const query = materialId ? `?material_id=${materialId}` : '';
+    return request<MaterialQuality[]>(`/materials/qualities${query}`);
+  },
+  createMaterialQuality: (payload: {
+    material_id: string;
+    name: string;
+    description?: string;
+    deduction_pct?: number;
+    is_default?: boolean;
+  }) =>
+    request<{ id: string; message: string }>('/materials/qualities', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateMaterialQuality: (id: string, payload: Partial<MaterialQuality>) =>
+    request<{ message: string }>(`/materials/qualities/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteMaterialQuality: (id: string) =>
+    request<{ message: string }>(`/materials/qualities/${id}`, { method: 'DELETE' }),
   updateMaterial: (
     id: string,
     payload: {
@@ -1110,10 +1201,11 @@ export const Api = {
       }
     ),
   downloadCustomerDocument: async (customerId: string, documentId: string) => {
+    const token = getAuthToken();
     const response = await fetch(`${API_URL}/customers/${customerId}/documents/${documentId}/download`, {
-      headers: authToken
+      headers: token
         ? {
-            Authorization: `Bearer ${authToken}`
+            Authorization: `Bearer ${token}`
           }
         : undefined
     });
@@ -2415,6 +2507,270 @@ export const Api = {
     request<SavedFilter>(`/search/saved-filters/${id}`, {
       method: 'PUT',
       body: JSON.stringify(payload)
+    }),
+
+  // ==========================================
+  // BUSINESS INTELLIGENCE (BI)
+  // ==========================================
+
+  // Data Warehouse - Analyses historiques
+  fetchHistoricalData: (params: {
+    startDate: string;
+    endDate: string;
+    dimensions?: string[];
+    metrics?: string[];
+  }) => {
+    const searchParams = new URLSearchParams();
+    searchParams.set('start_date', params.startDate);
+    searchParams.set('end_date', params.endDate);
+    if (params.dimensions) searchParams.set('dimensions', params.dimensions.join(','));
+    if (params.metrics) searchParams.set('metrics', params.metrics.join(','));
+    return request<HistoricalDataPoint[]>(`/bi/historical?${searchParams.toString()}`);
+  },
+
+  // Cubes OLAP - Analyses multidimensionnelles
+  fetchOlapCube: (params: {
+    cube: string;
+    dimensions: string[];
+    measures: string[];
+    filters?: Record<string, any>;
+  }) =>
+    request<OlapCubeResult>(`/bi/olap`, {
+      method: 'POST',
+      body: JSON.stringify(params)
+    }),
+
+  // Machine Learning - Prédictions
+  fetchDemandForecast: (params: {
+    materialType?: string;
+    horizon?: number; // jours
+    startDate?: string;
+  }) => {
+    const searchParams = new URLSearchParams();
+    if (params.materialType) searchParams.set('material_type', params.materialType);
+    if (params.horizon) searchParams.set('horizon', params.horizon.toString());
+    if (params.startDate) searchParams.set('start_date', params.startDate);
+    return request<ForecastData[]>(`/bi/forecast/demand?${searchParams.toString()}`);
+  },
+
+  // Détection d'anomalies
+  fetchAnomalies: (params: {
+    startDate: string;
+    endDate: string;
+    entityType?: string;
+    threshold?: number;
+  }) => {
+    const searchParams = new URLSearchParams();
+    searchParams.set('start_date', params.startDate);
+    searchParams.set('end_date', params.endDate);
+    if (params.entityType) searchParams.set('entity_type', params.entityType);
+    if (params.threshold) searchParams.set('threshold', params.threshold.toString());
+    return request<Anomaly[]>(`/bi/anomalies?${searchParams.toString()}`);
+  },
+
+  // Drill-down - Navigation hiérarchique
+  fetchDrillDown: (params: {
+    level: string;
+    parentId?: string;
+    dimension: string;
+    measure: string;
+    filters?: Record<string, any>;
+  }) =>
+    request<DrillDownResult>(`/bi/drill-down`, {
+      method: 'POST',
+      body: JSON.stringify(params)
+    }),
+
+  // Sécurité renforcée - 2FA
+  setup2FA: () => request<TwoFactorSetup>('/security/2fa/setup', { method: 'POST' }),
+  enable2FA: (payload: { code: string }) =>
+    request<{ message: string }>('/security/2fa/enable', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  disable2FA: (payload: { password: string }) =>
+    request<{ message: string }>('/security/2fa/disable', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  regenerateBackupCodes: () =>
+    request<{ backupCodes: string[] }>('/security/2fa/regenerate-backup-codes', { method: 'POST' }),
+
+  // Sécurité renforcée - 2FA Admin (pour gérer le 2FA d'autres utilisateurs)
+  setup2FAForUser: (userId: string) =>
+    request<TwoFactorSetup>(`/security/2fa/admin/setup/${userId}`, { method: 'POST' }),
+  enable2FAForUser: (userId: string, payload: { code: string }) =>
+    request<{ message: string }>(`/security/2fa/admin/enable/${userId}`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  disable2FAForUser: (userId: string) =>
+    request<{ message: string }>(`/security/2fa/admin/disable/${userId}`, { method: 'POST' }),
+  get2FAStatusForUser: (userId: string) =>
+    request<{ enabled: boolean }>(`/security/2fa/admin/status/${userId}`),
+
+  // Sécurité renforcée - Sessions
+  fetchSessions: () => request<UserSession[]>('/security/sessions'),
+  deleteSession: (sessionId: string) =>
+    request<{ message: string }>(`/security/sessions/${sessionId}`, { method: 'DELETE' }),
+  logoutOtherSessions: () =>
+    request<{ message: string }>('/security/sessions/logout-others', { method: 'POST' }),
+
+  // Sécurité renforcée - RGPD
+  fetchGDPRConsents: () => request<GDPRConsent[]>('/security/gdpr/consents'),
+  updateGDPRConsent: (payload: { consent_type: string; granted: boolean }) =>
+    request<{ message: string }>('/security/gdpr/consents', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  createGDPRRequest: (payload: { request_type: string; notes?: string }) =>
+    request<GDPRDataRequest>('/security/gdpr/requests', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchGDPRRequests: () => request<GDPRDataRequest[]>('/security/gdpr/requests'),
+
+  // Sécurité renforcée - Logs d'audit (version améliorée avec IP, user agent, etc.)
+  fetchSecurityAuditLogs: (filters?: {
+    entity_type?: string;
+    entity_id?: string;
+    action?: string;
+    start_date?: string;
+    end_date?: string;
+    limit?: number;
+  }) => {
+    const params = new URLSearchParams();
+    if (filters?.entity_type) params.set('entity_type', filters.entity_type);
+    if (filters?.entity_id) params.set('entity_id', filters.entity_id);
+    if (filters?.action) params.set('action', filters.action);
+    if (filters?.start_date) params.set('start_date', filters.start_date);
+    if (filters?.end_date) params.set('end_date', filters.end_date);
+    if (filters?.limit) params.set('limit', filters.limit.toString());
+    const query = params.toString();
+    return request<AuditLog[]>(`/security/audit-logs${query ? `?${query}` : ''}`);
+  },
+
+  // Multilingue et Multi-sites - Sites
+  fetchSites: () => request<any[]>('/sites'),
+  createSite: (payload: {
+    code: string;
+    name: string;
+    address?: string;
+    city?: string;
+    postal_code?: string;
+    country?: string;
+    latitude?: number;
+    longitude?: number;
+    timezone?: string;
+    currency?: string;
+  }) =>
+    request<any>('/sites', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateSite: (id: string, payload: {
+    code?: string;
+    name?: string;
+    address?: string;
+    city?: string;
+    postal_code?: string;
+    country?: string;
+    latitude?: number;
+    longitude?: number;
+    timezone?: string;
+    currency?: string;
+    is_active?: boolean;
+  }) =>
+    request<any>(`/sites/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteSite: (id: string) =>
+    request<{ message: string }>(`/sites/${id}`, { method: 'DELETE' }),
+
+  // Multilingue et Multi-sites - Devises
+  fetchCurrencies: () => request<any[]>('/currencies'),
+  createCurrency: (payload: {
+    code: string;
+    name: string;
+    symbol: string;
+    exchange_rate?: number;
+    is_base?: boolean;
+  }) =>
+    request<any>('/currencies', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateCurrency: (id: string, payload: {
+    code?: string;
+    name?: string;
+    symbol?: string;
+    exchange_rate?: number;
+    is_base?: boolean;
+    is_active?: boolean;
+  }) =>
+    request<any>(`/currencies/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+
+  // Multilingue et Multi-sites - Taux de change
+  fetchCurrencyRates: (filters?: {
+    from?: string;
+    to?: string;
+    date?: string;
+  }) => {
+    const params = new URLSearchParams();
+    if (filters?.from) params.set('from', filters.from);
+    if (filters?.to) params.set('to', filters.to);
+    if (filters?.date) params.set('date', filters.date);
+    return request<any[]>(`/currency-rates?${params.toString()}`);
+  },
+  createCurrencyRate: (payload: {
+    from_currency: string;
+    to_currency: string;
+    rate: number;
+    effective_date?: string;
+  }) =>
+    request<any>('/currency-rates', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // Multilingue et Multi-sites - Consolidation
+  fetchSiteConsolidations: (filters: {
+    start_date: string;
+    end_date: string;
+    metric_type?: string;
+  }) => {
+    const params = new URLSearchParams();
+    params.set('start_date', filters.start_date);
+    params.set('end_date', filters.end_date);
+    if (filters.metric_type) params.set('metric_type', filters.metric_type);
+    return request<any[]>(`/sites/consolidation?${params.toString()}`);
+  },
+  createSiteConsolidation: (payload: {
+    consolidation_date: string;
+    site_id: string;
+    metric_type: string;
+    metric_value: number;
+    currency?: string;
+  }) =>
+    request<any>('/sites/consolidation', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // Multilingue et Multi-sites - Préférences utilisateur
+  updateUserPreferences: (payload: {
+    language?: string;
+    timezone?: string;
+    currency?: string;
+    site_id?: string;
+  }) =>
+    request<any>('/user/preferences', {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
     })
 };
 
@@ -2701,7 +3057,9 @@ export type StockLot = {
   origin: string | null;
   supplier_name: string | null;
   batch_reference: string | null;
-  quality_status: string | null;
+  quality_id: string | null;
+  quality_status: string | null; // Garde pour compatibilité
+  weighing_id: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -2718,7 +3076,9 @@ export type CreateStockLotPayload = {
   origin?: string;
   supplier_name?: string;
   batch_reference?: string;
-  quality_status?: string;
+  quality_id?: string;
+  quality_status?: string; // Garde pour compatibilité
+  weighing_id?: string;
   notes?: string;
 };
 
@@ -3954,3 +4314,413 @@ export type CreateSavedFilterPayload = {
   filters: Record<string, any>;
   is_favorite?: boolean;
 };
+
+// Business Intelligence types
+export type HistoricalDataPoint = {
+  date: string;
+  dimensions: Record<string, string>;
+  metrics: Record<string, number>;
+};
+
+export type OlapCubeResult = {
+  cube: string;
+  dimensions: string[];
+  measures: string[];
+  data: Array<{
+    dimension_values: Record<string, string>;
+    measure_values: Record<string, number>;
+  }>;
+  totals: Record<string, number>;
+};
+
+export type ForecastData = {
+  date: string;
+  predicted_value: number;
+  confidence_lower: number;
+  confidence_upper: number;
+  actual_value?: number;
+};
+
+export type Anomaly = {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  metric: string;
+  value: number;
+  expected_value: number;
+  deviation: number;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  detected_at: string;
+  description: string;
+};
+
+// Types pour la sécurité renforcée
+export type TwoFactorAuth = {
+  id: string;
+  user_id: string;
+  is_enabled: boolean;
+  last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TwoFactorSetup = {
+  secret: string;
+  qrCode: string;
+  backupCodes: string[];
+};
+
+export type UserSession = {
+  id: string;
+  user_id: string;
+  ip_address: string | null;
+  user_agent: string | null;
+  device_info: string | null;
+  location: string | null;
+  is_active: boolean;
+  last_activity: string;
+  expires_at: string;
+  created_at: string;
+};
+
+export type GDPRConsent = {
+  id: string;
+  user_id: string | null;
+  consent_type: 'data_processing' | 'marketing' | 'analytics' | 'cookies' | 'location';
+  granted: boolean;
+  granted_at: string | null;
+  revoked_at: string | null;
+  version: string;
+  created_at: string;
+};
+
+export type GDPRDataRequest = {
+  id: string;
+  user_id: string | null;
+  request_type: 'data_export' | 'data_deletion' | 'data_rectification' | 'access_request';
+  status: 'pending' | 'in_progress' | 'completed' | 'rejected';
+  requested_at: string;
+  processed_at: string | null;
+  notes: string | null;
+};
+
+export type AuditLog = {
+  id: string;
+  entity_type: string;
+  entity_id: string | null;
+  action: string;
+  changed_by: string | null;
+  changed_by_name: string | null;
+  before_data: Record<string, any> | null;
+  after_data: Record<string, any> | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  session_id: string | null;
+  created_at: string;
+};
+
+export type DrillDownResult = {
+  level: string;
+  dimension: string;
+  measure: string;
+  data: Array<{
+    id: string;
+    label: string;
+    value: number;
+    children_count?: number;
+    can_drill_down?: boolean;
+  }>;
+  parent?: {
+    id: string;
+    label: string;
+  };
+};
+
+const buildQuery = (params: Record<string, any>) => {
+  const entries = Object.entries(params || {}).filter(
+    ([, v]) => v !== undefined && v !== null && v !== ''
+  );
+  if (!entries.length) return '';
+  return (
+    '?' +
+    entries
+      .map(([k, v]) =>
+        Array.isArray(v)
+          ? v.map((item) => `${encodeURIComponent(k)}=${encodeURIComponent(String(item))}`).join('&')
+          : `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`
+      )
+      .join('&')
+  );
+};
+
+// ===== RH avancé - Types frontend =====
+export type DriverDutyRecord = {
+  id: string;
+  employee_id: string;
+  duty_date: string;
+  duty_hours: number;
+  driving_hours: number;
+  night_hours: number;
+  breaks_minutes: number;
+  overtime_minutes: number;
+  legal_ok: boolean;
+  notes: string | null;
+};
+
+export type DriverIncident = {
+  id: string;
+  employee_id: string;
+  route_id: string | null;
+  occurred_at: string;
+  type: string | null;
+  severity: string | null;
+  description: string | null;
+  customer_feedback: string | null;
+  resolved: boolean;
+};
+
+export type EcoDrivingScore = {
+  id: string;
+  employee_id: string;
+  route_id: string | null;
+  score: number | null;
+  fuel_consumption: number | null;
+  harsh_braking: number;
+  harsh_acceleration: number;
+  idle_time_minutes: number;
+  created_at: string;
+};
+
+export type JobPosition = {
+  id: string;
+  title: string;
+  site_id: string | null;
+  department: string | null;
+  description: string | null;
+  requirements: string | null;
+  status: string;
+  created_at: string;
+};
+
+export type JobApplicant = {
+  id: string;
+  position_id: string | null;
+  full_name: string;
+  email: string | null;
+  phone: string | null;
+  experience: string | null;
+  status: string;
+  score: number | null;
+  created_at: string;
+};
+
+export type ApplicantTest = {
+  id: string;
+  applicant_id: string;
+  test_type: string | null;
+  score: number | null;
+  result: string | null;
+  created_at: string;
+};
+
+export type TrainingModule = {
+  id: string;
+  title: string;
+  module_type: 'video' | 'checklist' | 'document';
+  media_url: string | null;
+  checklist_items: string[] | null;
+  mandatory: boolean;
+  refresh_months: number | null;
+  duration_minutes: number | null;
+  created_at: string;
+};
+
+export type TrainingProgress = {
+  id: string;
+  employee_id: string;
+  module_id: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  score: number | null;
+  completed_at: string | null;
+  expires_at: string | null;
+  last_reminder_at: string | null;
+  created_at: string;
+  title?: string;
+  module_type?: TrainingModule['module_type'];
+  mandatory?: boolean;
+  refresh_months?: number | null;
+};
+
+export type TrainingReminder = {
+  id: string;
+  employee_id: string;
+  module_id: string;
+  due_date: string;
+  sent_at: string | null;
+  status: 'pending' | 'sent' | 'ack';
+  created_at: string;
+  title?: string;
+  module_type?: TrainingModule['module_type'];
+};
+
+export type EmploymentContract = {
+  id: string;
+  employee_id: string;
+  contract_type: string;
+  start_date: string;
+  end_date: string | null;
+  base_salary: number | null;
+  currency: string;
+  hours_per_week: number | null;
+  site_id: string | null;
+  status: string;
+  created_at: string;
+};
+
+export type ContractAllowance = {
+  id: string;
+  contract_id: string;
+  label: string;
+  amount: number;
+  periodicity: string;
+};
+
+export type OvertimeEntry = {
+  id: string;
+  employee_id: string;
+  entry_date: string;
+  hours: number;
+  rate_multiplier: number;
+  approved: boolean;
+  created_at: string;
+};
+
+export type PayrollEntry = {
+  id: string;
+  employee_id: string;
+  period_start: string;
+  period_end: string;
+  gross_amount: number | null;
+  net_amount: number | null;
+  currency: string;
+  bonuses: Record<string, any> | null;
+  overtime_hours: number | null;
+  status: string;
+  created_at: string;
+};
+
+export type HrDashboard = {
+  headcount: number;
+  activeContracts: number;
+  avgVersatility: number;
+  trainingCompliance: { completed: number; total: number; rate: number | null };
+  absenteeism: { absent: number; rate: number };
+  hseOpenCritical: number;
+  overtimeLast30Hours: number;
+};
+
+// ===== RH avancé - API frontend (extension de Api) =====
+Object.assign(Api, {
+  // Chauffeurs
+  fetchDriverDuty: (employeeId: string, start_date?: string, end_date?: string) =>
+    request<DriverDutyRecord[]>(`/api/hr/employees/${employeeId}/driver-duty${buildQuery({ start_date, end_date })}`),
+  upsertDriverDuty: (employeeId: string, payload: Partial<DriverDutyRecord>) =>
+    request<DriverDutyRecord>(`/api/hr/employees/${employeeId}/driver-duty`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchDriverIncidents: (employeeId: string) =>
+    request<DriverIncident[]>(`/api/hr/employees/${employeeId}/driver-incidents`),
+  createDriverIncident: (employeeId: string, payload: Omit<DriverIncident, 'id' | 'employee_id' | 'created_at'>) =>
+    request<DriverIncident>(`/api/hr/employees/${employeeId}/driver-incidents`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchEcoDriving: (employeeId: string) =>
+    request<EcoDrivingScore[]>(`/api/hr/employees/${employeeId}/eco-driving`),
+  createEcoDriving: (employeeId: string, payload: Omit<EcoDrivingScore, 'id' | 'employee_id' | 'created_at'>) =>
+    request<EcoDrivingScore>(`/api/hr/employees/${employeeId}/eco-driving`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // Recrutement
+  fetchJobPositions: () => request<JobPosition[]>('/api/hr/recruitment/positions'),
+  createJobPosition: (payload: Partial<JobPosition>) =>
+    request<JobPosition>('/api/hr/recruitment/positions', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchJobApplicants: (params?: { position_id?: string; status?: string }) =>
+    request<JobApplicant[]>(`/api/hr/recruitment/applicants${buildQuery(params || {})}`),
+  createJobApplicant: (payload: Partial<JobApplicant>) =>
+    request<JobApplicant>('/api/hr/recruitment/applicants', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateJobApplicant: (id: string, payload: { status?: string; score?: number }) =>
+    request<JobApplicant>(`/api/hr/recruitment/applicants/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  fetchApplicantTests: (applicantId: string) =>
+    request<ApplicantTest[]>(`/api/hr/recruitment/applicants/${applicantId}/tests`),
+  createApplicantTest: (applicantId: string, payload: Partial<ApplicantTest>) =>
+    request<ApplicantTest>(`/api/hr/recruitment/applicants/${applicantId}/tests`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // Formations continues
+  fetchTrainingModules: () => request<TrainingModule[]>('/api/hr/training/modules'),
+  createTrainingModule: (payload: Partial<TrainingModule>) =>
+    request<TrainingModule>('/api/hr/training/modules', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchTrainingProgress: (employeeId: string) =>
+    request<TrainingProgress[]>(`/api/hr/employees/${employeeId}/training-progress`),
+  upsertTrainingProgress: (employeeId: string, payload: Partial<TrainingProgress>) =>
+    request<TrainingProgress>(`/api/hr/employees/${employeeId}/training-progress`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  generateTrainingReminders: () =>
+    request<{ created: number }>('/api/hr/training/reminders/generate', {
+      method: 'POST'
+    }),
+  fetchTrainingReminders: () => request<TrainingReminder[]>('/api/hr/training/reminders'),
+
+  // Paie / contrats
+  fetchContracts: (params?: { employee_id?: string; status?: string }) =>
+    request<EmploymentContract[]>(`/api/hr/contracts${buildQuery(params || {})}`),
+  createContract: (payload: Partial<EmploymentContract>) =>
+    request<EmploymentContract>('/api/hr/contracts', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchContractAllowances: (contractId: string) =>
+    request<ContractAllowance[]>(`/api/hr/contracts/${contractId}/allowances`),
+  createContractAllowance: (contractId: string, payload: Partial<ContractAllowance>) =>
+    request<ContractAllowance>(`/api/hr/contracts/${contractId}/allowances`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchOvertime: (params?: { employee_id?: string; start_date?: string; end_date?: string }) =>
+    request<OvertimeEntry[]>(`/api/hr/overtime${buildQuery(params || {})}`),
+  createOvertime: (payload: Partial<OvertimeEntry>) =>
+    request<OvertimeEntry>('/api/hr/overtime', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchPayroll: (params?: { employee_id?: string; period_start?: string; period_end?: string }) =>
+    request<PayrollEntry[]>(`/api/hr/payroll${buildQuery(params || {})}`),
+  createPayroll: (payload: Partial<PayrollEntry>) =>
+    request<PayrollEntry>('/api/hr/payroll', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // Dashboard RH
+  fetchHrDashboard: () => request<HrDashboard>('/api/hr/dashboard')
+});

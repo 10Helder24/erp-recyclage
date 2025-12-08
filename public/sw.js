@@ -11,9 +11,10 @@ const OFFLINE_URLS = [
 self.addEventListener('install', (event) => {
   console.log('[SW] Installation du nouveau Service Worker');
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(OFFLINE_URLS);
-    })
+    caches
+      .open(CACHE_NAME)
+      .then((cache) => cache.addAll(OFFLINE_URLS))
+      .catch((err) => console.error('[SW] cache open/addAll error', err))
   );
   // Force l'activation immédiate sans attendre la fermeture des onglets
   self.skipWaiting();
@@ -23,19 +24,20 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   console.log('[SW] Activation du nouveau Service Worker');
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames
-          .filter((cacheName) => cacheName !== CACHE_NAME)
-          .map((cacheName) => {
-            console.log('[SW] Suppression de l\'ancien cache:', cacheName);
-            return caches.delete(cacheName);
-          })
-      );
-    }).then(() => {
-      // Prendre le contrôle de tous les clients immédiatement
-      return self.clients.claim();
-    })
+    caches
+      .keys()
+      .then((cacheNames) =>
+        Promise.all(
+          cacheNames
+            .filter((cacheName) => cacheName !== CACHE_NAME)
+            .map((cacheName) => {
+              console.log('[SW] Suppression de l\'ancien cache:', cacheName);
+              return caches.delete(cacheName);
+            })
+        )
+      )
+      .then(() => self.clients.claim())
+      .catch((err) => console.error('[SW] activation cleanup error', err))
   );
 });
 
@@ -46,17 +48,14 @@ self.addEventListener('message', (event) => {
   }
   if (event.data && event.data.type === 'FORCE_UPDATE') {
     // Supprimer tous les caches et recharger
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => caches.delete(cacheName))
-      );
-    }).then(() => {
-      return self.clients.matchAll();
-    }).then((clients) => {
-      clients.forEach((client) => {
-        client.postMessage({ type: 'FORCE_RELOAD' });
-      });
-    });
+    caches
+      .keys()
+      .then((cacheNames) => Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName))))
+      .then(() => self.clients.matchAll())
+      .then((clients) => {
+        clients.forEach((client) => client.postMessage({ type: 'FORCE_RELOAD' }));
+      })
+      .catch((err) => console.error('[SW] force update error', err));
   }
 });
 

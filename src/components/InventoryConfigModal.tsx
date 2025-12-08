@@ -143,9 +143,10 @@ export function InventoryConfigModal({ isOpen, onClose, onConfigUpdated }: Inven
   };
 
   const handleDelete = async (id: string, permanent: boolean = false) => {
-    const message = permanent 
-      ? 'Êtes-vous sûr de vouloir supprimer définitivement cet élément ? Cette action est irréversible.'
-      : 'Êtes-vous sûr de vouloir désactiver cet élément ? Il ne sera plus visible dans les inventaires.';
+    let message = 'Êtes-vous sûr de vouloir désactiver cet élément ? Il ne sera plus visible dans les inventaires.';
+    if (permanent) {
+      message = 'Êtes-vous sûr de vouloir supprimer définitivement cet élément ? Cette action est irréversible.';
+    }
     if (!confirm(message)) return;
     try {
       setLoading(true);

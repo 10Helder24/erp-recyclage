@@ -244,7 +244,13 @@ export const MaterialPricesTab = ({ materials, canEdit }: MaterialPricesTabProps
       }
 
       // Utiliser la source sélectionnée ou Copacel par défaut
-      const sourceId = importSource || priceSources.find(s => s.name === 'Copacel')?.id || priceSources[0]?.id;
+      const computeSourceId = () => {
+        if (importSource) return importSource;
+        const copacel = priceSources.find((s) => s.name === 'Copacel');
+        if (copacel) return copacel.id;
+        return priceSources[0]?.id;
+      };
+      const sourceId = computeSourceId();
       if (!sourceId) {
         toast.error('Aucune source de prix disponible');
         return;
@@ -258,15 +264,18 @@ export const MaterialPricesTab = ({ materials, canEdit }: MaterialPricesTabProps
       for (const priceData of prices) {
         try {
           // Trouver la matière
-          let material: Material | undefined;
-          if (priceData.abrege) {
-            material = materials.find(m => m.abrege?.toLowerCase() === priceData.abrege?.toLowerCase());
-          }
-          if (!material && priceData.description) {
-            material = materials.find(m => 
-              m.description?.toLowerCase().includes(priceData.description?.toLowerCase() || '')
-            );
-          }
+          const findByAbrege = () => {
+            if (!priceData.abrege) return undefined;
+            const target = priceData.abrege.toLowerCase();
+            return materials.find((m) => m.abrege?.toLowerCase() === target);
+          };
+          const findByDescription = () => {
+            if (!priceData.description) return undefined;
+            const target = priceData.description.toLowerCase();
+            return materials.find((m) => m.description?.toLowerCase().includes(target));
+          };
+
+          let material: Material | undefined = findByAbrege() || findByDescription();
 
           if (!material) {
             errorCount++;
@@ -371,16 +380,19 @@ export const MaterialPricesTab = ({ materials, canEdit }: MaterialPricesTabProps
             <button
               key={material.id}
               onClick={() => setSelectedMaterial(material)}
-              style={{
-                width: '100%',
-                padding: '12px',
-                textAlign: 'left',
-                border: selectedMaterial?.id === material.id ? '2px solid var(--primary)' : '1px solid var(--divider)',
-                borderRadius: '8px',
-                marginBottom: '8px',
-                background: selectedMaterial?.id === material.id ? 'var(--primary-light)' : 'transparent',
-                cursor: 'pointer'
-              }}
+              style={(() => {
+                const isActive = selectedMaterial?.id === material.id;
+                return {
+                  width: '100%',
+                  padding: '12px',
+                  textAlign: 'left',
+                  border: isActive ? '2px solid var(--primary)' : '1px solid var(--divider)',
+                  borderRadius: '8px',
+                  marginBottom: '8px',
+                  background: isActive ? 'var(--primary-light)' : 'transparent',
+                  cursor: 'pointer'
+                } as React.CSSProperties;
+              })()}
             >
               <div style={{ fontWeight: 600, marginBottom: '4px' }}>{material.abrege}</div>
               <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{material.description}</div>

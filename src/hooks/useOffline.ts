@@ -21,9 +21,10 @@ export const useOffline = () => {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    offlineStorage.init().then(() => {
-      updatePendingCount();
-    });
+    offlineStorage
+      .init()
+      .then(updatePendingCount)
+      .catch((err) => console.error('offlineStorage init error', err));
 
     return () => {
       window.removeEventListener('online', handleOnline);

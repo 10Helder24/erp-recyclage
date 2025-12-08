@@ -18,6 +18,9 @@ import path from 'node:path';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { authenticator } from 'otplib';
+import QRCode from 'qrcode';
+import crypto from 'node:crypto';
 
 // Charger d'abord le .env de la racine (DATABASE_URL, PORT)
 dotenv.config();
@@ -47,7 +50,7 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
 }
 
 import type { Leave, LeaveBalance, LeaveRequestPayload, LeaveStatus, LeaveType } from '../../src/types/leaves';
-import { format, differenceInYears } from 'date-fns';
+import { format, differenceInYears, subDays } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
 if (!process.env.DATABASE_URL) {
@@ -145,6 +148,10 @@ type UserRow = {
   reset_token: string | null;
   reset_token_expires: string | null;
   created_at: string | null;
+  language?: string | null;
+  timezone?: string | null;
+  currency?: string | null;
+  site_id?: string | null;
 };
 
 type AuthPayload = {
@@ -203,7 +210,7 @@ const mapEmployeeRow = (row: EmployeeRow) => ({
   iban: row.iban
 });
 
-const mapUserRow = (row: UserRow) => ({
+const mapUserRow = (row: UserRow | any) => ({
   id: row.id,
   email: row.email,
   full_name: row.full_name,
@@ -211,7 +218,11 @@ const mapUserRow = (row: UserRow) => ({
   department: row.department,
   manager_name: row.manager_name,
   permissions: row.permissions ?? [],
-  created_at: row.created_at
+  created_at: row.created_at,
+  language: (row as any).language || 'fr',
+  timezone: (row as any).timezone || 'Europe/Zurich',
+  currency: (row as any).currency || 'CHF',
+  site_id: (row as any).site_id || null
 });
 
 const OSRM_BASE_URL = process.env.OSRM_BASE_URL || 'https://router.project-osrm.org';
@@ -732,28 +743,22 @@ const upsertPdfTemplate = async (module: string, config: PdfTemplateConfig, user
 type WorkflowPipelineStep = WorkflowStep | 'completed';
 
 const getNextWorkflowStep = (current: WorkflowStep): WorkflowPipelineStep => {
-  const idx = WORKFLOW_STEPS.indexOf(current);
-  if (idx === -1 || idx === WORKFLOW_STEPS.length - 1) {
-    return 'completed';
-  }
-  return WORKFLOW_STEPS[idx + 1];
+  if (current === 'manager') return 'completed';
+  return 'completed';
 };
 
 const canUserApproveStep = (auth: AuthenticatedRequest['auth'], step: WorkflowStep) => {
   if (!auth) {
     return false;
   }
-  if (auth.role === 'admin') {
-    return true;
-  }
+  if (auth.role === 'admin') return true;
   const permissions = auth.permissions ?? [];
   switch (step) {
     case 'manager':
       return auth.role === 'manager' || permissions.includes('approve_leave_manager');
     case 'hr':
-      return permissions.includes('approve_leave_hr');
     case 'director':
-      return permissions.includes('approve_leave_director');
+      return false;
     default:
       return false;
   }
@@ -765,14 +770,32 @@ const parseRecipients = (value?: string | null) =>
     .map((email) => email.trim())
     .filter(Boolean);
 
-const getWorkflowRecipients = (step: WorkflowStep) => {
+const getWorkflowRecipients = async (step: WorkflowStep, leaves: LeaveRow[]) => {
   if (step === 'hr') {
     return parseRecipients(process.env.LEAVE_HR_RECIPIENTS ?? process.env.BREVO_SENDER_EMAIL);
   }
   if (step === 'director') {
     return parseRecipients(process.env.LEAVE_DIRECTION_RECIPIENTS ?? process.env.BREVO_SENDER_EMAIL);
   }
-  return parseRecipients(process.env.LEAVE_MANAGER_RECIPIENTS ?? process.env.BREVO_SENDER_EMAIL);
+
+  // Manager step : cible les managers du département concerné
+  const departments = Array.from(
+    new Set(
+      leaves
+        .map((l) => l.employee?.department)
+        .filter((d): d is string => Boolean(d))
+    )
+  );
+  let managerEmails: string[] = [];
+  if (departments.length > 0) {
+    const rows = await run(
+      `select email from users where role = 'manager' and department = any($1::text[]) and email is not null`,
+      [departments]
+    );
+    managerEmails = rows.map((r: any) => r.email).filter((e: string) => !!e);
+  }
+  const fallback = parseRecipients(process.env.LEAVE_MANAGER_RECIPIENTS ?? process.env.BREVO_SENDER_EMAIL);
+  return Array.from(new Set([...managerEmails, ...fallback]));
 };
 
 const formatLeaveLines = (leaves: LeaveRow[]) =>
@@ -786,7 +809,7 @@ const formatLeaveLines = (leaves: LeaveRow[]) =>
     .join('\n');
 
 const notifyWorkflowStep = async (step: WorkflowStep, leaves: LeaveRow[]) => {
-  const recipients = getWorkflowRecipients(step);
+  const recipients = await getWorkflowRecipients(step, leaves);
   if (!recipients.length) {
     return;
   }
@@ -877,9 +900,12 @@ const recordAuditLog = async ({
     const auth = req ? (req as AuthenticatedRequest).auth : undefined;
     const userId = auth?.id ?? null;
     const userName = auth?.full_name ?? auth?.email ?? null;
+    const ipAddress = req ? (req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress || 'unknown') : null;
+    const userAgent = req ? (req.headers['user-agent'] || 'unknown') : null;
+    const sessionId = req ? (req.headers['x-session-id'] as string) || null : null;
     await run(
-      `insert into audit_logs (id, entity_type, entity_id, action, changed_by, changed_by_name, before_data, after_data)
-       values (gen_random_uuid(), $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)`,
+      `insert into audit_logs (id, entity_type, entity_id, action, changed_by, changed_by_name, before_data, after_data, ip_address, user_agent, session_id)
+       values (gen_random_uuid(), $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10)`,
       [
         entityType,
         entityId ?? null,
@@ -887,7 +913,10 @@ const recordAuditLog = async ({
         userId,
         userName,
         before ? JSON.stringify(before) : null,
-        after ? JSON.stringify(after) : null
+        after ? JSON.stringify(after) : null,
+        ipAddress,
+        userAgent,
+        sessionId
       ]
     );
   } catch (error) {
@@ -968,10 +997,55 @@ const createAuthPayload = (user: UserRow): AuthPayload => ({
   permissions: user.permissions ?? []
 });
 
-const signToken = (payload: AuthPayload) =>
-  jwt.sign(payload, JWT_SECRET, {
-    expiresIn: '12h'
-  });
+const signToken = (payload: AuthPayload | (AuthPayload & { requires2FA?: boolean }), expiresIn: string = '12h'): string => {
+  return jwt.sign(payload as object, JWT_SECRET as string, { expiresIn } as jwt.SignOptions);
+};
+
+// Utilitaires pour le 2FA
+const generate2FASecret = (email: string) => {
+  const secret = authenticator.generateSecret();
+  const serviceName = 'ERP RETRIPA';
+  const accountName = email;
+  const otpAuthUrl = authenticator.keyuri(accountName, serviceName, secret);
+  return { secret, otpAuthUrl };
+};
+
+const verify2FACode = (token: string, secret: string): boolean => {
+  try {
+    return authenticator.verify({ token, secret });
+  } catch (error) {
+    return false;
+  }
+};
+
+const generateBackupCodes = (count: number = 10): string[] => {
+  return Array.from({ length: count }, () => crypto.randomBytes(4).toString('hex').toUpperCase());
+};
+
+// Utilitaires pour le chiffrement (pour les données sensibles)
+const encryptSensitiveData = (data: string): string => {
+  const algorithm = 'aes-256-gcm';
+  const key = crypto.scryptSync(JWT_SECRET, 'salt', 32);
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv(algorithm, key, iv);
+  let encrypted = cipher.update(data, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  const authTag = cipher.getAuthTag();
+  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+};
+
+const decryptSensitiveData = (encryptedData: string): string => {
+  const algorithm = 'aes-256-gcm';
+  const key = crypto.scryptSync(JWT_SECRET, 'salt', 32);
+  const [ivHex, authTagHex, encrypted] = encryptedData.split(':');
+  const iv = Buffer.from(ivHex, 'hex');
+  const authTag = Buffer.from(authTagHex, 'hex');
+  const decipher = crypto.createDecipheriv(algorithm, key, iv);
+  decipher.setAuthTag(authTag);
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
+};
 
 const requireAuth =
   (options?: { roles?: UserRole[]; permissions?: string[] }): express.RequestHandler =>
@@ -1143,6 +1217,428 @@ const ensureSchema = async () => {
   await run(`alter table employees add column if not exists iban text`);
   await run(`create unique index if not exists employees_employee_code_idx on employees(employee_code) where employee_code is not null`);
 
+  // RH avancé : compétences, certifications, formations, EPI, HSE, pointage, performances, chauffeurs, planning
+  await run(`
+    create table if not exists skills (
+      id uuid primary key default gen_random_uuid(),
+      name text not null unique,
+      description text,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run(`
+    create table if not exists employee_skills (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      skill_id uuid not null references skills(id) on delete cascade,
+      level integer check (level between 1 and 5),
+      validated_at date,
+      expires_at date,
+      created_at timestamptz not null default now(),
+      unique (employee_id, skill_id)
+    )
+  `);
+  await run('create index if not exists employee_skills_emp_idx on employee_skills(employee_id)');
+  await run('create index if not exists employee_skills_exp_idx on employee_skills(expires_at)');
+
+  await run(`
+    create table if not exists certifications (
+      id uuid primary key default gen_random_uuid(),
+      code text not null unique,
+      name text not null,
+      description text,
+      validity_months integer,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run(`
+    create table if not exists employee_certifications (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      certification_id uuid not null references certifications(id) on delete cascade,
+      obtained_at date,
+      expires_at date,
+      reminder_days integer default 30,
+      created_at timestamptz not null default now(),
+      unique (employee_id, certification_id)
+    )
+  `);
+  await run('create index if not exists employee_certifications_emp_idx on employee_certifications(employee_id)');
+  await run('create index if not exists employee_certifications_exp_idx on employee_certifications(expires_at)');
+
+  await run(`
+    create table if not exists trainings (
+      id uuid primary key default gen_random_uuid(),
+      title text not null,
+      description text,
+      mandatory boolean not null default false,
+      validity_months integer,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run(`
+    create table if not exists employee_trainings (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      training_id uuid not null references trainings(id) on delete cascade,
+      status text not null default 'pending',
+      taken_at date,
+      expires_at date,
+      reminder_days integer default 30,
+      created_at timestamptz not null default now(),
+      unique (employee_id, training_id)
+    )
+  `);
+  await run('create index if not exists employee_trainings_emp_idx on employee_trainings(employee_id)');
+  await run('create index if not exists employee_trainings_exp_idx on employee_trainings(expires_at)');
+
+  await run(`
+    create table if not exists epis (
+      id uuid primary key default gen_random_uuid(),
+      name text not null,
+      category text,
+      lifetime_months integer,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run(`
+    create table if not exists employee_epis (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      epi_id uuid not null references epis(id) on delete cascade,
+      assigned_at date not null default current_date,
+      expires_at date,
+      status text not null default 'assigned',
+      created_at timestamptz not null default now(),
+      unique (employee_id, epi_id, assigned_at)
+    )
+  `);
+  await run('create index if not exists employee_epis_emp_idx on employee_epis(employee_id)');
+  await run('create index if not exists employee_epis_exp_idx on employee_epis(expires_at)');
+
+  await run(`
+    create table if not exists hse_incident_types (
+      id uuid primary key default gen_random_uuid(),
+      code text not null unique,
+      label text not null,
+      severity text,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run(`
+    create table if not exists hse_incidents (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid references employees(id) on delete set null,
+      type_id uuid references hse_incident_types(id) on delete set null,
+      description text,
+      occurred_at timestamptz not null default now(),
+      location text,
+      status text not null default 'open',
+      severity text,
+      consequence text,
+      declared_by text,
+      witnesses text[],
+      photos text[],
+      root_cause text,
+      actions text,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run(`alter table hse_incidents add column if not exists severity text`);
+  await run(`alter table hse_incidents add column if not exists consequence text`);
+  await run(`alter table hse_incidents add column if not exists declared_by text`);
+  await run(`alter table hse_incidents add column if not exists witnesses text[]`);
+  await run(`alter table hse_incidents add column if not exists photos text[]`);
+  await run('create index if not exists hse_incidents_emp_idx on hse_incidents(employee_id)');
+  await run('create index if not exists hse_incidents_type_idx on hse_incidents(type_id)');
+
+  await run(`
+    create table if not exists employee_performance_stats (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      period_start date not null,
+      period_end date not null,
+      throughput_per_hour numeric,
+      quality_score numeric,
+      safety_score numeric,
+      versatility_score numeric,
+      incidents_count integer default 0,
+      performance_index numeric,
+      created_at timestamptz not null default now(),
+      unique (employee_id, period_start, period_end)
+    )
+  `);
+  await run(`alter table employee_performance_stats add column if not exists performance_index numeric`);
+  await run('create index if not exists employee_performance_emp_idx on employee_performance_stats(employee_id)');
+
+  await run(`
+    create table if not exists driver_compliance (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      period_start date not null,
+      period_end date not null,
+      driving_hours numeric,
+      incidents integer default 0,
+      punctuality_score numeric,
+      fuel_efficiency_score numeric,
+      created_at timestamptz not null default now(),
+      unique (employee_id, period_start, period_end)
+    )
+  `);
+  await run(`
+    create table if not exists driver_duty_records (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      duty_date date not null,
+      duty_hours numeric default 0,
+      driving_hours numeric default 0,
+      night_hours numeric default 0,
+      breaks_minutes integer default 0,
+      overtime_minutes integer default 0,
+      legal_ok boolean default true,
+      notes text,
+      created_at timestamptz not null default now(),
+      unique (employee_id, duty_date)
+    )
+  `);
+  await run(`create index if not exists driver_duty_records_emp_idx on driver_duty_records(employee_id)`);
+  await run(`
+    create table if not exists driver_incidents (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      route_id uuid references routes(id) on delete set null,
+      occurred_at timestamptz not null default now(),
+      type text,
+      severity text,
+      description text,
+      customer_feedback text,
+      resolved boolean default false,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run(`create index if not exists driver_incidents_emp_idx on driver_incidents(employee_id)`);
+  await run(`
+    create table if not exists eco_driving_scores (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      route_id uuid references routes(id) on delete set null,
+      score numeric,
+      fuel_consumption numeric,
+      harsh_braking integer,
+      harsh_acceleration integer,
+      idle_time_minutes integer,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run(`create index if not exists eco_driving_scores_emp_idx on eco_driving_scores(employee_id)`);
+
+  // Formations continues (micro-formations, checklists, rappels)
+  await run(`
+    create table if not exists training_modules (
+      id uuid primary key default gen_random_uuid(),
+      title text not null,
+      module_type text not null default 'video', -- video | checklist | document
+      media_url text,
+      checklist_items text[],
+      mandatory boolean default false,
+      refresh_months integer,
+      duration_minutes integer,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run(`
+    create table if not exists training_progress (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      module_id uuid not null references training_modules(id) on delete cascade,
+      status text not null default 'pending', -- pending | in_progress | completed
+      score numeric,
+      completed_at timestamptz,
+      expires_at timestamptz,
+      last_reminder_at timestamptz,
+      created_at timestamptz not null default now(),
+      unique (employee_id, module_id)
+    )
+  `);
+  await run('create index if not exists training_progress_emp_idx on training_progress(employee_id)');
+  await run('create index if not exists training_progress_mod_idx on training_progress(module_id)');
+
+  await run(`
+    create table if not exists training_reminders (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      module_id uuid not null references training_modules(id) on delete cascade,
+      due_date date not null,
+      sent_at timestamptz,
+      status text not null default 'pending', -- pending | sent | ack
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists training_reminders_emp_idx on training_reminders(employee_id)');
+  await run('create index if not exists training_reminders_mod_idx on training_reminders(module_id)');
+
+  // Paie / contrats
+  await run(`
+    create table if not exists employment_contracts (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      contract_type text not null, -- cdi, cdd, interim
+      start_date date not null,
+      end_date date,
+      base_salary numeric,
+      currency text default 'EUR',
+      hours_per_week numeric,
+      site_id uuid references sites(id) on delete set null,
+      status text not null default 'active',
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists employment_contracts_emp_idx on employment_contracts(employee_id)');
+
+  await run(`
+    create table if not exists contract_allowances (
+      id uuid primary key default gen_random_uuid(),
+      contract_id uuid not null references employment_contracts(id) on delete cascade,
+      label text not null,
+      amount numeric not null,
+      periodicity text not null default 'monthly' -- monthly, one_time
+    )
+  `);
+
+  await run(`
+    create table if not exists overtime_entries (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      entry_date date not null,
+      hours numeric not null,
+      rate_multiplier numeric default 1.25,
+      approved boolean default false,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists overtime_entries_emp_idx on overtime_entries(employee_id)');
+
+  await run(`
+    create table if not exists payroll_entries (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      period_start date not null,
+      period_end date not null,
+      gross_amount numeric,
+      net_amount numeric,
+      currency text default 'EUR',
+      bonuses jsonb,
+      overtime_hours numeric,
+      status text default 'draft',
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists payroll_entries_emp_idx on payroll_entries(employee_id)');
+
+  // Recrutement décentralisé / tests
+  await run(`
+    create table if not exists job_positions (
+      id uuid primary key default gen_random_uuid(),
+      title text not null,
+      site_id uuid references sites(id) on delete set null,
+      department text,
+      description text,
+      requirements text,
+      status text not null default 'open',
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run(`
+    create table if not exists job_applicants (
+      id uuid primary key default gen_random_uuid(),
+      position_id uuid references job_positions(id) on delete cascade,
+      full_name text not null,
+      email text,
+      phone text,
+      experience text,
+      status text not null default 'pending',
+      score numeric,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run(`
+    create table if not exists applicant_tests (
+      id uuid primary key default gen_random_uuid(),
+      applicant_id uuid references job_applicants(id) on delete cascade,
+      test_type text,
+      score numeric,
+      result text,
+      created_at timestamptz not null default now()
+    )
+  `);
+
+  await run(`
+    create table if not exists line_positions (
+      id uuid primary key default gen_random_uuid(),
+      line_name text not null,
+      machine text,
+      position_code text,
+      required_skill_id uuid references skills(id) on delete set null,
+      required_certification_id uuid references certifications(id) on delete set null,
+      created_at timestamptz not null default now()
+    )
+  `);
+
+  await run(`
+    create table if not exists time_clock_events (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      position_id uuid references line_positions(id) on delete set null,
+      event_type text not null check (event_type in ('in','out','pause_in','pause_out','position_change')),
+      source text,
+      device_id text,
+      occurred_at timestamptz not null default now(),
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists time_clock_events_emp_idx on time_clock_events(employee_id)');
+
+  await run(`
+    create table if not exists shift_assignments (
+      id uuid primary key default gen_random_uuid(),
+      employee_id uuid not null references employees(id) on delete cascade,
+      position_id uuid references line_positions(id) on delete set null,
+      shift_date date not null,
+      shift_name text,
+      start_time time,
+      end_time time,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists shift_assignments_emp_idx on shift_assignments(employee_id)');
+  await run('create index if not exists shift_assignments_date_idx on shift_assignments(shift_date)');
+
+  await run(`
+    create table if not exists planning_constraints (
+      id uuid primary key default gen_random_uuid(),
+      position_id uuid references line_positions(id) on delete cascade,
+      required_skill_id uuid references skills(id) on delete set null,
+      required_certification_id uuid references certifications(id) on delete set null,
+      max_hours_per_day numeric,
+      max_hours_per_week numeric,
+      night_allowed boolean,
+      created_at timestamptz not null default now()
+    )
+  `);
+
+  await run(`
+    create table if not exists planning_suggestions (
+      id uuid primary key default gen_random_uuid(),
+      suggestion_date date not null,
+      position_id uuid references line_positions(id) on delete set null,
+      employee_id uuid references employees(id) on delete set null,
+      reason text,
+      confidence numeric,
+      applied boolean not null default false,
+      created_at timestamptz not null default now()
+    )
+  `);
+
   await run(`
     create table if not exists leaves (
       id uuid primary key,
@@ -1256,6 +1752,22 @@ const ensureSchema = async () => {
   await run(`alter table customers add column if not exists restricted_zone_ids text[]`);
   await run(`alter table customers add column if not exists average_visit_duration_minutes numeric`);
 
+  // Sites / Points de collecte rattachés aux clients
+  await run(`
+    create table if not exists sites (
+      id uuid primary key default gen_random_uuid(),
+      customer_id uuid references customers(id) on delete cascade,
+      name text not null,
+      address text,
+      latitude double precision,
+      longitude double precision,
+      active boolean not null default true,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists sites_customer_idx on sites(customer_id)');
+  await run('create index if not exists sites_active_idx on sites(active)');
+
   await run(`
     create table if not exists materials (
       id uuid primary key default gen_random_uuid(),
@@ -1271,6 +1783,23 @@ const ensureSchema = async () => {
   `);
   await run('create index if not exists materials_abrege_idx on materials(abrege)');
   await run('create index if not exists materials_famille_idx on materials(famille)');
+
+  // Qualités de matières (MaterialQualities)
+  await run(`
+    create table if not exists material_qualities (
+      id uuid primary key default gen_random_uuid(),
+      material_id uuid not null references materials(id) on delete cascade,
+      name text not null,
+      description text,
+      deduction_pct numeric default 0 check (deduction_pct >= 0 and deduction_pct <= 100),
+      is_default boolean not null default false,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      unique(material_id, name)
+    )
+  `);
+  await run('create index if not exists material_qualities_material_idx on material_qualities(material_id)');
+  await run('create index if not exists material_qualities_default_idx on material_qualities(material_id, is_default) where is_default = true');
 
   // Tables pour la gestion des prix des matières
   await run(`
@@ -2147,6 +2676,110 @@ const ensureSchema = async () => {
   await run(`alter table users add column if not exists reset_token text`);
   await run(`alter table users add column if not exists reset_token_expires timestamptz`);
   await run(`alter table users add column if not exists permissions text[]`);
+  await run(`alter table users add column if not exists language text default 'fr'`);
+  await run(`alter table users add column if not exists timezone text default 'Europe/Zurich'`);
+  await run(`alter table users add column if not exists currency text default 'CHF'`);
+  
+  // Créer la table sites d'abord avant de référencer site_id
+  await run(`
+    create table if not exists sites (
+      id uuid primary key default gen_random_uuid(),
+      code text not null unique,
+      name text not null,
+      address text,
+      city text,
+      postal_code text,
+      country text default 'CH',
+      latitude numeric,
+      longitude numeric,
+      timezone text default 'Europe/Zurich',
+      currency text default 'CHF',
+      is_active boolean not null default true,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists sites_code_idx on sites(code)');
+  await run('create index if not exists sites_active_idx on sites(is_active)');
+  
+  // Maintenant on peut ajouter la référence site_id
+  await run(`alter table users add column if not exists site_id uuid`);
+  // Ajouter la contrainte de clé étrangère seulement si elle n'existe pas
+  try {
+    await run(`alter table users add constraint users_site_id_fkey foreign key (site_id) references sites(id) on delete set null`);
+  } catch (error: any) {
+    // La contrainte existe peut-être déjà, ignorer l'erreur
+    if (!error?.message?.includes('already exists')) {
+      console.warn('Erreur lors de l\'ajout de la contrainte site_id:', error?.message);
+    }
+  }
+
+  // Tables pour multilingue et multi-sites (sites déjà créé ci-dessus)
+
+  await run(`
+    create table if not exists currencies (
+      id uuid primary key default gen_random_uuid(),
+      code text not null unique,
+      name text not null,
+      symbol text not null,
+      exchange_rate numeric not null default 1.0,
+      is_base boolean not null default false,
+      is_active boolean not null default true,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists currencies_code_idx on currencies(code)');
+  await run('create index if not exists currencies_active_idx on currencies(is_active)');
+
+  await run(`
+    create table if not exists currency_rates (
+      id uuid primary key default gen_random_uuid(),
+      from_currency text not null,
+      to_currency text not null,
+      rate numeric not null,
+      effective_date date not null default current_date,
+      created_at timestamptz not null default now(),
+      unique(from_currency, to_currency, effective_date)
+    )
+  `);
+  await run('create index if not exists currency_rates_date_idx on currency_rates(effective_date desc)');
+
+  await run(`
+    create table if not exists site_consolidations (
+      id uuid primary key default gen_random_uuid(),
+      consolidation_date date not null,
+      site_id uuid references sites(id) on delete cascade,
+      metric_type text not null,
+      metric_value numeric not null,
+      currency text,
+      created_at timestamptz not null default now(),
+      unique(consolidation_date, site_id, metric_type)
+    )
+  `);
+  await run('create index if not exists site_consolidations_date_idx on site_consolidations(consolidation_date desc)');
+  await run('create index if not exists site_consolidations_site_idx on site_consolidations(site_id)');
+
+  // Initialiser les devises par défaut si elles n'existent pas
+  try {
+    const existingCurrencies = await run<{ count: string }>('select count(*)::text as count from currencies');
+    const count = existingCurrencies && existingCurrencies[0]?.count ? parseInt(existingCurrencies[0].count) : 0;
+    if (count === 0) {
+      await run(
+        `insert into currencies (code, name, symbol, exchange_rate, is_base, is_active)
+         values 
+         ('CHF', 'Franc suisse', 'CHF', 1.0, true, true),
+         ('EUR', 'Euro', '€', 0.92, false, true),
+         ('USD', 'Dollar américain', '$', 1.0, false, true),
+         ('GBP', 'Livre sterling', '£', 0.79, false, true)
+         on conflict (code) do nothing`
+      );
+      console.log('Devises par défaut initialisées');
+    }
+  } catch (error: any) {
+    console.warn('Erreur lors de l\'initialisation des devises:', error?.message || error);
+    // Ne pas bloquer l'initialisation si les devises existent déjà
+  }
 
   await run(`
     create table if not exists audit_logs (
@@ -2163,6 +2796,107 @@ const ensureSchema = async () => {
   `);
   await run('create index if not exists audit_logs_entity_idx on audit_logs(entity_type, entity_id, created_at desc)');
   await run('create index if not exists audit_logs_created_idx on audit_logs(created_at desc)');
+  await run('alter table audit_logs add column if not exists ip_address text');
+  await run('alter table audit_logs add column if not exists user_agent text');
+  await run('alter table audit_logs add column if not exists session_id uuid');
+
+  // Tables pour la sécurité renforcée
+  // Authentification à deux facteurs (2FA)
+  await run(`
+    create table if not exists two_factor_auth (
+      id uuid primary key default gen_random_uuid(),
+      user_id uuid not null references users(id) on delete cascade,
+      secret text not null,
+      backup_codes text[],
+      is_enabled boolean not null default false,
+      last_used_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      unique(user_id)
+    )
+  `);
+  await run('create index if not exists two_factor_auth_user_idx on two_factor_auth(user_id)');
+
+  // Gestion des sessions actives
+  await run(`
+    create table if not exists user_sessions (
+      id uuid primary key default gen_random_uuid(),
+      user_id uuid not null references users(id) on delete cascade,
+      token text not null unique,
+      ip_address text,
+      user_agent text,
+      device_info text,
+      location text,
+      is_active boolean not null default true,
+      last_activity timestamptz not null default now(),
+      expires_at timestamptz not null,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists user_sessions_user_idx on user_sessions(user_id, is_active)');
+  await run('create index if not exists user_sessions_token_idx on user_sessions(token)');
+  await run('create index if not exists user_sessions_expires_idx on user_sessions(expires_at) where is_active = true');
+
+  // Conformité RGPD - Consentements
+  await run(`
+    create table if not exists gdpr_consents (
+      id uuid primary key default gen_random_uuid(),
+      user_id uuid references users(id) on delete cascade,
+      consent_type text not null check (consent_type in ('data_processing', 'marketing', 'analytics', 'cookies', 'location')),
+      granted boolean not null default false,
+      granted_at timestamptz,
+      revoked_at timestamptz,
+      ip_address text,
+      user_agent text,
+      version text,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists gdpr_consents_user_idx on gdpr_consents(user_id, consent_type)');
+
+  // Conformité RGPD - Demandes (droit à l'oubli, export, etc.)
+  await run(`
+    create table if not exists gdpr_data_requests (
+      id uuid primary key default gen_random_uuid(),
+      user_id uuid references users(id) on delete set null,
+      request_type text not null check (request_type in ('data_export', 'data_deletion', 'data_rectification', 'access_request')),
+      status text not null default 'pending' check (status in ('pending', 'in_progress', 'completed', 'rejected')),
+      requested_data jsonb,
+      processed_data jsonb,
+      requested_by uuid references users(id) on delete set null,
+      processed_by uuid references users(id) on delete set null,
+      requested_at timestamptz not null default now(),
+      processed_at timestamptz,
+      notes text,
+      ip_address text,
+      user_agent text
+    )
+  `);
+  await run('create index if not exists gdpr_data_requests_user_idx on gdpr_data_requests(user_id, status)');
+  await run('create index if not exists gdpr_data_requests_status_idx on gdpr_data_requests(status, requested_at desc)');
+
+  // Historique des sauvegardes
+  await run(`
+    create table if not exists backups (
+      id uuid primary key default gen_random_uuid(),
+      backup_type text not null check (backup_type in ('full', 'incremental', 'schema_only', 'data_only')),
+      status text not null default 'pending' check (status in ('pending', 'in_progress', 'completed', 'failed')),
+      file_path text,
+      file_size bigint,
+      tables_count integer,
+      records_count bigint,
+      started_at timestamptz not null default now(),
+      completed_at timestamptz,
+      error_message text,
+      created_by uuid references users(id) on delete set null,
+      retention_until timestamptz,
+      metadata jsonb
+    )
+  `);
+  await run('create index if not exists backups_status_idx on backups(status, started_at desc)');
+  await run('create index if not exists backups_type_idx on backups(backup_type, started_at desc)');
+  await run('create index if not exists backups_retention_idx on backups(retention_until) where retention_until is not null');
 
   // Tables pour la gestion des configurations d'inventaire
   await run(`
@@ -2459,6 +3193,42 @@ const ensureSchema = async () => {
   await run('alter table warehouses add column if not exists is_depot boolean not null default false');
   await run('create index if not exists warehouses_depot_idx on warehouses(is_depot) where is_depot = true');
 
+  // Collectes / Bons d'entrée
+  await run(`
+    create table if not exists collections (
+      id uuid primary key default gen_random_uuid(),
+      site_id uuid references sites(id) on delete cascade,
+      contract_id uuid references customer_contracts(id) on delete set null,
+      reference text,
+      collected_at timestamptz not null default now(),
+      driver text,
+      vehicle_id uuid references vehicles(id) on delete set null,
+      notes text,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists collections_site_idx on collections(site_id, collected_at desc)');
+  await run('create index if not exists collections_contract_idx on collections(contract_id)');
+  await run('create index if not exists collections_vehicle_idx on collections(vehicle_id)');
+
+  // Pesées liées aux collectes
+  await run(`
+    create table if not exists weighings (
+      id uuid primary key default gen_random_uuid(),
+      collection_id uuid references collections(id) on delete cascade,
+      scale_id text,
+      weigh_type text check (weigh_type in ('gross', 'tare', 'net')),
+      weight_gross numeric,
+      weight_tare numeric,
+      weight_net numeric,
+      ticket_no text,
+      weighed_at timestamptz not null default now(),
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists weighings_collection_idx on weighings(collection_id)');
+  await run('create index if not exists weighings_ticket_idx on weighings(ticket_no)');
+
   // Seuils de stock par matière et entrepôt
   await run(`
     create table if not exists stock_thresholds (
@@ -2494,16 +3264,49 @@ const ensureSchema = async () => {
       origin text,
       supplier_name text,
       batch_reference text,
-      quality_status text,
+      quality_id uuid references material_qualities(id) on delete set null,
+      quality_status text, -- Garde pour compatibilité/référence texte
       notes text,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     )
   `);
+  await run('alter table stock_lots add column if not exists quality_id uuid references material_qualities(id) on delete set null');
   await run('create index if not exists stock_lots_lot_number_idx on stock_lots(lot_number)');
   await run('create index if not exists stock_lots_material_idx on stock_lots(material_id)');
   await run('create index if not exists stock_lots_warehouse_idx on stock_lots(warehouse_id)');
+  await run('create index if not exists stock_lots_quality_idx on stock_lots(quality_id) where quality_id is not null');
   await run('create index if not exists stock_lots_expiry_idx on stock_lots(expiry_date) where expiry_date is not null');
+  await run('alter table stock_lots add column if not exists weighing_id uuid references weighings(id) on delete set null');
+  await run('create index if not exists stock_lots_weighing_idx on stock_lots(weighing_id)');
+
+  // Historique des déclassements de lots
+  await run(`
+    create table if not exists downgrades (
+      id uuid primary key default gen_random_uuid(),
+      lot_id uuid references stock_lots(id) on delete cascade,
+      from_quality_id uuid references material_qualities(id) on delete set null,
+      from_quality text, -- Garde pour compatibilité/référence texte
+      to_quality_id uuid references material_qualities(id) on delete set null,
+      to_quality text, -- Garde pour compatibilité/référence texte
+      reason text not null,
+      adjusted_weight numeric,
+      adjusted_value numeric,
+      performed_at timestamptz not null default now(),
+      performed_by uuid references users(id) on delete set null
+    )
+  `);
+  await run('alter table downgrades add column if not exists from_quality_id uuid references material_qualities(id) on delete set null');
+  await run('alter table downgrades add column if not exists to_quality_id uuid references material_qualities(id) on delete set null');
+  await run('create index if not exists downgrades_lot_idx on downgrades(lot_id, performed_at desc)');
+  await run('create index if not exists downgrades_from_quality_idx on downgrades(from_quality_id) where from_quality_id is not null');
+  await run('create index if not exists downgrades_to_quality_idx on downgrades(to_quality_id) where to_quality_id is not null');
+
+  // Lier les factures aux lots et aux collectes
+  await run(`alter table invoice_lines add column if not exists lot_id uuid references stock_lots(id) on delete set null`);
+  await run(`alter table invoice_lines add column if not exists collection_id uuid references collections(id) on delete set null`);
+  await run('create index if not exists invoice_lines_lot_idx on invoice_lines(lot_id)');
+  await run('create index if not exists invoice_lines_collection_idx on invoice_lines(collection_id)');
 
   // Mouvements de stock (traçabilité)
   await run(`
@@ -2903,6 +3706,45 @@ const ensureSchema = async () => {
   await run('create index if not exists customer_contracts_renewal_idx on customer_contracts(renewal_date) where renewal_date is not null');
   await run('create index if not exists customer_contracts_status_idx on customer_contracts(status)');
 
+  // Matières par contrat (jointure N-N)
+  await run(`
+    create table if not exists contract_materials (
+      contract_id uuid references customer_contracts(id) on delete cascade,
+      material_id uuid references materials(id) on delete cascade,
+      quality_id uuid references material_qualities(id) on delete set null,
+      quality text default '', -- Garde pour compatibilité/référence texte
+      notes text,
+      primary key (contract_id, material_id, quality)
+    )
+  `);
+  await run('alter table contract_materials add column if not exists quality_id uuid references material_qualities(id) on delete set null');
+  await run('create index if not exists contract_materials_contract_idx on contract_materials(contract_id)');
+  await run('create index if not exists contract_materials_material_idx on contract_materials(material_id)');
+  await run('create index if not exists contract_materials_quality_idx on contract_materials(quality_id) where quality_id is not null');
+
+  // Barèmes de prix par contrat / matière / qualité / période / poids
+  await run(`
+    create table if not exists price_schedules (
+      id uuid primary key default gen_random_uuid(),
+      contract_id uuid references customer_contracts(id) on delete cascade,
+      material_id uuid references materials(id) on delete cascade,
+      quality_id uuid references material_qualities(id) on delete set null,
+      quality text, -- Garde pour compatibilité/référence texte
+      valid_from date not null,
+      valid_to date,
+      min_weight numeric,
+      max_weight numeric,
+      price_per_ton numeric not null,
+      currency text not null default 'EUR',
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('alter table price_schedules add column if not exists quality_id uuid references material_qualities(id) on delete set null');
+  await run('create index if not exists price_schedules_contract_idx on price_schedules(contract_id)');
+  await run('create index if not exists price_schedules_material_idx on price_schedules(material_id)');
+  await run('create index if not exists price_schedules_quality_idx on price_schedules(quality_id) where quality_id is not null');
+  await run('create index if not exists price_schedules_valid_idx on price_schedules(valid_from, valid_to)');
+
   // Opportunités commerciales
   await run(`
     create table if not exists customer_opportunities (
@@ -3295,7 +4137,7 @@ app.post(
   '/api/auth/login',
   asyncHandler(async (req, res) => {
     try {
-      const { email, password } = req.body as { email?: string; password?: string };
+      const { email, password, twoFactorCode } = req.body as { email?: string; password?: string; twoFactorCode?: string };
       if (!email || !password) {
         return res.status(400).json({ message: 'Email et mot de passe requis' });
       }
@@ -3308,12 +4150,103 @@ app.post(
       if (!valid) {
         return res.status(401).json({ message: 'Identifiants invalides' });
       }
+
+      // Vérifier si 2FA est activé
+      const [twoFactor] = await run<{ id: string; secret: string; is_enabled: boolean }>(
+        'select id, secret, is_enabled from two_factor_auth where user_id = $1',
+        [user.id]
+      );
+
+      if (twoFactor?.is_enabled) {
+        // Si le code 2FA n'est pas fourni, retourner un token temporaire
+        if (!twoFactorCode) {
+          const tempPayload = createAuthPayload(user);
+          const tempToken = signToken({ ...tempPayload, requires2FA: true }, '5m');
+          
+          // Enregistrer la session temporaire
+          const sessionId = randomUUID();
+          const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress || 'unknown';
+          const userAgent = req.headers['user-agent'] || 'unknown';
+          const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+          
+          await run(
+            `insert into user_sessions (id, user_id, token, ip_address, user_agent, expires_at, is_active)
+             values ($1, $2, $3, $4, $5, $6, true)`,
+            [sessionId, user.id, tempToken, ipAddress, userAgent, expiresAt]
+          );
+
+          // Enregistrer dans audit_logs
+          await run(
+            `insert into audit_logs (entity_type, entity_id, action, changed_by, changed_by_name, ip_address, user_agent, session_id)
+             values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            ['user', user.id, 'login_2fa_required', user.id, user.full_name, ipAddress, userAgent, sessionId]
+          );
+
+          return res.json({ 
+            token: tempToken, 
+            requires2FA: true,
+            message: 'Code 2FA requis'
+          });
+        }
+
+        // Vérifier le code 2FA
+        const codeValid = verify2FACode(twoFactorCode, twoFactor.secret);
+        if (!codeValid) {
+          // Vérifier aussi les codes de secours
+          const [twoFactorWithBackup] = await run<{ backup_codes: string[] }>(
+            'select backup_codes from two_factor_auth where user_id = $1',
+            [user.id]
+          );
+          const backupCodes = twoFactorWithBackup?.backup_codes || [];
+          const isBackupCode = backupCodes.includes(twoFactorCode.toUpperCase());
+          
+          if (!isBackupCode) {
+            return res.status(401).json({ message: 'Code 2FA invalide' });
+          }
+
+          // Retirer le code de secours utilisé
+          const updatedBackupCodes = backupCodes.filter(code => code !== twoFactorCode.toUpperCase());
+          await run(
+            'update two_factor_auth set backup_codes = $1, last_used_at = now() where user_id = $2',
+            [updatedBackupCodes, user.id]
+          );
+        } else {
+          await run(
+            'update two_factor_auth set last_used_at = now() where user_id = $1',
+            [user.id]
+          );
+        }
+      }
+
+      // Créer la session et le token final
       const payload = createAuthPayload(user);
       const token = signToken(payload);
+      
+      const sessionId = randomUUID();
+      const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress || 'unknown';
+      const userAgent = req.headers['user-agent'] || 'unknown';
+      const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000); // 12 heures
+      
+      await run(
+        `insert into user_sessions (id, user_id, token, ip_address, user_agent, expires_at, is_active)
+         values ($1, $2, $3, $4, $5, $6, true)`,
+        [sessionId, user.id, token, ipAddress, userAgent, expiresAt]
+      );
+
+      // Enregistrer dans audit_logs
+      await run(
+        `insert into audit_logs (entity_type, entity_id, action, changed_by, changed_by_name, ip_address, user_agent, session_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        ['user', user.id, 'login', user.id, user.full_name, ipAddress, userAgent, sessionId]
+      );
+
       res.json({ token, user: mapUserRow(user) });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Login error:', error);
-      throw error;
+      if (error.message) {
+        return res.status(500).json({ message: 'Erreur serveur', detail: error.message });
+      }
+      return res.status(500).json({ message: 'Erreur serveur' });
     }
   })
 );
@@ -3332,6 +4265,433 @@ app.get(
       return res.status(401).json({ message: 'Utilisateur introuvable' });
     }
     res.json({ user: mapUserRow(user) });
+  })
+);
+
+// ========== ENDPOINTS SÉCURITÉ RENFORCÉE ==========
+
+// 2FA - Générer le secret et QR code
+app.post(
+  '/api/security/2fa/setup',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const userId = authReq.auth?.id;
+    if (!userId) {
+      return res.status(401).json({ message: 'Non authentifié' });
+    }
+    const [user] = await run<UserRow>('select email from users where id = $1', [userId]);
+    if (!user) {
+      return res.status(404).json({ message: 'Utilisateur introuvable' });
+    }
+
+    const { secret, otpAuthUrl } = generate2FASecret(user.email);
+    const qrCodeDataUrl = await QRCode.toDataURL(otpAuthUrl);
+
+    // Vérifier si 2FA existe déjà
+    const [existing] = await run('select id from two_factor_auth where user_id = $1', [userId]);
+    if (existing) {
+      await run(
+        'update two_factor_auth set secret = $1, is_enabled = false, updated_at = now() where user_id = $2',
+        [secret, userId]
+      );
+    } else {
+      const backupCodes = generateBackupCodes();
+      await run(
+        `insert into two_factor_auth (user_id, secret, backup_codes, is_enabled)
+         values ($1, $2, $3, false)`,
+        [userId, secret, backupCodes]
+      );
+    }
+
+    const [twoFactor] = await run<{ backup_codes: string[] }>(
+      'select backup_codes from two_factor_auth where user_id = $1',
+      [userId]
+    );
+
+    res.json({
+      secret,
+      qrCode: qrCodeDataUrl,
+      backupCodes: twoFactor?.backup_codes || []
+    });
+  })
+);
+
+// 2FA - Activer après vérification du code
+app.post(
+  '/api/security/2fa/enable',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const userId = authReq.auth?.id;
+    const { code } = req.body as { code?: string };
+    if (!code) {
+      return res.status(400).json({ message: 'Code requis' });
+    }
+
+    const [twoFactor] = await run<{ secret: string }>(
+      'select secret from two_factor_auth where user_id = $1',
+      [userId]
+    );
+    if (!twoFactor) {
+      return res.status(404).json({ message: '2FA non configuré' });
+    }
+
+    const isValid = verify2FACode(code, twoFactor.secret);
+    if (!isValid) {
+      return res.status(401).json({ message: 'Code invalide' });
+    }
+
+    await run(
+      'update two_factor_auth set is_enabled = true, updated_at = now() where user_id = $1',
+      [userId]
+    );
+
+    res.json({ message: '2FA activé avec succès' });
+  })
+);
+
+// 2FA - Désactiver
+app.post(
+  '/api/security/2fa/disable',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const userId = authReq.auth?.id;
+    const { password } = req.body as { password?: string };
+    if (!password) {
+      return res.status(400).json({ message: 'Mot de passe requis' });
+    }
+
+    const [user] = await run<UserRow>('select password_hash from users where id = $1', [userId]);
+    if (!user) {
+      return res.status(404).json({ message: 'Utilisateur introuvable' });
+    }
+
+    const valid = await verifyPassword(password, user.password_hash);
+    if (!valid) {
+      return res.status(401).json({ message: 'Mot de passe incorrect' });
+    }
+
+    await run(
+      'update two_factor_auth set is_enabled = false, updated_at = now() where user_id = $1',
+      [userId]
+    );
+
+    res.json({ message: '2FA désactivé avec succès' });
+  })
+);
+
+// 2FA - Régénérer les codes de secours
+app.post(
+  '/api/security/2fa/regenerate-backup-codes',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const userId = authReq.auth?.id;
+
+    const backupCodes = generateBackupCodes();
+    await run(
+      'update two_factor_auth set backup_codes = $1, updated_at = now() where user_id = $2',
+      [backupCodes, userId]
+    );
+
+    res.json({ backupCodes });
+  })
+);
+
+// 2FA Admin - Générer le secret et QR code pour un autre utilisateur
+app.post(
+  '/api/security/2fa/admin/setup/:userId',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    const [user] = await run<UserRow>('select email from users where id = $1', [userId]);
+    if (!user) {
+      return res.status(404).json({ message: 'Utilisateur introuvable' });
+    }
+
+    const { secret, otpAuthUrl } = generate2FASecret(user.email);
+    const qrCodeDataUrl = await QRCode.toDataURL(otpAuthUrl);
+
+    // Vérifier si 2FA existe déjà
+    const [existing] = await run('select id from two_factor_auth where user_id = $1', [userId]);
+    if (existing) {
+      await run(
+        'update two_factor_auth set secret = $1, is_enabled = false, updated_at = now() where user_id = $2',
+        [secret, userId]
+      );
+    } else {
+      const backupCodes = generateBackupCodes();
+      await run(
+        `insert into two_factor_auth (user_id, secret, backup_codes, is_enabled)
+         values ($1, $2, $3, false)`,
+        [userId, secret, backupCodes]
+      );
+    }
+
+    const [twoFactor] = await run<{ backup_codes: string[] }>(
+      'select backup_codes from two_factor_auth where user_id = $1',
+      [userId]
+    );
+
+    res.json({
+      secret,
+      qrCode: qrCodeDataUrl,
+      backupCodes: twoFactor?.backup_codes || []
+    });
+  })
+);
+
+// 2FA Admin - Activer pour un autre utilisateur
+app.post(
+  '/api/security/2fa/admin/enable/:userId',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    const { code } = req.body as { code?: string };
+    if (!code) {
+      return res.status(400).json({ message: 'Code requis' });
+    }
+
+    const [twoFactor] = await run<{ secret: string }>(
+      'select secret from two_factor_auth where user_id = $1',
+      [userId]
+    );
+    if (!twoFactor) {
+      return res.status(404).json({ message: '2FA non configuré' });
+    }
+
+    const isValid = verify2FACode(code, twoFactor.secret);
+    if (!isValid) {
+      return res.status(401).json({ message: 'Code invalide' });
+    }
+
+    await run(
+      'update two_factor_auth set is_enabled = true, updated_at = now() where user_id = $1',
+      [userId]
+    );
+
+    res.json({ message: '2FA activé avec succès' });
+  })
+);
+
+// 2FA Admin - Désactiver pour un autre utilisateur
+app.post(
+  '/api/security/2fa/admin/disable/:userId',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+
+    await run(
+      'update two_factor_auth set is_enabled = false, updated_at = now() where user_id = $1',
+      [userId]
+    );
+
+    res.json({ message: '2FA désactivé avec succès' });
+  })
+);
+
+// 2FA Admin - Vérifier l'état pour un autre utilisateur
+app.get(
+  '/api/security/2fa/admin/status/:userId',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    const [twoFactor] = await run<{ is_enabled: boolean }>(
+      'select is_enabled from two_factor_auth where user_id = $1',
+      [userId]
+    );
+
+    res.json({ enabled: twoFactor?.is_enabled || false });
+  })
+);
+
+// Sessions - Lister les sessions actives
+app.get(
+  '/api/security/sessions',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const userId = authReq.auth?.id;
+
+    const sessions = await run(
+      `select id, ip_address, user_agent, device_info, location, is_active, last_activity, expires_at, created_at
+       from user_sessions
+       where user_id = $1 and expires_at > now()
+       order by last_activity desc`,
+      [userId]
+    );
+
+    res.json(sessions);
+  })
+);
+
+// Sessions - Déconnexion d'une session spécifique
+app.delete(
+  '/api/security/sessions/:sessionId',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const userId = authReq.auth?.id;
+    const { sessionId } = req.params;
+
+    await run(
+      'update user_sessions set is_active = false where id = $1 and user_id = $2',
+      [sessionId, userId]
+    );
+
+    res.json({ message: 'Session fermée' });
+  })
+);
+
+// Sessions - Déconnexion de toutes les autres sessions
+app.post(
+  '/api/security/sessions/logout-others',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const userId = authReq.auth?.id;
+    const currentToken = req.headers.authorization?.replace('Bearer ', '');
+
+    await run(
+      `update user_sessions set is_active = false 
+       where user_id = $1 and token != $2 and is_active = true`,
+      [userId, currentToken]
+    );
+
+    res.json({ message: 'Toutes les autres sessions ont été fermées' });
+  })
+);
+
+// RGPD - Consentements
+app.get(
+  '/api/security/gdpr/consents',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const userId = authReq.auth?.id;
+
+    const consents = await run(
+      `select consent_type, granted, granted_at, revoked_at, version, created_at
+       from gdpr_consents
+       where user_id = $1
+       order by created_at desc`,
+      [userId]
+    );
+
+    res.json(consents);
+  })
+);
+
+app.post(
+  '/api/security/gdpr/consents',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const userId = authReq.auth?.id;
+    const { consent_type, granted } = req.body as { consent_type?: string; granted?: boolean };
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    const userAgent = req.headers['user-agent'] || 'unknown';
+
+    if (!consent_type || granted === undefined) {
+      return res.status(400).json({ message: 'consent_type et granted requis' });
+    }
+
+    const version = '1.0';
+    const grantedAt = granted ? new Date() : null;
+    const revokedAt = granted ? null : new Date();
+
+    await run(
+      `insert into gdpr_consents (user_id, consent_type, granted, granted_at, revoked_at, ip_address, user_agent, version)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
+       on conflict (user_id, consent_type) do update
+       set granted = $3, granted_at = $4, revoked_at = $5, updated_at = now()`,
+      [userId, consent_type, granted, grantedAt, revokedAt, ipAddress, userAgent, version]
+    );
+
+    res.json({ message: 'Consentement enregistré' });
+  })
+);
+
+// RGPD - Demandes (export, suppression, etc.)
+app.post(
+  '/api/security/gdpr/requests',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const userId = authReq.auth?.id;
+    const { request_type, notes } = req.body as { request_type?: string; notes?: string };
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    const userAgent = req.headers['user-agent'] || 'unknown';
+
+    if (!request_type) {
+      return res.status(400).json({ message: 'request_type requis' });
+    }
+
+    const [request] = await run(
+      `insert into gdpr_data_requests (user_id, request_type, status, requested_by, ip_address, user_agent, notes)
+       values ($1, $2, 'pending', $3, $4, $5, $6)
+       returning id, request_type, status, requested_at`,
+      [userId, request_type, userId, ipAddress, userAgent, notes || null]
+    );
+
+    res.status(201).json(request);
+  })
+);
+
+app.get(
+  '/api/security/gdpr/requests',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (req, res) => {
+    const requests = await run(
+      `select dr.*, u.email as user_email, u.full_name as user_name
+       from gdpr_data_requests dr
+       left join users u on dr.user_id = u.id
+       order by requested_at desc
+       limit 100`
+    );
+
+    res.json(requests);
+  })
+);
+
+// Logs d'audit améliorés
+app.get(
+  '/api/security/audit-logs',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (req, res) => {
+    const { entity_type, entity_id, action, start_date, end_date, limit = 100 } = req.query;
+    let query = 'select * from audit_logs where 1=1';
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (entity_type) {
+      query += ` and entity_type = $${paramIndex++}`;
+      params.push(entity_type);
+    }
+    if (entity_id) {
+      query += ` and entity_id = $${paramIndex++}`;
+      params.push(entity_id);
+    }
+    if (action) {
+      query += ` and action = $${paramIndex++}`;
+      params.push(action);
+    }
+    if (start_date) {
+      query += ` and created_at >= $${paramIndex++}`;
+      params.push(start_date);
+    }
+    if (end_date) {
+      query += ` and created_at <= $${paramIndex++}`;
+      params.push(end_date);
+    }
+
+    query += ` order by created_at desc limit $${paramIndex++}`;
+    params.push(parseInt(limit as string));
+
+    const logs = await run(query, params);
+    res.json(logs);
   })
 );
 
@@ -3455,6 +4815,957 @@ app.get(
     res.json(rows.map(mapUserRow));
   })
 );
+
+  // ---------------------------
+  // RH avancé : compétences, certifications, formations, EPI, HSE, pointage, performances, chauffeurs
+  // ---------------------------
+  // Skills
+  app.get('/api/hr/skills', requireAuth(), asyncHandler(async (_req, res) => {
+    const skills = await run('select * from skills order by name');
+    res.json(skills);
+  }));
+  app.post('/api/hr/skills', requireAdminAuth, asyncHandler(async (req, res) => {
+    const { name, description } = req.body;
+    const [skill] = await run(
+      'insert into skills (name, description) values ($1,$2) returning *',
+      [name, description || null]
+    );
+    res.status(201).json(skill);
+  }));
+  app.patch('/api/hr/skills/:id', requireAdminAuth, asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { name, description } = req.body;
+    const [skill] = await run(
+      'update skills set name = coalesce($1,name), description = $2 where id = $3 returning *',
+      [name || null, description || null, id]
+    );
+    res.json(skill);
+  }));
+  app.delete('/api/hr/skills/:id', requireAdminAuth, asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    await run('delete from skills where id = $1', [id]);
+    res.json({ message: 'Skill supprimée' });
+  }));
+
+  // Employee skills
+  app.get('/api/hr/employees/:id/skills', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const skills = await run(
+      `select es.*, s.name, s.description 
+       from employee_skills es 
+       join skills s on s.id = es.skill_id 
+       where es.employee_id = $1
+       order by s.name`,
+      [id]
+    );
+    res.json(skills);
+  }));
+  app.post('/api/hr/employees/:id/skills', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { skill_id, level, validated_at, expires_at } = req.body;
+    const [row] = await run(
+      `insert into employee_skills (employee_id, skill_id, level, validated_at, expires_at)
+       values ($1,$2,$3,$4,$5)
+       on conflict (employee_id, skill_id) do update
+       set level = excluded.level, validated_at = excluded.validated_at, expires_at = excluded.expires_at
+       returning *`,
+      [id, skill_id, level || null, validated_at || null, expires_at || null]
+    );
+    res.status(201).json(row);
+  }));
+  app.delete('/api/hr/employees/:id/skills/:skillId', requireAuth(), asyncHandler(async (req, res) => {
+    const { id, skillId } = req.params;
+    await run('delete from employee_skills where employee_id = $1 and skill_id = $2', [id, skillId]);
+    res.json({ message: 'Skill retirée' });
+  }));
+
+  // Certifications
+  app.get('/api/hr/certifications', requireAuth(), asyncHandler(async (_req, res) => {
+    const rows = await run('select * from certifications order by name');
+    res.json(rows);
+  }));
+  app.post('/api/hr/certifications', requireAdminAuth, asyncHandler(async (req, res) => {
+    const { code, name, description, validity_months } = req.body;
+    const [row] = await run(
+      'insert into certifications (code, name, description, validity_months) values ($1,$2,$3,$4) returning *',
+      [code, name, description || null, validity_months || null]
+    );
+    res.status(201).json(row);
+  }));
+  app.get('/api/hr/employees/:id/certifications', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await run(
+      `select ec.*, c.code, c.name, c.description, c.validity_months
+       from employee_certifications ec
+       join certifications c on c.id = ec.certification_id
+       where ec.employee_id = $1
+       order by ec.expires_at nulls last`,
+      [id]
+    );
+    res.json(rows);
+  }));
+  app.post('/api/hr/employees/:id/certifications', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { certification_id, obtained_at, expires_at, reminder_days } = req.body;
+    const [row] = await run(
+      `insert into employee_certifications (employee_id, certification_id, obtained_at, expires_at, reminder_days)
+       values ($1,$2,$3,$4,$5)
+       on conflict (employee_id, certification_id) do update
+       set obtained_at = excluded.obtained_at, expires_at = excluded.expires_at, reminder_days = excluded.reminder_days
+       returning *`,
+      [id, certification_id, obtained_at || null, expires_at || null, reminder_days || 30]
+    );
+    res.status(201).json(row);
+  }));
+  app.delete('/api/hr/employees/:id/certifications/:certId', requireAuth(), asyncHandler(async (req, res) => {
+    const { id, certId } = req.params;
+    await run('delete from employee_certifications where employee_id = $1 and certification_id = $2', [id, certId]);
+    res.json({ message: 'Certification retirée' });
+  }));
+
+  // Trainings
+  app.get('/api/hr/trainings', requireAuth(), asyncHandler(async (_req, res) => {
+    const rows = await run('select * from trainings order by title');
+    res.json(rows);
+  }));
+  app.post('/api/hr/trainings', requireAdminAuth, asyncHandler(async (req, res) => {
+    const { title, description, mandatory, validity_months } = req.body;
+    const [row] = await run(
+      'insert into trainings (title, description, mandatory, validity_months) values ($1,$2,$3,$4) returning *',
+      [title, description || null, mandatory || false, validity_months || null]
+    );
+    res.status(201).json(row);
+  }));
+  app.get('/api/hr/employees/:id/trainings', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await run(
+      `select et.*, t.title, t.description, t.mandatory, t.validity_months
+       from employee_trainings et
+       join trainings t on t.id = et.training_id
+       where et.employee_id = $1
+       order by et.expires_at nulls last`,
+      [id]
+    );
+    res.json(rows);
+  }));
+  app.post('/api/hr/employees/:id/trainings', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { training_id, status, taken_at, expires_at, reminder_days } = req.body;
+    const [row] = await run(
+      `insert into employee_trainings (employee_id, training_id, status, taken_at, expires_at, reminder_days)
+       values ($1,$2,$3,$4,$5,$6)
+       on conflict (employee_id, training_id) do update
+       set status = excluded.status, taken_at = excluded.taken_at, expires_at = excluded.expires_at, reminder_days = excluded.reminder_days
+       returning *`,
+      [id, training_id, status || 'pending', taken_at || null, expires_at || null, reminder_days || 30]
+    );
+    res.status(201).json(row);
+  }));
+  app.delete('/api/hr/employees/:id/trainings/:trainingId', requireAuth(), asyncHandler(async (req, res) => {
+    const { id, trainingId } = req.params;
+    await run('delete from employee_trainings where employee_id = $1 and training_id = $2', [id, trainingId]);
+    res.json({ message: 'Formation retirée' });
+  }));
+
+  // EPI
+  app.get('/api/hr/epis', requireAuth(), asyncHandler(async (_req, res) => {
+    const rows = await run('select * from epis order by name');
+    res.json(rows);
+  }));
+  app.post('/api/hr/epis', requireAdminAuth, asyncHandler(async (req, res) => {
+    const { name, category, lifetime_months } = req.body;
+    const [row] = await run(
+      'insert into epis (name, category, lifetime_months) values ($1,$2,$3) returning *',
+      [name, category || null, lifetime_months || null]
+    );
+    res.status(201).json(row);
+  }));
+  app.get('/api/hr/employees/:id/epis', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await run(
+      `select ee.*, e.name, e.category, e.lifetime_months
+       from employee_epis ee
+       join epis e on e.id = ee.epi_id
+       where ee.employee_id = $1
+       order by ee.expires_at nulls last, ee.assigned_at desc`,
+      [id]
+    );
+    res.json(rows);
+  }));
+  app.post('/api/hr/employees/:id/epis', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { epi_id, assigned_at, expires_at, status } = req.body;
+    const [row] = await run(
+      `insert into employee_epis (employee_id, epi_id, assigned_at, expires_at, status)
+       values ($1,$2,$3,$4,$5)
+       returning *`,
+      [id, epi_id, assigned_at || new Date().toISOString().slice(0,10), expires_at || null, status || 'assigned']
+    );
+    res.status(201).json(row);
+  }));
+  app.delete('/api/hr/employees/:id/epis/:epiId', requireAuth(), asyncHandler(async (req, res) => {
+    const { id, epiId } = req.params;
+    await run('delete from employee_epis where employee_id = $1 and epi_id = $2', [id, epiId]);
+    res.json({ message: 'EPI retiré' });
+  }));
+
+  // HSE incidents
+  app.get('/api/hr/hse/incidents', requireAuth(), asyncHandler(async (req, res) => {
+    const { employee_id, status, severity, start_date, end_date } = req.query as { employee_id?: string; status?: string; severity?: string; start_date?: string; end_date?: string };
+    let sql = `
+      select hi.*, hit.code as type_code, hit.label as type_label
+      from hse_incidents hi
+      left join hse_incident_types hit on hit.id = hi.type_id
+      where 1=1
+    `;
+    const params: any[] = [];
+    let idx = 1;
+    if (employee_id) { sql += ` and hi.employee_id = $${idx++}`; params.push(employee_id); }
+    if (status) { sql += ` and hi.status = $${idx++}`; params.push(status); }
+    if (severity) { sql += ` and hi.severity = $${idx++}`; params.push(severity); }
+    if (start_date) { sql += ` and hi.occurred_at >= $${idx++}`; params.push(new Date(start_date).toISOString()); }
+    if (end_date) { sql += ` and hi.occurred_at <= $${idx++}`; params.push(new Date(end_date).toISOString()); }
+    sql += ' order by hi.occurred_at desc limit 200';
+    const rows = await run(sql, params);
+    res.json(rows);
+  }));
+  app.post('/api/hr/hse/incidents', requireAuth(), asyncHandler(async (req, res) => {
+    const { employee_id, type_id, description, occurred_at, location, status, severity, consequence, declared_by, witnesses, photos, root_cause, actions } = req.body;
+    const [row] = await run(
+      `insert into hse_incidents (employee_id, type_id, description, occurred_at, location, status, severity, consequence, declared_by, witnesses, photos, root_cause, actions)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       returning *`,
+      [
+        employee_id || null,
+        type_id || null,
+        description || null,
+        occurred_at || new Date().toISOString(),
+        location || null,
+        status || 'open',
+        severity || null,
+        consequence || null,
+        declared_by || null,
+        Array.isArray(witnesses) ? witnesses : witnesses ? [witnesses] : null,
+        Array.isArray(photos) ? photos : photos ? [photos] : null,
+        root_cause || null,
+        actions || null
+      ]
+    );
+    res.status(201).json(row);
+  }));
+
+  // Performances
+  app.get('/api/hr/employees/:id/performance', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await run(
+      `select * from employee_performance_stats where employee_id = $1 order by period_start desc limit 50`,
+      [id]
+    );
+    res.json(rows);
+  }));
+  app.post('/api/hr/employees/:id/performance', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { period_start, period_end, throughput_per_hour, quality_score, safety_score, versatility_score, incidents_count } = req.body;
+    const computeIndex = `
+      greatest(0, least(100,
+        coalesce($4,0)*0.15 +
+        coalesce($5,0)*0.35 +
+        coalesce($6,0)*0.25 +
+        coalesce($7,0)*0.15 -
+        coalesce($8,0)*2
+      ))
+    `;
+    const [row] = await run(
+      `insert into employee_performance_stats (employee_id, period_start, period_end, throughput_per_hour, quality_score, safety_score, versatility_score, incidents_count, performance_index)
+       values ($1,$2,$3,$4,$5,$6,$7,$8, ${computeIndex})
+       on conflict (employee_id, period_start, period_end) do update
+       set throughput_per_hour = excluded.throughput_per_hour,
+           quality_score = excluded.quality_score,
+           safety_score = excluded.safety_score,
+           versatility_score = excluded.versatility_score,
+           incidents_count = excluded.incidents_count,
+           performance_index = ${computeIndex}
+       returning *`,
+      [id, period_start, period_end, throughput_per_hour || null, quality_score || null, safety_score || null, versatility_score || null, incidents_count || 0]
+    );
+    res.status(201).json(row);
+  }));
+
+  // Recalcul de l'index de performance sur une période (par défaut 30 derniers jours)
+  app.post('/api/hr/employees/:id/performance/recompute', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { days = 30 } = req.body as { days?: number };
+    const [updated] = await run(
+      `
+      update employee_performance_stats eps
+      set performance_index = greatest(0, least(100,
+        coalesce(eps.throughput_per_hour,0)*0.15 +
+        coalesce(eps.quality_score,0)*0.35 +
+        coalesce(eps.safety_score,0)*0.25 +
+        coalesce(eps.versatility_score,0)*0.15 -
+        coalesce(eps.incidents_count,0)*2
+      ))
+      where eps.employee_id = $1
+        and eps.period_start >= current_date - ($2 || ' days')::interval
+      returning 1
+      `,
+      [id, days]
+    );
+    res.json({ ok: true, recomputed: !!updated });
+  }));
+
+  // Chauffeurs
+  app.get('/api/hr/employees/:id/driver-compliance', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await run(
+      `select * from driver_compliance where employee_id = $1 order by period_start desc limit 50`,
+      [id]
+    );
+    res.json(rows);
+  }));
+  app.post('/api/hr/employees/:id/driver-compliance', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { period_start, period_end, driving_hours, incidents, punctuality_score, fuel_efficiency_score } = req.body;
+    const [row] = await run(
+      `insert into driver_compliance (employee_id, period_start, period_end, driving_hours, incidents, punctuality_score, fuel_efficiency_score)
+       values ($1,$2,$3,$4,$5,$6,$7)
+       on conflict (employee_id, period_start, period_end) do update
+       set driving_hours = excluded.driving_hours,
+           incidents = excluded.incidents,
+           punctuality_score = excluded.punctuality_score,
+           fuel_efficiency_score = excluded.fuel_efficiency_score
+       returning *`,
+      [id, period_start, period_end, driving_hours || null, incidents || 0, punctuality_score || null, fuel_efficiency_score || null]
+    );
+    res.status(201).json(row);
+  }));
+
+  // Chauffeurs : devoirs légaux (heures de service)
+  app.get('/api/hr/employees/:id/driver-duty', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { start_date, end_date } = req.query as { start_date?: string; end_date?: string };
+    let sql = `select * from driver_duty_records where employee_id = $1`;
+    const params: any[] = [id];
+    if (start_date) { sql += ` and duty_date >= $2`; params.push(start_date); }
+    if (end_date) { sql += params.length === 2 ? ` and duty_date <= $3` : ` and duty_date <= $2`; params.push(end_date); }
+    sql += ' order by duty_date desc limit 120';
+    const rows = await run(sql, params);
+    res.json(rows);
+  }));
+  app.post('/api/hr/employees/:id/driver-duty', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { duty_date, duty_hours, driving_hours, night_hours, breaks_minutes, overtime_minutes, legal_ok, notes } = req.body;
+    const [row] = await run(
+      `insert into driver_duty_records (employee_id, duty_date, duty_hours, driving_hours, night_hours, breaks_minutes, overtime_minutes, legal_ok, notes)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       on conflict (employee_id, duty_date) do update
+       set duty_hours = excluded.duty_hours,
+           driving_hours = excluded.driving_hours,
+           night_hours = excluded.night_hours,
+           breaks_minutes = excluded.breaks_minutes,
+           overtime_minutes = excluded.overtime_minutes,
+           legal_ok = excluded.legal_ok,
+           notes = excluded.notes
+       returning *`,
+      [id, duty_date, duty_hours || 0, driving_hours || 0, night_hours || 0, breaks_minutes || 0, overtime_minutes || 0, legal_ok !== false, notes || null]
+    );
+    res.status(201).json(row);
+  }));
+
+  // Chauffeurs : incidents / retours clients
+  app.get('/api/hr/employees/:id/driver-incidents', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await run(
+      `select * from driver_incidents where employee_id = $1 order by occurred_at desc limit 100`,
+      [id]
+    );
+    res.json(rows);
+  }));
+  app.post('/api/hr/employees/:id/driver-incidents', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { route_id, occurred_at, type, severity, description, customer_feedback, resolved } = req.body;
+    const [row] = await run(
+      `insert into driver_incidents (employee_id, route_id, occurred_at, type, severity, description, customer_feedback, resolved)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)
+       returning *`,
+      [id, route_id || null, occurred_at || new Date().toISOString(), type || null, severity || null, description || null, customer_feedback || null, resolved || false]
+    );
+    res.status(201).json(row);
+  }));
+
+  // Chauffeurs : éco-conduite
+  app.get('/api/hr/employees/:id/eco-driving', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await run(
+      `select * from eco_driving_scores where employee_id = $1 order by created_at desc limit 100`,
+      [id]
+    );
+    res.json(rows);
+  }));
+
+  // Recrutement : postes
+  app.get('/api/hr/recruitment/positions', requireAuth(), asyncHandler(async (_req, res) => {
+    const rows = await run(`select * from job_positions order by created_at desc limit 200`);
+    res.json(rows);
+  }));
+  app.post('/api/hr/recruitment/positions', requireAuth(), asyncHandler(async (req, res) => {
+    const { title, site_id, department, description, requirements, status } = req.body;
+    const [row] = await run(
+      `insert into job_positions (title, site_id, department, description, requirements, status)
+       values ($1,$2,$3,$4,$5,$6)
+       returning *`,
+      [title, site_id || null, department || null, description || null, requirements || null, status || 'open']
+    );
+    res.status(201).json(row);
+  }));
+
+  // Recrutement : candidats
+  app.get('/api/hr/recruitment/applicants', requireAuth(), asyncHandler(async (req, res) => {
+    const { position_id, status } = req.query as { position_id?: string; status?: string };
+    let sql = `select * from job_applicants where 1=1`;
+    const params: any[] = [];
+    let idx = 1;
+    if (position_id) { sql += ` and position_id = $${idx++}`; params.push(position_id); }
+    if (status) { sql += ` and status = $${idx++}`; params.push(status); }
+    sql += ' order by created_at desc limit 200';
+    const rows = await run(sql, params);
+    res.json(rows);
+  }));
+  app.post('/api/hr/recruitment/applicants', requireAuth(), asyncHandler(async (req, res) => {
+    const { position_id, full_name, email, phone, experience, status, score } = req.body;
+    const [row] = await run(
+      `insert into job_applicants (position_id, full_name, email, phone, experience, status, score)
+       values ($1,$2,$3,$4,$5,$6,$7)
+       returning *`,
+      [position_id || null, full_name, email || null, phone || null, experience || null, status || 'pending', score || null]
+    );
+    res.status(201).json(row);
+  }));
+  app.patch('/api/hr/recruitment/applicants/:id', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { status, score } = req.body;
+    const [row] = await run(
+      `update job_applicants set
+         status = coalesce($2, status),
+         score = coalesce($3, score)
+       where id = $1
+       returning *`,
+      [id, status || null, score === undefined ? null : score]
+    );
+    res.json(row);
+  }));
+
+  // Recrutement : tests candidats
+  app.get('/api/hr/recruitment/applicants/:id/tests', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await run(
+      `select * from applicant_tests where applicant_id = $1 order by created_at desc`,
+      [id]
+    );
+    res.json(rows);
+  }));
+  app.post('/api/hr/recruitment/applicants/:id/tests', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { test_type, score, result } = req.body;
+    const [row] = await run(
+      `insert into applicant_tests (applicant_id, test_type, score, result)
+       values ($1,$2,$3,$4)
+       returning *`,
+      [id, test_type || null, score || null, result || null]
+    );
+    res.status(201).json(row);
+  }));
+  app.post('/api/hr/employees/:id/eco-driving', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { route_id, score, fuel_consumption, harsh_braking, harsh_acceleration, idle_time_minutes } = req.body;
+    const [row] = await run(
+      `insert into eco_driving_scores (employee_id, route_id, score, fuel_consumption, harsh_braking, harsh_acceleration, idle_time_minutes)
+       values ($1,$2,$3,$4,$5,$6,$7)
+       returning *`,
+      [id, route_id || null, score || null, fuel_consumption || null, harsh_braking || 0, harsh_acceleration || 0, idle_time_minutes || 0]
+    );
+    res.status(201).json(row);
+  }));
+
+  // Formations continues : modules
+  app.get('/api/hr/training/modules', requireAuth(), asyncHandler(async (_req, res) => {
+    const rows = await run(`select * from training_modules order by created_at desc limit 200`);
+    res.json(rows);
+  }));
+  app.post('/api/hr/training/modules', requireAuth(), asyncHandler(async (req, res) => {
+    const { title, module_type, media_url, checklist_items, mandatory, refresh_months, duration_minutes } = req.body;
+    const [row] = await run(
+      `insert into training_modules (title, module_type, media_url, checklist_items, mandatory, refresh_months, duration_minutes)
+       values ($1,$2,$3,$4,$5,$6,$7)
+       returning *`,
+      [
+        title,
+        module_type || 'video',
+        media_url || null,
+        Array.isArray(checklist_items) ? checklist_items : checklist_items ? [checklist_items] : null,
+        mandatory === true,
+        refresh_months || null,
+        duration_minutes || null
+      ]
+    );
+    res.status(201).json(row);
+  }));
+
+  // Formations continues : progression employé
+  app.get('/api/hr/employees/:id/training-progress', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await run(
+      `select tp.*, tm.title, tm.module_type, tm.mandatory, tm.refresh_months
+       from training_progress tp
+       join training_modules tm on tm.id = tp.module_id
+       where tp.employee_id = $1
+       order by tp.created_at desc`,
+      [id]
+    );
+    res.json(rows);
+  }));
+  app.post('/api/hr/employees/:id/training-progress', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { module_id, status, score, completed_at, expires_at } = req.body;
+    const [row] = await run(
+      `insert into training_progress (employee_id, module_id, status, score, completed_at, expires_at, last_reminder_at)
+       values ($1,$2,$3,$4,$5,$6, null)
+       on conflict (employee_id, module_id) do update
+       set status = excluded.status,
+           score = excluded.score,
+           completed_at = excluded.completed_at,
+           expires_at = excluded.expires_at
+       returning *`,
+      [id, module_id, status || 'pending', score || null, completed_at || null, expires_at || null]
+    );
+    res.status(201).json(row);
+  }));
+
+  // Formations continues : rappels à générer (modules obligatoires ou avec refresh)
+  app.post('/api/hr/training/reminders/generate', requireAuth(), asyncHandler(async (_req, res) => {
+    const dueSoon = await run(`
+      with need_refresh as (
+        select tp.employee_id, tp.module_id,
+               case
+                 when tp.expires_at is not null then tp.expires_at::date
+                 when tm.refresh_months is not null and tp.completed_at is not null then (tp.completed_at + (tm.refresh_months || ' months')::interval)::date
+                 else null
+               end as due_date
+        from training_progress tp
+        join training_modules tm on tm.id = tp.module_id
+        where tm.mandatory = true
+           or tm.refresh_months is not null
+      )
+      select * from need_refresh
+      where due_date is not null
+        and due_date <= current_date + interval '30 days'
+    `);
+
+    let created = 0;
+    for (const row of dueSoon) {
+      const exists = await run(
+        `select 1 from training_reminders where employee_id = $1 and module_id = $2 and due_date = $3`,
+        [row.employee_id, row.module_id, row.due_date]
+      );
+      if (exists.length === 0) {
+        await run(
+          `insert into training_reminders (employee_id, module_id, due_date)
+           values ($1,$2,$3)`,
+          [row.employee_id, row.module_id, row.due_date]
+        );
+        created++;
+      }
+    }
+    res.json({ created });
+  }));
+
+  app.get('/api/hr/training/reminders', requireAuth(), asyncHandler(async (_req, res) => {
+    const rows = await run(
+      `select tr.*, tm.title, tm.module_type
+       from training_reminders tr
+       join training_modules tm on tm.id = tr.module_id
+       where tr.status = 'pending'
+       order by tr.due_date asc
+       limit 200`
+    );
+    res.json(rows);
+  }));
+
+  // Paie / contrats
+  app.get('/api/hr/contracts', requireAuth(), asyncHandler(async (req, res) => {
+    const { employee_id, status } = req.query as { employee_id?: string; status?: string };
+    let sql = `select * from employment_contracts where 1=1`;
+    const params: any[] = [];
+    let idx = 1;
+    if (employee_id) { sql += ` and employee_id = $${idx++}`; params.push(employee_id); }
+    if (status) { sql += ` and status = $${idx++}`; params.push(status); }
+    sql += ' order by start_date desc limit 200';
+    const rows = await run(sql, params);
+    res.json(rows);
+  }));
+  app.post('/api/hr/contracts', requireAuth(), asyncHandler(async (req, res) => {
+    const { employee_id, contract_type, start_date, end_date, base_salary, currency, hours_per_week, site_id, status } = req.body;
+    const [row] = await run(
+      `insert into employment_contracts (employee_id, contract_type, start_date, end_date, base_salary, currency, hours_per_week, site_id, status)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       returning *`,
+      [employee_id, contract_type, start_date, end_date || null, base_salary || null, currency || 'EUR', hours_per_week || null, site_id || null, status || 'active']
+    );
+    res.status(201).json(row);
+  }));
+
+  app.get('/api/hr/contracts/:id/allowances', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await run(`select * from contract_allowances where contract_id = $1`, [id]);
+    res.json(rows);
+  }));
+  app.post('/api/hr/contracts/:id/allowances', requireAuth(), asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { label, amount, periodicity } = req.body;
+    const [row] = await run(
+      `insert into contract_allowances (contract_id, label, amount, periodicity)
+       values ($1,$2,$3,$4)
+       returning *`,
+      [id, label, amount, periodicity || 'monthly']
+    );
+    res.status(201).json(row);
+  }));
+
+  app.get('/api/hr/overtime', requireAuth(), asyncHandler(async (req, res) => {
+    const { employee_id, start_date, end_date } = req.query as { employee_id?: string; start_date?: string; end_date?: string };
+    let sql = `select * from overtime_entries where 1=1`;
+    const params: any[] = [];
+    let idx = 1;
+    if (employee_id) { sql += ` and employee_id = $${idx++}`; params.push(employee_id); }
+    if (start_date) { sql += ` and entry_date >= $${idx++}`; params.push(start_date); }
+    if (end_date) { sql += ` and entry_date <= $${idx++}`; params.push(end_date); }
+    sql += ' order by entry_date desc limit 200';
+    const rows = await run(sql, params);
+    res.json(rows);
+  }));
+  app.post('/api/hr/overtime', requireAuth(), asyncHandler(async (req, res) => {
+    const { employee_id, entry_date, hours, rate_multiplier, approved } = req.body;
+    const [row] = await run(
+      `insert into overtime_entries (employee_id, entry_date, hours, rate_multiplier, approved)
+       values ($1,$2,$3,$4,$5)
+       returning *`,
+      [employee_id, entry_date, hours, rate_multiplier || 1.25, approved === true]
+    );
+    res.status(201).json(row);
+  }));
+
+  app.get('/api/hr/payroll', requireAuth(), asyncHandler(async (req, res) => {
+    const { employee_id, period_start, period_end } = req.query as { employee_id?: string; period_start?: string; period_end?: string };
+    let sql = `select * from payroll_entries where 1=1`;
+    const params: any[] = [];
+    let idx = 1;
+    if (employee_id) { sql += ` and employee_id = $${idx++}`; params.push(employee_id); }
+    if (period_start) { sql += ` and period_start >= $${idx++}`; params.push(period_start); }
+    if (period_end) { sql += ` and period_end <= $${idx++}`; params.push(period_end); }
+    sql += ' order by period_start desc limit 200';
+    const rows = await run(sql, params);
+    res.json(rows);
+  }));
+  app.post('/api/hr/payroll', requireAuth(), asyncHandler(async (req, res) => {
+    const { employee_id, period_start, period_end, gross_amount, net_amount, currency, bonuses, overtime_hours, status } = req.body;
+    const [row] = await run(
+      `insert into payroll_entries (employee_id, period_start, period_end, gross_amount, net_amount, currency, bonuses, overtime_hours, status)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       returning *`,
+      [employee_id, period_start, period_end, gross_amount || null, net_amount || null, currency || 'EUR', bonuses || null, overtime_hours || null, status || 'draft']
+    );
+    res.status(201).json(row);
+  }));
+
+  // Dashboard RH avancé
+  app.get('/api/hr/dashboard', requireAuth(), asyncHandler(async (_req, res) => {
+    const [empCount] = await run(`select count(*)::int as total from employees`);
+    const [activeContracts] = await run(`select count(*)::int as active from employment_contracts where status = 'active'`);
+    const [avgVersatility] = await run(`
+      select coalesce(avg(versatility_score),0)::numeric as avg_versatility
+      from employee_performance_stats
+      where created_at >= now() - interval '90 days'
+    `);
+    const [trainingCompliance] = await run(`
+      with required as (
+        select tp.employee_id, tp.module_id, tp.status,
+               tm.mandatory, tm.refresh_months
+        from training_progress tp
+        join training_modules tm on tm.id = tp.module_id
+        where tm.mandatory = true or tm.refresh_months is not null
+      )
+      select count(*) filter (where status = 'completed')::int as completed,
+             count(*)::int as total
+      from required
+    `);
+    const [absenteeism] = await run(`
+      with current_month as (
+        select count(distinct employee_id) as absent
+        from leaves
+        where status = 'approuve'
+          and start_date <= date_trunc('month', current_date) + interval '1 month' - interval '1 day'
+          and end_date >= date_trunc('month', current_date)
+      )
+      select coalesce(absent,0)::int as absent
+      from current_month
+    `);
+    const [hseOpenCritical] = await run(`select count(*)::int as count from hse_incidents where status = 'open' and severity = 'critical'`);
+    const [overtime30] = await run(`
+      select coalesce(sum(hours),0)::numeric as hours
+      from overtime_entries
+      where entry_date >= current_date - interval '30 days'
+    `);
+
+    const totalEmployees = empCount?.total || 0;
+    const absent = absenteeism?.absent || 0;
+    const trainingTotal = trainingCompliance?.total || 0;
+    const trainingDone = trainingCompliance?.completed || 0;
+
+    res.json({
+      headcount: totalEmployees,
+      activeContracts: activeContracts?.active || 0,
+      avgVersatility: Number(avgVersatility?.avg_versatility || 0),
+      trainingCompliance: {
+        completed: trainingDone,
+        total: trainingTotal,
+        rate: trainingTotal > 0 ? Math.round((trainingDone / trainingTotal) * 100) : null
+      },
+      absenteeism: {
+        absent: absent,
+        rate: totalEmployees > 0 ? Math.round((absent / totalEmployees) * 100) : 0
+      },
+      hseOpenCritical: hseOpenCritical?.count || 0,
+      overtimeLast30Hours: Number(overtime30?.hours || 0)
+    });
+  }));
+
+  // Pointage
+  app.post('/api/hr/time-clock', requireAuth(), asyncHandler(async (req, res) => {
+    const { employee_id, position_id, event_type, source, device_id, occurred_at } = req.body;
+    const [row] = await run(
+      `insert into time_clock_events (employee_id, position_id, event_type, source, device_id, occurred_at)
+       values ($1,$2,$3,$4,$5,$6)
+       returning *`,
+      [employee_id, position_id || null, event_type, source || null, device_id || null, occurred_at || new Date().toISOString()]
+    );
+    res.status(201).json(row);
+  }));
+  app.get('/api/hr/time-clock', requireAuth(), asyncHandler(async (req, res) => {
+    const { employee_id, start_date, end_date, limit = 200 } = req.query as { employee_id?: string; start_date?: string; end_date?: string; limit?: string };
+    let sql = `
+      select tce.*, lp.line_name, lp.machine, lp.position_code
+      from time_clock_events tce
+      left join line_positions lp on lp.id = tce.position_id
+      where 1=1
+    `;
+    const params: any[] = [];
+    let idx = 1;
+    if (employee_id) { sql += ` and tce.employee_id = $${idx++}`; params.push(employee_id); }
+    if (start_date) { sql += ` and tce.occurred_at >= $${idx++}`; params.push(new Date(start_date).toISOString()); }
+    if (end_date) { sql += ` and tce.occurred_at <= $${idx++}`; params.push(new Date(end_date).toISOString()); }
+    sql += ` order by occurred_at desc limit ${Number(limit) || 200}`;
+    const rows = await run(sql, params);
+    res.json(rows);
+  }));
+
+  // Pointage batch (RFID/QR) pour tablettes/lignes
+  app.post('/api/hr/time-clock/batch', requireAuth(), asyncHandler(async (req, res) => {
+    const { events } = req.body as { events: Array<{ employee_id: string; position_id?: string; event_type: string; source?: string; device_id?: string; occurred_at?: string }> };
+    if (!Array.isArray(events) || events.length === 0) {
+      return res.status(400).json({ message: 'Aucun événement' });
+    }
+    const inserted: any[] = [];
+    for (const ev of events) {
+      const [row] = await run(
+        `insert into time_clock_events (employee_id, position_id, event_type, source, device_id, occurred_at)
+         values ($1,$2,$3,$4,$5,$6)
+         returning *`,
+        [ev.employee_id, ev.position_id || null, ev.event_type, ev.source || 'batch', ev.device_id || null, ev.occurred_at || new Date().toISOString()]
+      );
+      inserted.push(row);
+    }
+    res.status(201).json({ count: inserted.length, events: inserted });
+  }));
+
+  // Pointage : synthèse jour (heures travaillées / pauses / changements de poste)
+  app.get('/api/hr/time-clock/summary', requireAuth(), asyncHandler(async (req, res) => {
+    const { date, employee_id } = req.query as { date?: string; employee_id?: string };
+    const targetDate = date || new Date().toISOString().slice(0, 10);
+    const params: any[] = [targetDate];
+    let filter = '';
+    if (employee_id) { filter = ' and t.employee_id = $2'; params.push(employee_id); }
+    const rows = await run(
+      `
+      with ordered as (
+        select t.*, lp.line_name, lp.machine, lp.position_code,
+               lead(t.event_type) over (partition by t.employee_id order by t.occurred_at) as next_type,
+               lead(t.occurred_at) over (partition by t.employee_id order by t.occurred_at) as next_time
+        from time_clock_events t
+        left join line_positions lp on lp.id = t.position_id
+        where t.occurred_at::date = $1::date
+        ${filter}
+      )
+      select employee_id,
+             sum(case when event_type = 'in' and next_time is not null and next_type in ('out','pause_in','position_change') then extract(epoch from (next_time - occurred_at))/60 else 0 end) as work_minutes,
+             sum(case when event_type = 'pause_in' and next_time is not null and next_type = 'pause_out' then extract(epoch from (next_time - occurred_at))/60 else 0 end) as pause_minutes,
+             count(case when event_type = 'position_change' then 1 end) as position_changes,
+             array_agg(distinct position_code) filter (where position_code is not null) as positions
+      from ordered
+      group by employee_id
+      `,
+      params
+    );
+    res.json({ date: targetDate, summary: rows });
+  }));
+
+  // Pointage : historique des positions par jour
+  app.get('/api/hr/time-clock/positions', requireAuth(), asyncHandler(async (req, res) => {
+    const { date, employee_id } = req.query as { date?: string; employee_id?: string };
+    const targetDate = date || new Date().toISOString().slice(0, 10);
+    const params: any[] = [targetDate];
+    let filter = '';
+    if (employee_id) { filter = ' and t.employee_id = $2'; params.push(employee_id); }
+    const rows = await run(
+      `
+      select t.employee_id, t.position_id, lp.line_name, lp.machine, lp.position_code,
+             t.event_type, t.occurred_at
+      from time_clock_events t
+      left join line_positions lp on lp.id = t.position_id
+      where t.occurred_at::date = $1::date
+      ${filter}
+      order by t.occurred_at
+      `,
+      params
+    );
+    res.json({ date: targetDate, positions: rows });
+  }));
+  // Planning : suggestions
+  app.get('/api/hr/planning/suggestions', requireAuth(), asyncHandler(async (_req, res) => {
+    const rows = await run(
+      `select ps.*, lp.line_name, lp.machine, lp.position_code, e.first_name, e.last_name
+       from planning_suggestions ps
+       left join line_positions lp on lp.id = ps.position_id
+       left join employees e on e.id = ps.employee_id
+       order by suggestion_date desc, confidence desc
+       limit 200`
+    );
+    res.json(rows);
+  }));
+
+  // Planning : auto-assignation simple (compétence + certification + disponibilité)
+  app.post('/api/hr/planning/auto-assign', requireAuth(), asyncHandler(async (req, res) => {
+    const { suggestion_date, apply } = req.body as { suggestion_date?: string; apply?: boolean };
+    const targetDate = suggestion_date || new Date().toISOString().slice(0, 10);
+
+    const positions = await run(`select * from line_positions`);
+    const results: any[] = [];
+
+    for (const pos of positions) {
+      const [candidate] = await run(
+        `
+        with latest_perf as (
+          select distinct on (employee_id) employee_id, versatility_score
+          from employee_performance_stats
+          order by employee_id, created_at desc
+        )
+        select e.id as employee_id, e.first_name, e.last_name,
+               coalesce(es.level, 0) as skill_level,
+               coalesce(lp_perf.versatility_score, 0) as versatility_score,
+               case
+                 when $2::uuid is null then true
+                 when es.id is not null and (es.expires_at is null or es.expires_at >= $3::date) then true
+                 else false
+               end as skill_ok,
+               case
+                 when $4::uuid is null then true
+                 when ec.id is not null and (ec.expires_at is null or ec.expires_at >= $3::date) then true
+                 else false
+               end as cert_ok
+        from employees e
+        left join employee_skills es on es.employee_id = e.id and es.skill_id = $2
+        left join employee_certifications ec on ec.employee_id = e.id and ec.certification_id = $4
+        left join latest_perf lp_perf on lp_perf.employee_id = e.id
+        where
+          -- pas en congé approuvé ce jour
+          not exists (
+            select 1 from leaves l
+            where l.employee_id = e.id
+              and l.status = 'approuve'
+              and l.start_date <= $3::date
+              and l.end_date >= $3::date
+          )
+          -- pas déjà assigné sur un shift ce jour
+          and not exists (
+            select 1 from shift_assignments sa
+            where sa.employee_id = e.id
+              and sa.shift_date = $3::date
+          )
+        order by
+          (case when $2::uuid is null then 1 when es.id is not null then 1 else 0 end) desc,
+          coalesce(es.level, 0) desc,
+          (case when $4::uuid is null then 1 when ec.id is not null then 1 else 0 end) desc,
+          coalesce(lp_perf.versatility_score, 0) desc
+        limit 1
+        `,
+        [pos.id, pos.required_skill_id || null, targetDate, pos.required_certification_id || null]
+      );
+
+      if (!candidate || !candidate.skill_ok || !candidate.cert_ok) {
+        results.push({
+          position_id: pos.id,
+          position_code: pos.position_code,
+          line_name: pos.line_name,
+          machine: pos.machine,
+          status: 'no_match'
+        });
+        continue;
+      }
+
+      const confidence =
+        (candidate.skill_level ? Math.min(Number(candidate.skill_level), 5) * 0.5 : 0) +
+        (candidate.versatility_score ? Number(candidate.versatility_score) * 0.2 : 0) +
+        0.3; // base
+
+      // Enregistrer la suggestion
+      const [suggestion] = await run(
+        `insert into planning_suggestions (suggestion_date, position_id, employee_id, reason, confidence, applied)
+         values ($1,$2,$3,$4,$5,false)
+         returning *`,
+        [
+          targetDate,
+          pos.id,
+          candidate.employee_id,
+          `Compétence ok: ${candidate.skill_ok ? 'oui' : 'non'} ; Certification ok: ${candidate.cert_ok ? 'oui' : 'non'}`,
+          Math.min(confidence, 1)
+        ]
+      );
+
+      // Appliquer directement si demandé : on crée une assignment
+      if (apply) {
+        await run(
+          `insert into shift_assignments (employee_id, position_id, shift_date)
+           values ($1,$2,$3)
+           on conflict do nothing`,
+          [candidate.employee_id, pos.id, targetDate]
+        );
+        await run('update planning_suggestions set applied = true where id = $1', [suggestion.id]);
+      }
+
+      results.push({
+        position_id: pos.id,
+        position_code: pos.position_code,
+        line_name: pos.line_name,
+        machine: pos.machine,
+        employee_id: candidate.employee_id,
+        employee_name: `${candidate.first_name} ${candidate.last_name}`,
+        confidence: Math.min(confidence, 1),
+        applied: !!apply
+      });
+    }
+
+    res.json({ date: targetDate, assignments: results });
+  }));
+
 
 app.patch(
   '/api/auth/users/:id',
@@ -3823,12 +6134,31 @@ app.get(
   requireAuth(),
   asyncHandler(async (req, res) => {
     const authReq = req as AuthenticatedRequest;
-    if (!canViewLeaveInbox(authReq.auth)) {
-      return res.status(403).json({ message: 'Accès refusé' });
+    const where: string[] = [`coalesce(l.workflow_step, 'manager') <> 'completed'`];
+    const params: any[] = [];
+
+    // Cas manager : filtre par département
+    if (authReq.auth?.role === 'manager' && authReq.auth?.department) {
+      if (!canViewLeaveInbox(authReq.auth)) {
+        return res.status(403).json({ message: 'Accès refusé' });
+      }
+      where.push(`e.department = $1`);
+      params.push(authReq.auth.department);
+    } else if (authReq.auth?.role === 'user') {
+      // Cas collaborateur : seulement ses propres demandes (match par email)
+      if (!authReq.auth.email) {
+        return res.status(403).json({ message: 'Accès refusé' });
+      }
+      where.push(`lower(e.email) = lower($1)`);
+      params.push(authReq.auth.email);
+    } else {
+      // Autres rôles (admin/HR/direction) utilisent la règle existante
+      if (!canViewLeaveInbox(authReq.auth)) {
+        return res.status(403).json({ message: 'Accès refusé' });
+      }
     }
-    const rows = await run<LeaveRow>(
-      `${leaveBaseSelect} where coalesce(l.workflow_step, 'manager') <> 'completed' order by l.start_date asc`
-    );
+
+    const rows = await run<LeaveRow>(`${leaveBaseSelect} where ${where.join(' and ')} order by l.start_date asc`, params);
     res.json(rows);
   })
 );
@@ -4546,11 +6876,29 @@ app.post(
     );
 
     const approverEmail = authReq.auth?.email?.trim();
-    const mailsTo = [...baseRecipients, ...uniqueEmployeeEmails];
-    if (approverEmail) {
-      mailsTo.push(approverEmail);
+
+    // Managers du département des demandes
+    const departments = Array.from(
+      new Set(
+        rows
+          .map((l) => l.employee?.department)
+          .filter((d): d is string => Boolean(d))
+      )
+    );
+    let departmentManagers: string[] = [];
+    if (departments.length > 0) {
+      const mgrs = await run(`select email from users where role = 'manager' and department = any($1::text[]) and email is not null`, [departments]);
+      departmentManagers = mgrs.map((m: any) => m.email).filter((e: string) => !!e);
     }
-    const finalRecipients = mailsTo.filter((email): email is string => Boolean(email));
+
+    const finalRecipients = Array.from(
+      new Set<string>([
+        ...baseRecipients,
+        ...uniqueEmployeeEmails,
+        ...(approverEmail ? [approverEmail] : []),
+        ...departmentManagers
+      ])
+    ).filter(Boolean);
 
     const textBody = rows
       .map(
@@ -5565,6 +7913,98 @@ app.delete(
       await recordAuditLog({ entityType: 'material', entityId: id, action: 'delete', req, before });
     }
     res.json({ message: 'Matière supprimée avec succès' });
+  })
+);
+
+// Material Qualities API endpoints
+app.get(
+  '/api/materials/qualities',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_materials'] }),
+  asyncHandler(async (req, res) => {
+    const { material_id } = req.query;
+    let query = 'select * from material_qualities';
+    const params: any[] = [];
+    if (material_id) {
+      query += ' where material_id = $1';
+      params.push(material_id);
+    }
+    query += ' order by material_id, is_default desc, name';
+    const rows = await run(query, params);
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/materials/qualities',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
+  asyncHandler(async (req, res) => {
+    const { material_id, name, description, deduction_pct, is_default } = req.body;
+    if (!material_id || !name) {
+      return res.status(400).json({ message: 'material_id et name sont requis' });
+    }
+    // Si is_default = true, désactiver les autres qualités par défaut pour cette matière
+    if (is_default) {
+      await run('update material_qualities set is_default = false where material_id = $1', [material_id]);
+    }
+    const [quality] = await run(
+      `insert into material_qualities (material_id, name, description, deduction_pct, is_default)
+       values ($1, $2, $3, $4, $5)
+       returning *`,
+      [material_id, name, description || null, deduction_pct || 0, is_default || false]
+    );
+    res.status(201).json({ id: quality.id, message: 'Qualité créée avec succès' });
+  })
+);
+
+app.patch(
+  '/api/materials/qualities/:id',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { name, description, deduction_pct, is_default } = req.body;
+    const updates: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+    if (name !== undefined) {
+      updates.push(`name = $${paramIndex++}`);
+      params.push(name);
+    }
+    if (description !== undefined) {
+      updates.push(`description = $${paramIndex++}`);
+      params.push(description);
+    }
+    if (deduction_pct !== undefined) {
+      updates.push(`deduction_pct = $${paramIndex++}`);
+      params.push(deduction_pct);
+    }
+    if (is_default !== undefined) {
+      updates.push(`is_default = $${paramIndex++}`);
+      params.push(is_default);
+      // Si on définit cette qualité comme défaut, désactiver les autres
+      if (is_default) {
+        const [current] = await run('select material_id from material_qualities where id = $1', [id]);
+        if (current) {
+          await run('update material_qualities set is_default = false where material_id = $1 and id != $2', [current.material_id, id]);
+        }
+      }
+    }
+    if (updates.length === 0) {
+      return res.status(400).json({ message: 'Aucune modification à apporter' });
+    }
+    updates.push(`updated_at = now()`);
+    params.push(id);
+    await run(`update material_qualities set ${updates.join(', ')} where id = $${paramIndex}`, params);
+    res.json({ message: 'Qualité mise à jour avec succès' });
+  })
+);
+
+app.delete(
+  '/api/materials/qualities/:id',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_materials'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    await run('delete from material_qualities where id = $1', [id]);
+    res.json({ message: 'Qualité supprimée avec succès' });
   })
 );
 
@@ -8454,7 +10894,9 @@ app.post(
       origin,
       supplier_name,
       batch_reference,
+      quality_id,
       quality_status,
+      weighing_id,
       notes
     } = req.body;
     if (!lot_number || !material_id || !warehouse_id || quantity === undefined) {
@@ -8463,8 +10905,8 @@ app.post(
     const [lot] = await run(
       `insert into stock_lots (
         lot_number, material_id, warehouse_id, quantity, unit, production_date, expiry_date,
-        origin, supplier_name, batch_reference, quality_status, notes
-      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        origin, supplier_name, batch_reference, quality_id, quality_status, weighing_id, notes
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       returning *`,
       [
         lot_number,
@@ -8477,7 +10919,9 @@ app.post(
         origin || null,
         supplier_name || null,
         batch_reference || null,
+        quality_id || null,
         quality_status || null,
+        weighing_id || null,
         notes || null
       ]
     );
@@ -8503,7 +10947,9 @@ app.patch(
       'origin',
       'supplier_name',
       'batch_reference',
+      'quality_id',
       'quality_status',
+      'weighing_id',
       'notes'
     ];
     allowedFields.forEach((field) => {
@@ -10699,21 +13145,21 @@ const generateAlerts = async () => {
 
     // 5. Alertes financières - Dépassement de budget
     const budgetOverruns = await run(`
-      select db.id, db.department, db.category, db.budget_amount, db.month, db.year,
+      select db.id, db.department, db.category, db.budgeted_amount, db.month, db.year,
              coalesce(sum(ic.total_cost), 0) as actual_cost
       from department_budgets db
       left join intervention_costs ic on ic.created_at >= date_trunc('month', make_date(db.year, coalesce(db.month, 1), 1))
         and ic.created_at < date_trunc('month', make_date(db.year, coalesce(db.month, 1), 1)) + interval '1 month'
-      where db.budget_amount > 0
-        and (coalesce(sum(ic.total_cost), 0) > db.budget_amount * 1.1)
-      group by db.id, db.department, db.category, db.budget_amount, db.month, db.year
-      having not exists (
-        select 1 from alerts a
-        where a.entity_type = 'budget'
-          and a.entity_id = db.id
-          and a.alert_type = 'budget_overrun'
-          and a.is_resolved = false
-      )
+      where db.budgeted_amount > 0
+      group by db.id, db.department, db.category, db.budgeted_amount, db.month, db.year
+      having coalesce(sum(ic.total_cost), 0) > db.budgeted_amount * 1.1
+        and not exists (
+          select 1 from alerts a
+          where a.entity_type = 'budget'
+            and a.entity_id = db.id
+            and a.alert_type = 'budget_overrun'
+            and a.is_resolved = false
+        )
     `);
     for (const budget of budgetOverruns) {
       await run(
@@ -10724,22 +13170,204 @@ const generateAlerts = async () => {
         [
           'financial',
           'budget_overrun',
-          budget.actual_cost > budget.budget_amount * 1.2 ? 'critical' : 'high',
+          budget.actual_cost > budget.budgeted_amount * 1.2 ? 'critical' : 'high',
           `Dépassement de budget: ${budget.department} - ${budget.category}`,
-          `Le budget ${budget.category} du département ${budget.department} est dépassé (${budget.actual_cost.toFixed(2)} € / ${budget.budget_amount} €)`,
+          `Le budget ${budget.category} du département ${budget.department} est dépassé (${budget.actual_cost.toFixed(2)} € / ${budget.budgeted_amount} €)`,
           'budget',
           budget.id,
-          JSON.stringify({ department: budget.department, category: budget.category, budget_amount: budget.budget_amount, actual_cost: budget.actual_cost })
+          JSON.stringify({ department: budget.department, category: budget.category, budget_amount: budget.budgeted_amount, actual_cost: budget.actual_cost })
         ]
       );
     }
 
-    // 6. Alertes RH - Absences non planifiées
+    // 6. Alertes RH - Expirations (compétences / certifications / formations / EPI)
+    const computeSeverityForExpiry = (expiresAt: string) => {
+      const now = new Date();
+      const target = new Date(expiresAt);
+      const diffDays = Math.round((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays < 0) return 'critical';
+      if (diffDays <= 7) return 'high';
+      return 'medium';
+    };
+
+    // Compétences
+    const expiringSkills = await run(`
+      select es.id, es.skill_id, es.expires_at, s.name as skill_name,
+             e.id as employee_id, e.first_name, e.last_name, e.department
+      from employee_skills es
+      join skills s on s.id = es.skill_id
+      join employees e on e.id = es.employee_id
+      where es.expires_at is not null
+        and es.expires_at <= current_date + interval '30 days'
+        and not exists (
+          select 1 from alerts a
+          where a.entity_type = 'employee_skill'
+            and a.entity_id = es.id
+            and a.alert_type = 'skill_expiry'
+            and a.is_resolved = false
+        )
+    `);
+    for (const item of expiringSkills) {
+      await run(
+        `insert into alerts (
+          alert_category, alert_type, severity, title, message,
+          entity_type, entity_id, related_data, due_date
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          'hr',
+          'skill_expiry',
+          computeSeverityForExpiry(item.expires_at),
+          `Compétence à renouveler: ${item.skill_name}`,
+          `${item.first_name} ${item.last_name} (${item.department || 'n/d'}) doit renouveler la compétence ${item.skill_name} avant ${item.expires_at}`,
+          'employee_skill',
+          item.id,
+          JSON.stringify({
+            employee_id: item.employee_id,
+            employee_name: `${item.first_name} ${item.last_name}`,
+            department: item.department,
+            skill_id: item.skill_id,
+            expires_at: item.expires_at
+          }),
+          item.expires_at
+        ]
+      );
+    }
+
+    // Certifications
+    const expiringCerts = await run(`
+      select ec.id, ec.certification_id, ec.expires_at, c.name as certification_name,
+             e.id as employee_id, e.first_name, e.last_name, e.department
+      from employee_certifications ec
+      join certifications c on c.id = ec.certification_id
+      join employees e on e.id = ec.employee_id
+      where ec.expires_at is not null
+        and ec.expires_at <= current_date + interval '30 days'
+        and not exists (
+          select 1 from alerts a
+          where a.entity_type = 'employee_certification'
+            and a.entity_id = ec.id
+            and a.alert_type = 'certification_expiry'
+            and a.is_resolved = false
+        )
+    `);
+    for (const item of expiringCerts) {
+      await run(
+        `insert into alerts (
+          alert_category, alert_type, severity, title, message,
+          entity_type, entity_id, related_data, due_date
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          'hr',
+          'certification_expiry',
+          computeSeverityForExpiry(item.expires_at),
+          `Certification à renouveler: ${item.certification_name}`,
+          `${item.first_name} ${item.last_name} (${item.department || 'n/d'}) doit renouveler la certification ${item.certification_name} avant ${item.expires_at}`,
+          'employee_certification',
+          item.id,
+          JSON.stringify({
+            employee_id: item.employee_id,
+            employee_name: `${item.first_name} ${item.last_name}`,
+            department: item.department,
+            certification_id: item.certification_id,
+            expires_at: item.expires_at
+          }),
+          item.expires_at
+        ]
+      );
+    }
+
+    // Formations
+    const expiringTrainings = await run(`
+      select et.id, et.training_id, et.expires_at, t.title as training_title,
+             e.id as employee_id, e.first_name, e.last_name, e.department
+      from employee_trainings et
+      join trainings t on t.id = et.training_id
+      join employees e on e.id = et.employee_id
+      where et.expires_at is not null
+        and et.expires_at <= current_date + interval '30 days'
+        and not exists (
+          select 1 from alerts a
+          where a.entity_type = 'employee_training'
+            and a.entity_id = et.id
+            and a.alert_type = 'training_expiry'
+            and a.is_resolved = false
+        )
+    `);
+    for (const item of expiringTrainings) {
+      await run(
+        `insert into alerts (
+          alert_category, alert_type, severity, title, message,
+          entity_type, entity_id, related_data, due_date
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          'hr',
+          'training_expiry',
+          computeSeverityForExpiry(item.expires_at),
+          `Formation à renouveler: ${item.training_title}`,
+          `${item.first_name} ${item.last_name} (${item.department || 'n/d'}) doit renouveler la formation ${item.training_title} avant ${item.expires_at}`,
+          'employee_training',
+          item.id,
+          JSON.stringify({
+            employee_id: item.employee_id,
+            employee_name: `${item.first_name} ${item.last_name}`,
+            department: item.department,
+            training_id: item.training_id,
+            expires_at: item.expires_at
+          }),
+          item.expires_at
+        ]
+      );
+    }
+
+    // EPI
+    const expiringEpi = await run(`
+      select ee.id, ee.epi_id, ee.expires_at, epi.name as epi_name,
+             e.id as employee_id, e.first_name, e.last_name, e.department
+      from employee_epis ee
+      join epis epi on epi.id = ee.epi_id
+      join employees e on e.id = ee.employee_id
+      where ee.expires_at is not null
+        and ee.expires_at <= current_date + interval '30 days'
+        and not exists (
+          select 1 from alerts a
+          where a.entity_type = 'employee_epi'
+            and a.entity_id = ee.id
+            and a.alert_type = 'epi_expiry'
+            and a.is_resolved = false
+        )
+    `);
+    for (const item of expiringEpi) {
+      await run(
+        `insert into alerts (
+          alert_category, alert_type, severity, title, message,
+          entity_type, entity_id, related_data, due_date
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          'hr',
+          'epi_expiry',
+          computeSeverityForExpiry(item.expires_at),
+          `EPI à renouveler: ${item.epi_name}`,
+          `${item.first_name} ${item.last_name} (${item.department || 'n/d'}) doit renouveler l'EPI ${item.epi_name} avant ${item.expires_at}`,
+          'employee_epi',
+          item.id,
+          JSON.stringify({
+            employee_id: item.employee_id,
+            employee_name: `${item.first_name} ${item.last_name}`,
+            department: item.department,
+            epi_id: item.epi_id,
+            expires_at: item.expires_at
+          }),
+          item.expires_at
+        ]
+      );
+    }
+
+    // 7. Alertes RH - Absences non planifiées
     const unplannedAbsences = await run(`
       select e.id, e.first_name, e.last_name, e.department,
              l.start_date, l.end_date, l.type
       from employees e
-      join leave_requests l on l.employee_id = e.id
+      join leaves l on l.employee_id = e.id
       where l.status = 'approved'
         and l.start_date <= current_date
         and l.end_date >= current_date
@@ -10886,13 +13514,356 @@ generateAlerts().catch(console.error);
 const start = async () => {
   try {
     console.log('Initializing database schema...');
-    await ensureSchema();
+    try {
+      await ensureSchema();
+    } catch (error: any) {
+      console.error('Error initializing database schema:', error);
+      // Ne pas bloquer le démarrage du serveur, mais logger l'erreur
+    }
     console.log('Database schema initialized successfully');
   } catch (error) {
     console.error('Error initializing database schema:', error);
     throw error;
   }
   
+  // ========== ENDPOINTS MULTILINGUE ET MULTI-SITES ==========
+
+  // Sites - CRUD
+  app.get(
+    '/api/sites',
+    requireAuth(),
+    asyncHandler(async (req, res) => {
+      // S'assurer que la table existe
+      try {
+        await run(`
+          create table if not exists sites (
+            id uuid primary key default gen_random_uuid(),
+            code text not null unique,
+            name text not null,
+            address text,
+            city text,
+            postal_code text,
+            country text default 'CH',
+            latitude numeric,
+            longitude numeric,
+            timezone text default 'Europe/Zurich',
+            currency text default 'CHF',
+            is_active boolean not null default true,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+          )
+        `);
+        await run('create index if not exists sites_code_idx on sites(code)');
+        await run('create index if not exists sites_active_idx on sites(is_active)');
+      } catch (error: any) {
+        console.warn('Erreur lors de la vérification/création de la table sites:', error?.message);
+      }
+      
+      const sites = await run(
+        'select * from sites order by name'
+      );
+      res.json(sites);
+    })
+  );
+
+  app.post(
+    '/api/sites',
+    requireAuth({ roles: ['admin'] }),
+    asyncHandler(async (req, res) => {
+      const { code, name, address, city, postal_code, country, latitude, longitude, timezone, currency } = req.body;
+      if (!code || !name) {
+        return res.status(400).json({ message: 'Code et nom requis' });
+      }
+      const [site] = await run(
+        `insert into sites (code, name, address, city, postal_code, country, latitude, longitude, timezone, currency)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         returning *`,
+        [code, name, address || null, city || null, postal_code || null, country || 'CH', latitude || null, longitude || null, timezone || 'Europe/Zurich', currency || 'CHF']
+      );
+      res.status(201).json(site);
+    })
+  );
+
+  app.patch(
+    '/api/sites/:id',
+    requireAuth({ roles: ['admin'] }),
+    asyncHandler(async (req, res) => {
+      const { id } = req.params;
+      const { code, name, address, city, postal_code, country, latitude, longitude, timezone, currency, is_active } = req.body;
+      const updates: string[] = [];
+      const params: any[] = [];
+      let paramIndex = 1;
+
+      if (code !== undefined) { updates.push(`code = $${paramIndex++}`); params.push(code); }
+      if (name !== undefined) { updates.push(`name = $${paramIndex++}`); params.push(name); }
+      if (address !== undefined) { updates.push(`address = $${paramIndex++}`); params.push(address); }
+      if (city !== undefined) { updates.push(`city = $${paramIndex++}`); params.push(city); }
+      if (postal_code !== undefined) { updates.push(`postal_code = $${paramIndex++}`); params.push(postal_code); }
+      if (country !== undefined) { updates.push(`country = $${paramIndex++}`); params.push(country); }
+      if (latitude !== undefined) { updates.push(`latitude = $${paramIndex++}`); params.push(latitude); }
+      if (longitude !== undefined) { updates.push(`longitude = $${paramIndex++}`); params.push(longitude); }
+      if (timezone !== undefined) { updates.push(`timezone = $${paramIndex++}`); params.push(timezone); }
+      if (currency !== undefined) { updates.push(`currency = $${paramIndex++}`); params.push(currency); }
+      if (is_active !== undefined) { updates.push(`is_active = $${paramIndex++}`); params.push(is_active); }
+
+      if (updates.length === 0) {
+        return res.status(400).json({ message: 'Aucune mise à jour fournie' });
+      }
+
+      updates.push(`updated_at = now()`);
+      params.push(id);
+
+      const [site] = await run(
+        `update sites set ${updates.join(', ')} where id = $${paramIndex} returning *`,
+        params
+      );
+      res.json(site);
+    })
+  );
+
+  app.delete(
+    '/api/sites/:id',
+    requireAuth({ roles: ['admin'] }),
+    asyncHandler(async (req, res) => {
+      const { id } = req.params;
+      await run('delete from sites where id = $1', [id]);
+      res.json({ message: 'Site supprimé' });
+    })
+  );
+
+  // Devises - CRUD
+  app.get(
+    '/api/currencies',
+    requireAuth(),
+    asyncHandler(async (req, res) => {
+      // S'assurer que la table existe
+      try {
+        await run(`
+          create table if not exists currencies (
+            id uuid primary key default gen_random_uuid(),
+            code text not null unique,
+            name text not null,
+            symbol text not null,
+            exchange_rate numeric not null default 1.0,
+            is_base boolean not null default false,
+            is_active boolean not null default true,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+          )
+        `);
+        await run('create index if not exists currencies_code_idx on currencies(code)');
+        await run('create index if not exists currencies_active_idx on currencies(is_active)');
+        
+        // Initialiser les devises par défaut si elles n'existent pas
+        const existingCurrencies = await run<{ count: string }>('select count(*)::text as count from currencies');
+        const count = existingCurrencies && existingCurrencies[0]?.count ? parseInt(existingCurrencies[0].count) : 0;
+        if (count === 0) {
+          await run(
+            `insert into currencies (code, name, symbol, exchange_rate, is_base, is_active)
+             values 
+             ('CHF', 'Franc suisse', 'CHF', 1.0, true, true),
+             ('EUR', 'Euro', '€', 0.92, false, true),
+             ('USD', 'Dollar américain', '$', 1.0, false, true),
+             ('GBP', 'Livre sterling', '£', 0.79, false, true)
+             on conflict (code) do nothing`
+          );
+        }
+      } catch (error: any) {
+        console.warn('Erreur lors de la vérification/création de la table currencies:', error?.message);
+      }
+      
+      const currencies = await run(
+        'select * from currencies where is_active = true order by code'
+      );
+      res.json(currencies);
+    })
+  );
+
+  app.post(
+    '/api/currencies',
+    requireAuth({ roles: ['admin'] }),
+    asyncHandler(async (req, res) => {
+      const { code, name, symbol, exchange_rate, is_base } = req.body;
+      if (!code || !name || !symbol) {
+        return res.status(400).json({ message: 'Code, nom et symbole requis' });
+      }
+      // Si c'est la devise de base, désactiver les autres
+      if (is_base) {
+        await run('update currencies set is_base = false');
+      }
+      const [currency] = await run(
+        `insert into currencies (code, name, symbol, exchange_rate, is_base)
+         values ($1, $2, $3, $4, $5)
+         returning *`,
+        [code, name, symbol, exchange_rate || 1.0, is_base || false]
+      );
+      res.status(201).json(currency);
+    })
+  );
+
+  app.patch(
+    '/api/currencies/:id',
+    requireAuth({ roles: ['admin'] }),
+    asyncHandler(async (req, res) => {
+      const { id } = req.params;
+      const { code, name, symbol, exchange_rate, is_base, is_active } = req.body;
+      // Si c'est la devise de base, désactiver les autres
+      if (is_base) {
+        await run('update currencies set is_base = false where id != $1', [id]);
+      }
+      const updates: string[] = [];
+      const params: any[] = [];
+      let paramIndex = 1;
+
+      if (code !== undefined) { updates.push(`code = $${paramIndex++}`); params.push(code); }
+      if (name !== undefined) { updates.push(`name = $${paramIndex++}`); params.push(name); }
+      if (symbol !== undefined) { updates.push(`symbol = $${paramIndex++}`); params.push(symbol); }
+      if (exchange_rate !== undefined) { updates.push(`exchange_rate = $${paramIndex++}`); params.push(exchange_rate); }
+      if (is_base !== undefined) { updates.push(`is_base = $${paramIndex++}`); params.push(is_base); }
+      if (is_active !== undefined) { updates.push(`is_active = $${paramIndex++}`); params.push(is_active); }
+
+      if (updates.length === 0) {
+        return res.status(400).json({ message: 'Aucune mise à jour fournie' });
+      }
+
+      updates.push(`updated_at = now()`);
+      params.push(id);
+
+      const [currency] = await run(
+        `update currencies set ${updates.join(', ')} where id = $${paramIndex} returning *`,
+        params
+      );
+      res.json(currency);
+    })
+  );
+
+  // Taux de change
+  app.get(
+    '/api/currency-rates',
+    requireAuth(),
+    asyncHandler(async (req, res) => {
+      const { from, to, date } = req.query;
+      let query = 'select * from currency_rates where 1=1';
+      const params: any[] = [];
+      let paramIndex = 1;
+
+      if (from) {
+        query += ` and from_currency = $${paramIndex++}`;
+        params.push(from);
+      }
+      if (to) {
+        query += ` and to_currency = $${paramIndex++}`;
+        params.push(to);
+      }
+      if (date) {
+        query += ` and effective_date = $${paramIndex++}`;
+        params.push(date);
+      } else {
+        query += ` and effective_date = (select max(effective_date) from currency_rates)`;
+      }
+
+      query += ' order by effective_date desc';
+      const rates = await run(query, params);
+      res.json(rates);
+    })
+  );
+
+  app.post(
+    '/api/currency-rates',
+    requireAuth({ roles: ['admin'] }),
+    asyncHandler(async (req, res) => {
+      const { from_currency, to_currency, rate, effective_date } = req.body;
+      if (!from_currency || !to_currency || !rate) {
+        return res.status(400).json({ message: 'Devises et taux requis' });
+      }
+      const [rateRecord] = await run(
+        `insert into currency_rates (from_currency, to_currency, rate, effective_date)
+         values ($1, $2, $3, $4)
+         on conflict (from_currency, to_currency, effective_date) do update
+         set rate = $3
+         returning *`,
+        [from_currency, to_currency, rate, effective_date || new Date().toISOString().split('T')[0]]
+      );
+      res.status(201).json(rateRecord);
+    })
+  );
+
+  // Consolidation multi-sites
+  app.get(
+    '/api/sites/consolidation',
+    requireAuth({ roles: ['admin', 'manager'] }),
+    asyncHandler(async (req, res) => {
+      const { start_date, end_date, metric_type } = req.query;
+      if (!start_date || !end_date) {
+        return res.status(400).json({ message: 'Dates de début et fin requises' });
+      }
+
+      const consolidations = await run(
+        `select sc.*, s.name as site_name, s.code as site_code
+         from site_consolidations sc
+         left join sites s on s.id = sc.site_id
+         where sc.consolidation_date between $1 and $2
+         ${metric_type ? `and sc.metric_type = $3` : ''}
+         order by sc.consolidation_date desc, s.name`,
+        metric_type ? [start_date, end_date, metric_type] : [start_date, end_date]
+      );
+      res.json(consolidations);
+    })
+  );
+
+  app.post(
+    '/api/sites/consolidation',
+    requireAuth({ roles: ['admin'] }),
+    asyncHandler(async (req, res) => {
+      const { consolidation_date, site_id, metric_type, metric_value, currency } = req.body;
+      if (!consolidation_date || !site_id || !metric_type || metric_value === undefined) {
+        return res.status(400).json({ message: 'Date, site, type et valeur requis' });
+      }
+      const [consolidation] = await run(
+        `insert into site_consolidations (consolidation_date, site_id, metric_type, metric_value, currency)
+         values ($1, $2, $3, $4, $5)
+         on conflict (consolidation_date, site_id, metric_type) do update
+         set metric_value = $4, currency = $5
+         returning *`,
+        [consolidation_date, site_id, metric_type, metric_value, currency || null]
+      );
+      res.status(201).json(consolidation);
+    })
+  );
+
+  // Préférences utilisateur (langue, timezone, devise)
+  app.patch(
+    '/api/user/preferences',
+    requireAuth(),
+    asyncHandler(async (req, res) => {
+      const authReq = req as AuthenticatedRequest;
+      const userId = authReq.auth?.id;
+      const { language, timezone, currency, site_id } = req.body;
+
+      const updates: string[] = [];
+      const params: any[] = [];
+      let paramIndex = 1;
+
+      if (language !== undefined) { updates.push(`language = $${paramIndex++}`); params.push(language); }
+      if (timezone !== undefined) { updates.push(`timezone = $${paramIndex++}`); params.push(timezone); }
+      if (currency !== undefined) { updates.push(`currency = $${paramIndex++}`); params.push(currency); }
+      if (site_id !== undefined) { updates.push(`site_id = $${paramIndex++}`); params.push(site_id); }
+
+      if (updates.length === 0) {
+        return res.status(400).json({ message: 'Aucune préférence fournie' });
+      }
+
+      params.push(userId);
+      await run(
+        `update users set ${updates.join(', ')} where id = $${paramIndex}`,
+        params
+      );
+
+      const [user] = await run<UserRow>('select * from users where id = $1', [userId]);
+      res.json(mapUserRow(user));
+    })
+  );
+
   app.listen(PORT, () => {
     console.log(`API server running on http://localhost:${PORT}`);
   });
@@ -15135,6 +18106,403 @@ app.delete(
     );
 
     res.status(204).send();
+  })
+);
+
+// ==========================================
+// BUSINESS INTELLIGENCE (BI) - API ENDPOINTS
+// ==========================================
+
+// GET /api/bi/historical - Data Warehouse - Analyses historiques
+app.get(
+  '/api/bi/historical',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
+  asyncHandler(async (req, res) => {
+    const startDate = req.query.start_date as string;
+    const endDate = req.query.end_date as string;
+    const dimensions = req.query.dimensions ? (req.query.dimensions as string).split(',') : ['time'];
+    const metrics = req.query.metrics ? (req.query.metrics as string).split(',') : ['volume'];
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ message: 'Dates de début et fin requises' });
+    }
+
+    const dataPoints: any[] = [];
+    const currentDate = new Date(startDate);
+    const end = new Date(endDate);
+
+    // Générer les points de données par jour
+    while (currentDate <= end) {
+      const dateStr = format(currentDate, 'yyyy-MM-dd');
+      const dimensionsObj: Record<string, string> = {};
+      const metricsObj: Record<string, number> = {};
+
+      // Remplir les dimensions
+      for (const dim of dimensions) {
+        if (dim === 'time') {
+          dimensionsObj.time = dateStr;
+        } else if (dim === 'material') {
+          // Récupérer les matières pour cette date
+          const materials = await run(
+            `select distinct m.abrege from materials m limit 5`
+          );
+          if (materials.length > 0) {
+            dimensionsObj.material = materials[0].abrege || 'Tous';
+          }
+        }
+      }
+
+      // Remplir les métriques
+      for (const metric of metrics) {
+        if (metric === 'volume') {
+          const volumes = await run(
+            `select coalesce(sum(case when category = 'halle' then quantity else 0 end), 0) as halle,
+                    coalesce(sum(case when category = 'plastiqueB' then quantity else 0 end), 0) as plastique,
+                    coalesce(sum(case when category = 'cdt' then quantity else 0 end), 0) as cdt,
+                    coalesce(sum(case when category = 'papier' then quantity else 0 end), 0) as papier
+             from inventory_snapshots
+             where report_date::date = $1`,
+            [dateStr]
+          );
+          metricsObj.volume = (volumes[0]?.halle || 0) + (volumes[0]?.plastique || 0) + (volumes[0]?.cdt || 0) + (volumes[0]?.papier || 0);
+        } else if (metric === 'revenue') {
+          const revenues = await run(
+            `select coalesce(sum(total_amount), 0) as total
+             from invoices
+             where issue_date::date = $1`,
+            [dateStr]
+          );
+          metricsObj.revenue = revenues[0]?.total || 0;
+        } else if (metric === 'cost') {
+          // Estimation des coûts (à améliorer avec une vraie table de coûts)
+          metricsObj.cost = Math.random() * 1000; // Placeholder
+        } else if (metric === 'count') {
+          const counts = await run(
+            `select count(*) as total from interventions where created_at::date = $1`,
+            [dateStr]
+          );
+          metricsObj.count = counts[0]?.total || 0;
+        } else if (metric === 'efficiency') {
+          metricsObj.efficiency = Math.random() * 100; // Placeholder
+        }
+      }
+
+      dataPoints.push({
+        date: dateStr,
+        dimensions: dimensionsObj,
+        metrics: metricsObj
+      });
+
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    res.json(dataPoints);
+  })
+);
+
+// POST /api/bi/olap - Cubes OLAP - Analyses multidimensionnelles
+app.post(
+  '/api/bi/olap',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
+  asyncHandler(async (req, res) => {
+    const { cube, dimensions, measures, filters } = req.body;
+
+    if (!cube || !dimensions || !measures) {
+      return res.status(400).json({ message: 'Cube, dimensions et mesures requis' });
+    }
+
+    let sql = '';
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    // Construire la requête SQL selon le cube
+    if (cube === 'volumes') {
+      sql = `
+        select 
+          ${dimensions.map((d: string, idx: number) => {
+            if (d === 'material') return `m.abrege as material`;
+            if (d === 'time') return `to_char(is.report_date, 'YYYY-MM') as time`;
+            if (d === 'customer') return `c.name as customer`;
+            return `'all' as ${d}`;
+          }).join(', ')},
+          ${measures.map((m: string) => {
+            if (m === 'total_volume') return `sum(is.quantity) as total_volume`;
+            if (m === 'total_revenue') return `coalesce(sum(i.total_amount), 0) as total_revenue`;
+            return `0 as ${m}`;
+          }).join(', ')}
+        from inventory_snapshots is
+        left join materials m on m.id = is.material_id
+        left join customers c on c.id = is.customer_id
+        left join invoices i on i.customer_id = c.id
+        where 1=1
+      `;
+
+      if (filters) {
+        if (filters.start_date) {
+          sql += ` and is.report_date >= $${paramIndex}`;
+          params.push(filters.start_date);
+          paramIndex++;
+        }
+        if (filters.end_date) {
+          sql += ` and is.report_date <= $${paramIndex}`;
+          params.push(filters.end_date);
+          paramIndex++;
+        }
+      }
+
+      sql += ` group by ${dimensions.map((d: string, idx: number) => idx + 1).join(', ')}`;
+    } else {
+      // Autres cubes (revenues, costs, performance)
+      sql = `
+        select 
+          ${dimensions.map((d: string) => `'all' as ${d}`).join(', ')},
+          ${measures.map((m: string) => `0 as ${m}`).join(', ')}
+        limit 0
+      `;
+    }
+
+    const rows = await run(sql, params);
+    
+    const totals: Record<string, number> = {};
+    measures.forEach((m: string) => {
+      totals[m] = rows.reduce((sum: number, row: any) => sum + (row[m] || 0), 0);
+    });
+
+    res.json({
+      cube,
+      dimensions,
+      measures,
+      data: rows.map((row: any) => ({
+        dimension_values: dimensions.reduce((acc: Record<string, string>, dim: string) => {
+          acc[dim] = row[dim] || 'all';
+          return acc;
+        }, {}),
+        measure_values: measures.reduce((acc: Record<string, number>, meas: string) => {
+          acc[meas] = row[meas] || 0;
+          return acc;
+        }, {})
+      })),
+      totals
+    });
+  })
+);
+
+// GET /api/bi/forecast/demand - Prédictions de demande (ML)
+app.get(
+  '/api/bi/forecast/demand',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
+  asyncHandler(async (req, res) => {
+    const materialType = req.query.material_type as string;
+    const horizon = parseInt(req.query.horizon as string) || 30;
+    const startDate = req.query.start_date as string || format(new Date(), 'yyyy-MM-dd');
+
+    // Récupérer les données historiques pour la prédiction
+    const historicalData = await run(
+      `select report_date, sum(quantity) as volume
+       from inventory_snapshots
+       where report_date >= $1::date - interval '90 days'
+       ${materialType ? `and material_id in (select id from materials where abrege = $2)` : ''}
+       group by report_date
+       order by report_date`,
+      materialType ? [format(subDays(new Date(startDate), 90), 'yyyy-MM-dd'), materialType] : [format(subDays(new Date(startDate), 90), 'yyyy-MM-dd')]
+    );
+
+    // Algorithme simple de prédiction basé sur la moyenne mobile et tendance
+    const forecastData: any[] = [];
+    const currentDate = new Date(startDate);
+    
+    // Calculer la moyenne et la tendance
+    const volumes = historicalData.map((d: any) => d.volume || 0);
+    const avgVolume = volumes.reduce((a: number, b: number) => a + b, 0) / volumes.length;
+    const trend = volumes.length > 1 ? (volumes[volumes.length - 1] - volumes[0]) / volumes.length : 0;
+
+    for (let i = 0; i < horizon; i++) {
+      const date = new Date(currentDate);
+      date.setDate(date.getDate() + i);
+      const predictedValue = avgVolume + (trend * i);
+      const confidence = Math.max(0.7, 1 - (i / horizon) * 0.3); // Confiance décroissante
+      const deviation = predictedValue * (1 - confidence);
+
+      forecastData.push({
+        date: format(date, 'yyyy-MM-dd'),
+        predicted_value: Math.max(0, predictedValue),
+        confidence_lower: Math.max(0, predictedValue - deviation),
+        confidence_upper: predictedValue + deviation,
+        actual_value: i === 0 && historicalData.length > 0 ? historicalData[historicalData.length - 1].volume : undefined
+      });
+    }
+
+    res.json(forecastData);
+  })
+);
+
+// GET /api/bi/anomalies - Détection d'anomalies (ML)
+app.get(
+  '/api/bi/anomalies',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
+  asyncHandler(async (req, res) => {
+    const startDate = req.query.start_date as string;
+    const endDate = req.query.end_date as string;
+    const entityType = req.query.entity_type as string;
+    const threshold = parseFloat(req.query.threshold as string) || 0.2;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ message: 'Dates requises' });
+    }
+
+    const anomalies: any[] = [];
+
+    // Détecter les anomalies dans les volumes
+    const volumes = await run(
+      `select report_date, sum(quantity) as volume
+       from inventory_snapshots
+       where report_date between $1 and $2
+       group by report_date
+       order by report_date`,
+      [startDate, endDate]
+    );
+
+    if (volumes.length > 0) {
+      const volumeValues = volumes.map((v: any) => v.volume || 0);
+      const mean = volumeValues.reduce((a: number, b: number) => a + b, 0) / volumeValues.length;
+      const variance = volumeValues.reduce((sum: number, v: number) => sum + Math.pow(v - mean, 2), 0) / volumeValues.length;
+      const stdDev = Math.sqrt(variance);
+
+      volumes.forEach((vol: any, idx: number) => {
+        const value = vol.volume || 0;
+        const zScore = stdDev > 0 ? Math.abs((value - mean) / stdDev) : 0;
+        const deviation = stdDev > 0 ? (value - mean) / mean : 0;
+
+        if (Math.abs(deviation) > threshold) {
+          anomalies.push({
+            id: `anomaly-${idx}`,
+            entity_type: 'inventory',
+            entity_id: vol.report_date,
+            metric: 'volume',
+            value,
+            expected_value: mean,
+            deviation,
+            severity: Math.abs(deviation) > 0.5 ? 'critical' : Math.abs(deviation) > 0.3 ? 'high' : Math.abs(deviation) > 0.2 ? 'medium' : 'low',
+            detected_at: vol.report_date,
+            description: `Volume anormal détecté: ${value.toFixed(2)} (attendu: ${mean.toFixed(2)})`
+          });
+        }
+      });
+    }
+
+    // Détecter les anomalies dans les revenus
+    const revenues = await run(
+      `select issue_date, sum(total_amount) as revenue
+       from invoices
+       where issue_date between $1 and $2
+       group by issue_date
+       order by issue_date`,
+      [startDate, endDate]
+    );
+
+    if (revenues.length > 0) {
+      const revenueValues = revenues.map((r: any) => r.revenue || 0);
+      const mean = revenueValues.reduce((a: number, b: number) => a + b, 0) / revenueValues.length;
+      const variance = revenueValues.reduce((sum: number, v: number) => sum + Math.pow(v - mean, 2), 0) / revenueValues.length;
+      const stdDev = Math.sqrt(variance);
+
+      revenues.forEach((rev: any, idx: number) => {
+        const value = rev.revenue || 0;
+        const deviation = stdDev > 0 ? (value - mean) / mean : 0;
+
+        if (Math.abs(deviation) > threshold) {
+          anomalies.push({
+            id: `anomaly-revenue-${idx}`,
+            entity_type: 'invoice',
+            entity_id: rev.issue_date,
+            metric: 'revenue',
+            value,
+            expected_value: mean,
+            deviation,
+            severity: Math.abs(deviation) > 0.5 ? 'critical' : Math.abs(deviation) > 0.3 ? 'high' : Math.abs(deviation) > 0.2 ? 'medium' : 'low',
+            detected_at: rev.issue_date,
+            description: `Revenu anormal détecté: ${value.toFixed(2)} € (attendu: ${mean.toFixed(2)} €)`
+          });
+        }
+      });
+    }
+
+    res.json(anomalies);
+  })
+);
+
+// POST /api/bi/drill-down - Drill-down navigation
+app.post(
+  '/api/bi/drill-down',
+  requireAuth({ roles: ['admin', 'manager'], permissions: ['view_customers'] }),
+  asyncHandler(async (req, res) => {
+    const { level, parentId, dimension, measure, filters } = req.body;
+
+    if (!level || !dimension || !measure) {
+      return res.status(400).json({ message: 'Level, dimension et measure requis' });
+    }
+
+    let sql = '';
+    const params: any[] = [];
+
+    // Construire la requête selon la dimension
+    if (dimension === 'material') {
+      sql = `
+        select m.id, m.abrege as label, sum(is.quantity) as value, count(distinct is.id) as children_count
+        from materials m
+        left join inventory_snapshots is on is.material_id = m.id
+        where 1=1
+      `;
+      if (parentId) {
+        sql += ` and m.famille = $1`;
+        params.push(parentId);
+      }
+      sql += ` group by m.id, m.abrege order by value desc limit 20`;
+    } else if (dimension === 'customer') {
+      sql = `
+        select c.id, c.name as label, coalesce(sum(i.total_amount), 0) as value, count(distinct i.id) as children_count
+        from customers c
+        left join invoices i on i.customer_id = c.id
+        where 1=1
+      `;
+      if (parentId) {
+        sql += ` and c.risk_level = $1`;
+        params.push(parentId);
+      }
+      sql += ` group by c.id, c.name order by value desc limit 20`;
+    } else if (dimension === 'time') {
+      sql = `
+        select to_char(is.report_date, 'YYYY-MM') as id, 
+               to_char(is.report_date, 'YYYY-MM') as label,
+               sum(is.quantity) as value,
+               count(distinct is.report_date) as children_count
+        from inventory_snapshots is
+        where 1=1
+      `;
+      if (parentId) {
+        sql += ` and to_char(is.report_date, 'YYYY') = $1`;
+        params.push(parentId);
+      }
+      sql += ` group by to_char(is.report_date, 'YYYY-MM') order by id desc limit 20`;
+    } else {
+      sql = `select 'all' as id, 'Tous' as label, 0 as value, 0 as children_count limit 0`;
+    }
+
+    const rows = await run(sql, params);
+
+    res.json({
+      level,
+      dimension,
+      measure,
+      data: rows.map((row: any) => ({
+        id: row.id,
+        label: row.label,
+        value: row.value || 0,
+        children_count: row.children_count || 0,
+        can_drill_down: (row.children_count || 0) > 0
+      })),
+      parent: parentId ? { id: parentId, label: parentId } : undefined
+    });
   })
 );
 

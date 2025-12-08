@@ -1,11 +1,12 @@
 import { useEffect, useState, useRef } from 'react';
-import { Plus, Edit2, Trash2, Search, Loader2, Save, X, Upload, FileSpreadsheet, DollarSign } from 'lucide-react';
+import { Plus, Edit2, Trash2, Search, Loader2, Save, X, Upload, FileSpreadsheet, DollarSign, Award } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 
 import { Api, type Material } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
 import { MaterialPricesTab } from '../components/MaterialPricesTab';
+import { MaterialQualitiesTab } from '../components/MaterialQualitiesTab';
 
 type MaterialForm = {
   famille: string;
@@ -39,7 +40,7 @@ export const MaterialsPage = () => {
   const [form, setForm] = useState<MaterialForm>(DEFAULT_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'materials' | 'prices'>('materials');
+  const [activeTab, setActiveTab] = useState<'materials' | 'prices' | 'qualities'>('materials');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadMaterials = async () => {
@@ -338,6 +339,14 @@ export const MaterialsPage = () => {
             <DollarSign size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
             Prix
           </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('qualities')}
+            className={activeTab === 'qualities' ? 'active' : ''}
+          >
+            <Award size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+            Qualités
+          </button>
         </div>
 
         {activeTab === 'materials' && (
@@ -424,6 +433,11 @@ export const MaterialsPage = () => {
         {activeTab === 'prices' && (
           <div style={{ padding: '24px' }}>
             <MaterialPricesTab materials={materials} canEdit={canEdit} />
+          </div>
+        )}
+        {activeTab === 'qualities' && (
+          <div style={{ padding: '24px' }}>
+            <MaterialQualitiesTab materials={materials} canEdit={canEdit} />
           </div>
         )}
       </div>

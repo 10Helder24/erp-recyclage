@@ -129,13 +129,14 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
   const { config: leaveTemplate } = usePdfTemplate('leave');
   const isAdmin = hasRole('admin');
   const canReviewManager = hasRole('manager') || hasPermission('approve_leave_manager');
-  const canReviewHr = hasPermission('approve_leave_hr');
-  const canReviewDirector = isAdmin || hasPermission('approve_leave_director');
+  const canReviewHr = false;
+  const canReviewDirector = false;
   const canAccessRequests = canReviewManager || canReviewHr || canReviewDirector;
   const canSeeAllEmployees = isAdmin || canReviewHr || canReviewDirector;
+  const isRequesterOnly = !canAccessRequests;
   const availableTabs = useMemo<LeaveTab[]>(
-    () => (canAccessRequests ? ['calendrier', 'demandes', 'soldes'] : ['calendrier', 'soldes']),
-    [canAccessRequests]
+    () => (canAccessRequests || isRequesterOnly ? ['calendrier', 'demandes', 'soldes'] : ['calendrier', 'soldes']),
+    [canAccessRequests, isRequesterOnly]
   );
   const initialSafeTab = availableTabs.includes(initialTab) ? initialTab : availableTabs[0];
   const [activeTab, setActiveTab] = useState<LeaveTab>(initialSafeTab);
@@ -307,22 +308,14 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
 
   const shouldDisplayGroup = useCallback(
     (group: Leave[]) => {
-      if (!group.length) {
-        return false;
-      }
+      if (!group.length) return false;
       const step = getWorkflowStep(group[0]);
-      if (step === 'manager') {
-        return canReviewManager && matchesFilters(group[0]);
-      }
-      if (step === 'hr') {
-        return canReviewHr;
-      }
-      if (step === 'director') {
-        return canReviewDirector;
-      }
+      const isOwner = group[0].employee_id === currentEmployee?.id;
+      if (isOwner) return true; // le demandeur voit ses demandes
+      if (step === 'manager') return canReviewManager && matchesFilters(group[0]);
       return false;
     },
-    [canReviewManager, canReviewHr, canReviewDirector, matchesFilters, getWorkflowStep]
+    [canReviewManager, matchesFilters, getWorkflowStep, currentEmployee?.id]
   );
 
   const filteredPendingGroups = useMemo(
@@ -334,18 +327,13 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
     (group: Leave[]) => {
       if (!group.length) return false;
       const step = getWorkflowStep(group[0]);
+      const isOwner = group[0].employee_id === currentEmployee?.id;
       if (step === 'manager') {
-        return canReviewManager && matchesFilters(group[0]);
-      }
-      if (step === 'hr') {
-        return canReviewHr;
-      }
-      if (step === 'director') {
-        return canReviewDirector;
+        return (canReviewManager && matchesFilters(group[0])) || isOwner;
       }
       return false;
     },
-    [canReviewManager, canReviewHr, canReviewDirector, matchesFilters, getWorkflowStep]
+    [canReviewManager, matchesFilters, getWorkflowStep, currentEmployee?.id]
   );
 
 
@@ -611,7 +599,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
       const start = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0];
       const end = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
 
-      const pendingPromise = canAccessRequests ? Api.fetchPendingLeaves() : Promise.resolve([] as Leave[]);
+      const pendingPromise = canAccessRequests || isRequesterOnly ? Api.fetchPendingLeaves() : Promise.resolve([] as Leave[]);
       const [employeesRes, pendingRes, balancesRes, calendarRes] = await Promise.all([
         Api.fetchEmployees(),
         pendingPromise,
@@ -949,7 +937,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
       return;
     }
     const step = getWorkflowStep(group[0]);
-    if (step === 'director' && action === 'approve') {
+    if (step === 'manager' && action === 'approve') {
       openSignModal(group);
       return;
     }
@@ -1301,7 +1289,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
               </div>
             )}
 
-            {canAccessRequests && activeTab === 'demandes' && (
+            {(canAccessRequests || isRequesterOnly) && activeTab === 'demandes' && (
               <div className="requests-list">
                 {canSeeAllEmployees ? (
                   <div className="request-filters">
@@ -1368,9 +1356,10 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
                           <div className="request-periods" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
                             {group.map((period) => (
                               <span key={period.id} className="tag">
-                                {TYPE_LABELS[period.type]}
+                                {TYPE_LABELS[period.type]} · {formatRange(period)}
                               </span>
                             ))}
+                            {group.length === 0 && <span className="tag">Périodes non définies</span>}
                           </div>
                         </div>
                       </div>
@@ -1391,6 +1380,16 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
                             <span>
                               {TYPE_LABELS[period.type]} · {formatRange(period)}
                             </span>
+                            {canReviewManager && currentStep === 'manager' && (
+                              <button
+                                type="button"
+                                className="icon-button warn"
+                                title="Supprimer cette période avant validation"
+                                onClick={() => handleDeleteLeave(period)}
+                              >
+                                <X size={14} />
+                              </button>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -1401,7 +1400,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
                         </div>
                       )}
                       <div className="request-card-actions">
-                        {canAct && (
+                        {canAct && canReviewManager && (
                           <>
                             <button type="button" className="btn btn-outline danger" onClick={() => handleWorkflowAction(group, 'reject')}>
                               Refuser
@@ -1411,7 +1410,7 @@ const LeavePage: React.FC<LeavePageProps> = ({ initialTab = 'calendrier' }) => {
                             </button>
                           </>
                         )}
-                        {canReviewManager && currentStep === 'manager' && (
+                        {currentStep === 'manager' && (canReviewManager || leave.employee_id === currentEmployee?.id) && (
                           <button type="button" className="icon-button warn" onClick={() => handleDeleteLeave(leave)} aria-label="Supprimer">
                             <AlertTriangle size={18} />
                           </button>

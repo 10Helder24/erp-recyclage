@@ -17,7 +17,8 @@
 .alerts-page,
 .security-alerts-settings-page,
 .reports-page,
-.global-search-page {
+.global-search-page,
+.bi-page {
   padding: 24px;
   max-width: 1400px;
   margin: 0 auto;
@@ -1573,8 +1574,8 @@ main.main-content:has(.cdt-page) {
 }
 
 .calendar-table-wrapper.cdt-table-wrapper {
-  margin: 0 -20px;
-  padding: 0 20px;
+  margin: 0;
+  padding: 0;
   max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
@@ -1594,11 +1595,11 @@ main.main-content:has(.cdt-page) {
 /* Tableau CDT desktop - version ultra-compacte pour tenir sur un écran */
 .cdt-table-wrapper .calendar-table th,
 .cdt-table-wrapper .calendar-table td {
-  padding: 1px 3px !important;
+  padding: 6px 8px !important;
   border-bottom: 1px solid var(--divider);
   text-align: center;
-  font-size: 0.65rem !important;
-  line-height: 1.1 !important;
+  font-size: 0.78rem !important;
+  line-height: 1.25 !important;
 }
 
 .calendar-table th,
@@ -1622,11 +1623,16 @@ main.main-content:has(.cdt-page) {
 .cdt-table-wrapper .calendar-table td.sticky {
   background: #fff;
   box-shadow: 2px 0 4px rgba(0, 0, 0, 0.05);
-  width: 18% !important;
-  min-width: 120px !important;
-  font-size: 0.6rem !important;
-  padding: 1px 4px !important;
-  line-height: 1.1 !important;
+  width: 210px !important;
+  min-width: 200px !important;
+  max-width: 240px !important;
+  font-size: 0.82rem !important;
+  padding: 8px 12px !important;
+  line-height: 1.3 !important;
+  text-align: left;
+  left: 0;
+  border-right: 1px solid #e5e7eb;
+  z-index: 3;
 }
 
 /* Largeurs fixes pour les colonnes de données CDT */

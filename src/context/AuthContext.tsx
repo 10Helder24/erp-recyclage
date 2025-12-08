@@ -12,6 +12,7 @@ type AuthContextValue = {
   logout: () => void;
   hasRole: (...roles: UserRole[]) => boolean;
   hasPermission: (...permissions: string[]) => boolean;
+  refreshUser: () => Promise<void>;
 };
 
 export const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -115,6 +116,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     [user]
   );
 
+  const refreshUser = useCallback(async () => {
+    if (!token) return;
+    try {
+      const { user: currentUser } = await Api.fetchCurrentUser();
+      setUser(currentUser);
+    } catch (error) {
+      console.error('Erreur lors du rafraîchissement de l\'utilisateur:', error);
+    }
+  }, [token]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
@@ -123,9 +134,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       login,
       logout,
       hasRole,
-      hasPermission
+      hasPermission,
+      refreshUser
     }),
-    [user, token, loading, login, logout, hasRole, hasPermission]
+    [user, token, loading, login, logout, hasRole, hasPermission, refreshUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

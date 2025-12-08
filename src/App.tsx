@@ -26,6 +26,8 @@ import { CRMPage } from './pages/CRMPage';
 import { MobileOperatorPage } from './pages/MobileOperatorPage';
 import { AlertsPage } from './pages/AlertsPage';
 import { SecurityAlertsSettingsPage } from './pages/SecurityAlertsSettingsPage';
+import { SettingsPage } from './pages/SettingsPage';
+import { MultiSitesPage } from './pages/MultiSitesPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { CompliancePage } from './pages/CompliancePage';
 import { LogisticsOptimizationPage } from './pages/LogisticsOptimizationPage';
@@ -34,6 +36,12 @@ import DocumentsPage from './pages/DocumentsPage';
 import IntegrationsPage from './pages/IntegrationsPage';
 import GamificationPage from './pages/GamificationPage';
 import GlobalSearchPage from './pages/GlobalSearchPage';
+import BIPage from './pages/BIPage';
+import HRDashboardPage from './pages/HRDashboardPage';
+import { PayrollContractsPage } from './pages/PayrollContractsPage';
+import { TrainingPage } from './pages/TrainingPage';
+import { RecruitmentPage } from './pages/RecruitmentPage';
+import { DriversHSETimeClockPage } from './pages/DriversHSETimeClockPage';
 import { useAuth } from './hooks/useAuth';
 import { useOffline } from './hooks/useOffline';
 import { useServiceWorkerUpdate } from './hooks/useServiceWorkerUpdate';
@@ -41,6 +49,7 @@ import { Api } from './lib/api';
 
 const NAV_LINK_IDS = [
   'dashboard',
+  'hr-dashboard',
   'Inventaires',
   'rh',
   'calendar',
@@ -52,7 +61,9 @@ const NAV_LINK_IDS = [
   'expedition',
   'Declassement',
   'map',
+  'settings',
   'adminUsers',
+  'multiSites',
   'securityAlertsSettings',
   'customers',
   'materials',
@@ -73,7 +84,12 @@ const NAV_LINK_IDS = [
   'documents',
   'integrations',
   'gamification',
-  'global-search'
+  'global-search',
+  'bi',
+  'payroll-contracts',
+  'training',
+  'recruitment',
+  'drivers-hse'
 ] as const;
 type NavId = (typeof NAV_LINK_IDS)[number];
 
@@ -105,8 +121,13 @@ const NAV_SECTIONS: NavSection[] = [
     id: 'rhPlus',
     label: 'RH+',
     children: [
+      { id: 'hr-dashboard', label: 'Dashboard RH+' },
       { id: 'calendar', label: 'Calendrier' },
-      { id: 'employees', label: 'Employés' }
+      { id: 'employees', label: 'Employés' },
+      { id: 'payroll-contracts', label: 'Paie & Contrats', requiresManager: true },
+      { id: 'training', label: 'Formation continue', requiresManager: true },
+      { id: 'recruitment', label: 'Recrutement', requiresManager: true },
+      { id: 'drivers-hse', label: 'Chauffeurs & HSE', requiresManager: true }
     ]
   },
   {
@@ -153,6 +174,7 @@ const NAV_SECTIONS: NavSection[] = [
       { id: 'stocks', label: 'Gestion des stocks', requiresManager: true, requiresPermissions: ['view_materials'] },
       { id: 'crm', label: 'CRM', requiresManager: true, requiresPermissions: ['view_customers'] },
       { id: 'reports', label: 'Rapports & Analytics', requiresManager: true, requiresPermissions: ['view_customers'] },
+      { id: 'bi', label: 'Business Intelligence', requiresManager: true, requiresPermissions: ['view_customers'] },
       { id: 'compliance', label: 'Conformité & Traçabilité', requiresManager: true, requiresPermissions: ['view_customers'] },
       { id: 'logistics-optimization', label: 'Optimisation Logistique', requiresManager: true, requiresPermissions: ['view_customers'] },
       { id: 'suppliers', label: 'Gestion des Fournisseurs', requiresManager: true, requiresPermissions: ['view_customers'] },
@@ -166,8 +188,10 @@ const NAV_SECTIONS: NavSection[] = [
     id: 'parametres',
     label: 'Paramètres',
     children: [
+      { id: 'settings', label: 'Sécurité & Confidentialité' },
       { id: 'pdfTemplates', label: 'Templates PDF', requiresAdmin: true },
       { id: 'adminUsers', label: 'Utilisateurs', requiresAdmin: true },
+      { id: 'multiSites', label: 'Multi-sites & Devises', requiresAdmin: true },
       { id: 'securityAlertsSettings', label: 'Alertes sécurité', requiresAdmin: true }
     ]
   }
@@ -178,7 +202,7 @@ const App = () => {
   const { pendingCount } = useOffline();
   const { checkForUpdate } = useServiceWorkerUpdate(); // Vérifie automatiquement les mises à jour
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [activeNav, setActiveNav] = useState<NavId>('rh');
+  const [activeNav, setActiveNav] = useState<NavId>('dashboard');
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     rhPlus: true
   });
@@ -314,6 +338,18 @@ const App = () => {
       return null;
     }
     switch (activeNav) {
+      case 'hr-dashboard':
+        return <HRDashboardPage />;
+      case 'payroll-contracts':
+        return hasRole('admin') || hasRole('manager') ? <PayrollContractsPage /> : <LeavePage initialTab="demandes" />;
+      case 'training':
+        return hasRole('admin') || hasRole('manager') ? <TrainingPage /> : <LeavePage initialTab="demandes" />;
+      case 'recruitment':
+        return hasRole('admin') || hasRole('manager') ? <RecruitmentPage /> : <LeavePage initialTab="demandes" />;
+      case 'drivers-hse':
+        return hasRole('admin') || hasRole('manager') ? <DriversHSETimeClockPage /> : <LeavePage initialTab="demandes" />;
+      case 'dashboard':
+        return <DashboardPage />;
       case 'destruction':
         return <DestructionPage />;
       case 'employees':
@@ -336,6 +372,8 @@ const App = () => {
         );
       case 'adminUsers':
         return hasRole('admin') ? <UsersAdminPage /> : <LeavePage initialTab="demandes" />;
+      case 'multiSites':
+        return hasRole('admin') ? <MultiSitesPage /> : <LeavePage initialTab="demandes" />;
       case 'customers':
         return hasRole('admin') || hasRole('manager') || hasPermission('view_customers') ? (
           <CustomersPage />
@@ -406,6 +444,8 @@ const App = () => {
         ) : (
           <LeavePage initialTab="demandes" />
         );
+      case 'settings':
+        return <SettingsPage />;
       case 'securityAlertsSettings':
         return hasRole('admin') ? (
           <SecurityAlertsSettingsPage />
@@ -452,6 +492,12 @@ const App = () => {
         return <GamificationPage />;
       case 'global-search':
         return <GlobalSearchPage />;
+      case 'bi':
+        return hasRole('admin') || hasRole('manager') || hasPermission('view_customers') ? (
+          <BIPage />
+        ) : (
+          <LeavePage initialTab="demandes" />
+        );
       case 'dashboard':
         return <DashboardPage />;
       case 'rh':

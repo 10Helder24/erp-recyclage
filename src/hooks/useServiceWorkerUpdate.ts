@@ -9,6 +9,57 @@ export function useServiceWorkerUpdate(): {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null);
 
+  const renderUpdateToast = useCallback(
+    (handleUpdateClick: () => void, handleLaterClick: () => void) =>
+      React.createElement(
+        'div',
+        null,
+        React.createElement(
+          'p',
+          { style: { marginBottom: '8px', fontWeight: 600 } },
+          'Nouvelle version disponible'
+        ),
+        React.createElement(
+          'div',
+          { style: { display: 'flex', gap: '8px' } },
+          React.createElement(
+            'button',
+            {
+              onClick: handleUpdateClick,
+              style: {
+                padding: '6px 12px',
+                background: '#3b82f6',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '0.875rem',
+                fontWeight: 500
+              }
+            },
+            'Mettre à jour'
+          ),
+          React.createElement(
+            'button',
+            {
+              onClick: handleLaterClick,
+              style: {
+                padding: '6px 12px',
+                background: '#e5e7eb',
+                color: '#374151',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '0.875rem'
+              }
+            },
+            'Plus tard'
+          )
+        )
+      ),
+    []
+  );
+
   const handleUpdate = useCallback(async () => {
     if (!registration) return;
 
@@ -24,7 +75,11 @@ export function useServiceWorkerUpdate(): {
     }
 
     // Envoyer un message au nouveau worker pour forcer l'activation
-    newWorker.postMessage({ type: 'SKIP_WAITING' });
+    try {
+      newWorker.postMessage({ type: 'SKIP_WAITING' });
+    } catch (err) {
+      console.error('SW postMessage skip waiting error', err);
+    }
 
     // Attendre que le nouveau worker soit activé
     newWorker.addEventListener('statechange', () => {
@@ -52,83 +107,54 @@ export function useServiceWorkerUpdate(): {
 
   useEffect(() => {
     if ('serviceWorker' in navigator && typeof window !== 'undefined') {
-      navigator.serviceWorker.getRegistration().then((reg) => {
-        if (!reg) return;
-        
-        setRegistration(reg);
+      navigator.serviceWorker
+        .getRegistration()
+        .then((reg) => {
+          if (!reg) return;
+          
+          setRegistration(reg);
 
-        // Écouter les mises à jour disponibles
-        reg.addEventListener('updatefound', () => {
-          const newWorker = reg.installing;
-          if (!newWorker) return;
+          // Écouter les mises à jour disponibles
+          reg.addEventListener('updatefound', () => {
+            const newWorker = reg.installing;
+            if (!newWorker) return;
 
-          newWorker.addEventListener('statechange', () => {
-            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              // Nouvelle version disponible
-              setUpdateAvailable(true);
-              toast(
-                (t) => {
-                  const handleUpdateClick = () => {
-                    toast.dismiss(t.id);
-                    handleUpdate();
-                  };
-                  const handleLaterClick = () => {
-                    toast.dismiss(t.id);
-                    setUpdateAvailable(false);
-                  };
-                  
-                  return React.createElement('div', null,
-                    React.createElement('p', { style: { marginBottom: '8px', fontWeight: 600 } },
-                      'Nouvelle version disponible'
-                    ),
-                    React.createElement('div', { style: { display: 'flex', gap: '8px' } },
-                      React.createElement('button', {
-                        onClick: handleUpdateClick,
-                        style: {
-                          padding: '6px 12px',
-                          background: '#3b82f6',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '6px',
-                          cursor: 'pointer',
-                          fontSize: '0.875rem',
-                          fontWeight: 500
-                        }
-                      }, 'Mettre à jour'),
-                      React.createElement('button', {
-                        onClick: handleLaterClick,
-                        style: {
-                          padding: '6px 12px',
-                          background: '#e5e7eb',
-                          color: '#374151',
-                          border: 'none',
-                          borderRadius: '6px',
-                          cursor: 'pointer',
-                          fontSize: '0.875rem'
-                        }
-                      }, 'Plus tard')
-                    )
-                  );
-                },
-                {
-                  duration: Infinity,
-                  icon: '🔄',
-                  position: 'top-center'
-                }
-              );
-            }
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                // Nouvelle version disponible
+                setUpdateAvailable(true);
+                toast(
+                  (t) => {
+                    const handleUpdateClick = () => {
+                      toast.dismiss(t.id);
+                      handleUpdate();
+                    };
+                    const handleLaterClick = () => {
+                      toast.dismiss(t.id);
+                      setUpdateAvailable(false);
+                    };
+                    return renderUpdateToast(handleUpdateClick, handleLaterClick);
+                  },
+                  {
+                    duration: Infinity,
+                    icon: '🔄',
+                    position: 'top-center'
+                  }
+                );
+              }
+            });
           });
-        });
 
-        // Vérifier les mises à jour toutes les 5 minutes
-        const checkInterval = setInterval(() => {
-          reg.update();
-        }, 5 * 60 * 1000);
+          // Vérifier les mises à jour toutes les 5 minutes
+          const checkInterval = setInterval(() => {
+            reg.update().catch((err) => console.error('SW update error', err));
+          }, 5 * 60 * 1000);
 
-        return () => clearInterval(checkInterval);
-      });
+          return () => clearInterval(checkInterval);
+        })
+        .catch((err) => console.error('SW getRegistration error', err));
     }
-  }, [handleUpdate]);
+  }, [handleUpdate, renderUpdateToast]);
 
   return {
     updateAvailable,

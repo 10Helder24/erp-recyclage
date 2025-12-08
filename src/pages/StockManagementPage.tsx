@@ -102,9 +102,11 @@ export const StockManagementPage = () => {
     origin: '',
     supplier_name: '',
     batch_reference: '',
-    quality_status: '',
+    quality_id: '',
     notes: ''
   });
+  const [materialQualities, setMaterialQualities] = useState<Array<{ id: string; name: string; material_id: string }>>([]);
+  const [allMaterialQualities, setAllMaterialQualities] = useState<Array<{ id: string; name: string; material_id: string }>>([]);
   const [movementForm, setMovementForm] = useState({
     movement_type: 'in' as 'in' | 'out' | 'transfer' | 'adjustment' | 'production' | 'consumption',
     material_id: '',
@@ -152,6 +154,15 @@ export const StockManagementPage = () => {
   useEffect(() => {
     loadData();
   }, [activeTab]);
+
+  // Charger les qualités de matières quand material_id change
+  useEffect(() => {
+    if (lotForm.material_id) {
+      Api.fetchMaterialQualities(lotForm.material_id).then(setMaterialQualities).catch(() => setMaterialQualities([]));
+    } else {
+      setMaterialQualities([]);
+    }
+  }, [lotForm.material_id]);
 
   const loadData = async () => {
     try {
@@ -209,8 +220,12 @@ export const StockManagementPage = () => {
   };
 
   const loadLots = async () => {
-    const data = await Api.fetchStockLots();
-    setLots(data);
+    const [lotsData, qualitiesData] = await Promise.all([
+      Api.fetchStockLots(),
+      Api.fetchMaterialQualities()
+    ]);
+    setLots(lotsData);
+    setAllMaterialQualities(qualitiesData);
   };
 
   const loadMovements = async () => {
@@ -507,6 +522,123 @@ export const StockManagementPage = () => {
               </table>
             </div>
           </div>
+        ) : activeTab === 'lots' ? (
+          <div>
+            <div className="stock-page-header">
+              <div className="stock-page-search-bar">
+                <Search size={20} />
+                <input
+                  type="text"
+                  placeholder="Rechercher un lot..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+              <button onClick={() => {
+                setEditingLot(null);
+                setLotForm({
+                  lot_number: '',
+                  material_id: '',
+                  warehouse_id: '',
+                  quantity: 0,
+                  unit: '',
+                  production_date: '',
+                  expiry_date: '',
+                  origin: '',
+                  supplier_name: '',
+                  batch_reference: '',
+                  quality_id: '',
+                  notes: ''
+                });
+                setShowLotModal(true);
+              }} className="btn-primary">
+                <Plus size={16} />
+                Nouveau lot
+              </button>
+            </div>
+            <div className="stock-page-table-container">
+              <table className="stock-page-table">
+                <thead>
+                  <tr>
+                    <th>N° Lot</th>
+                    <th>Matière</th>
+                    <th>Entrepôt</th>
+                    <th>Quantité</th>
+                    <th>Qualité</th>
+                    <th>Date prod.</th>
+                    <th>Date exp.</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lots.filter(lot => 
+                    lot.lot_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    materials.find(m => m.id === lot.material_id)?.abrege?.toLowerCase().includes(searchTerm.toLowerCase())
+                  ).map((lot) => {
+                    const material = materials.find(m => m.id === lot.material_id);
+                    const warehouse = warehouses.find(w => w.id === lot.warehouse_id);
+                    return (
+                      <tr key={lot.id}>
+                        <td>{lot.lot_number}</td>
+                        <td>{material?.abrege || '-'}</td>
+                        <td>{warehouse?.name || '-'}</td>
+                        <td>{lot.quantity} {lot.unit || ''}</td>
+                        <td>{lot.quality_id ? allMaterialQualities.find(q => q.id === lot.quality_id)?.name || '-' : '-'}</td>
+                        <td>{lot.production_date ? format(new Date(lot.production_date), 'dd/MM/yyyy', { locale: fr }) : '-'}</td>
+                        <td>{lot.expiry_date ? format(new Date(lot.expiry_date), 'dd/MM/yyyy', { locale: fr }) : '-'}</td>
+                        <td>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                setEditingLot(lot);
+                                setLotForm({
+                                  lot_number: lot.lot_number,
+                                  material_id: lot.material_id,
+                                  warehouse_id: lot.warehouse_id,
+                                  quantity: lot.quantity,
+                                  unit: lot.unit || '',
+                                  production_date: lot.production_date ? format(new Date(lot.production_date), 'yyyy-MM-dd') : '',
+                                  expiry_date: lot.expiry_date ? format(new Date(lot.expiry_date), 'yyyy-MM-dd') : '',
+                                  origin: lot.origin || '',
+                                  supplier_name: lot.supplier_name || '',
+                                  batch_reference: lot.batch_reference || '',
+                                  quality_id: lot.quality_id || '',
+                                  notes: lot.notes || ''
+                                });
+                                setShowLotModal(true);
+                              }}
+                              className="btn-icon"
+                              title="Modifier"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                            {isAdmin && (
+                              <button
+                                onClick={async () => {
+                                  if (!confirm('Supprimer ce lot ?')) return;
+                                  try {
+                                    await Api.deleteStockLot(lot.id);
+                                    toast.success('Lot supprimé');
+                                    await loadLots();
+                                  } catch (error: any) {
+                                    toast.error('Erreur lors de la suppression');
+                                  }
+                                }}
+                                className="btn-icon text-red-600"
+                                title="Supprimer"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         ) : (
           <div className="stock-empty-state">
             <Package size={48} className="stock-empty-icon" />
@@ -515,6 +647,179 @@ export const StockManagementPage = () => {
           </div>
         )}
       </div>
+
+      {/* Modal Lot */}
+      {showLotModal && (
+        <div className="stock-page modal-overlay" onClick={() => setShowLotModal(false)}>
+          <div className="stock-page modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="stock-modal-header">
+              <h2>{editingLot ? 'Modifier le lot' : 'Nouveau lot'}</h2>
+              <button onClick={() => setShowLotModal(false)} className="btn-icon">
+                <XCircle size={20} />
+              </button>
+            </div>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                const payload = {
+                  ...lotForm,
+                  quantity: parseFloat(lotForm.quantity.toString()),
+                  quality_id: lotForm.quality_id || undefined
+                };
+                if (editingLot) {
+                  await Api.updateStockLot(editingLot.id, payload);
+                  toast.success('Lot mis à jour');
+                } else {
+                  await Api.createStockLot(payload);
+                  toast.success('Lot créé');
+                }
+                setShowLotModal(false);
+                await loadLots();
+              } catch (error: any) {
+                toast.error(error.message || 'Erreur lors de la sauvegarde');
+              }
+            }}>
+              <div className="stock-page-form-grid">
+                <div className="stock-page-form-group">
+                  <label className="stock-page-form-label">N° Lot *</label>
+                  <input
+                    type="text"
+                    value={lotForm.lot_number}
+                    onChange={(e) => setLotForm({ ...lotForm, lot_number: e.target.value })}
+                    required
+                    className="stock-page-form-input"
+                  />
+                </div>
+                <div className="stock-page-form-group">
+                  <label className="stock-page-form-label">Matière *</label>
+                  <select
+                    value={lotForm.material_id}
+                    onChange={(e) => setLotForm({ ...lotForm, material_id: e.target.value, quality_id: '' })}
+                    required
+                    className="stock-page-form-input"
+                  >
+                    <option value="">Sélectionner une matière</option>
+                    {materials.map(m => (
+                      <option key={m.id} value={m.id}>{m.abrege} - {m.description}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="stock-page-form-group">
+                  <label className="stock-page-form-label">Entrepôt *</label>
+                  <select
+                    value={lotForm.warehouse_id}
+                    onChange={(e) => setLotForm({ ...lotForm, warehouse_id: e.target.value })}
+                    required
+                    className="stock-page-form-input"
+                  >
+                    <option value="">Sélectionner un entrepôt</option>
+                    {warehouses.map(w => (
+                      <option key={w.id} value={w.id}>{w.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="stock-page-form-group">
+                  <label className="stock-page-form-label">Quantité *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={lotForm.quantity}
+                    onChange={(e) => setLotForm({ ...lotForm, quantity: parseFloat(e.target.value) || 0 })}
+                    required
+                    className="stock-page-form-input"
+                  />
+                </div>
+                <div className="stock-page-form-group">
+                  <label className="stock-page-form-label">Unité</label>
+                  <input
+                    type="text"
+                    value={lotForm.unit}
+                    onChange={(e) => setLotForm({ ...lotForm, unit: e.target.value })}
+                    className="stock-page-form-input"
+                    placeholder="kg, m³, etc."
+                  />
+                </div>
+                <div className="stock-page-form-group">
+                  <label className="stock-page-form-label">Qualité</label>
+                  <select
+                    value={lotForm.quality_id}
+                    onChange={(e) => setLotForm({ ...lotForm, quality_id: e.target.value })}
+                    className="stock-page-form-input"
+                    disabled={!lotForm.material_id}
+                  >
+                    <option value="">Aucune qualité</option>
+                    {materialQualities.map(q => (
+                      <option key={q.id} value={q.id}>{q.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="stock-page-form-group">
+                  <label className="stock-page-form-label">Date de production</label>
+                  <input
+                    type="date"
+                    value={lotForm.production_date}
+                    onChange={(e) => setLotForm({ ...lotForm, production_date: e.target.value })}
+                    className="stock-page-form-input"
+                  />
+                </div>
+                <div className="stock-page-form-group">
+                  <label className="stock-page-form-label">Date d'expiration</label>
+                  <input
+                    type="date"
+                    value={lotForm.expiry_date}
+                    onChange={(e) => setLotForm({ ...lotForm, expiry_date: e.target.value })}
+                    className="stock-page-form-input"
+                  />
+                </div>
+                <div className="stock-page-form-group">
+                  <label className="stock-page-form-label">Origine</label>
+                  <input
+                    type="text"
+                    value={lotForm.origin}
+                    onChange={(e) => setLotForm({ ...lotForm, origin: e.target.value })}
+                    className="stock-page-form-input"
+                  />
+                </div>
+                <div className="stock-page-form-group">
+                  <label className="stock-page-form-label">Fournisseur</label>
+                  <input
+                    type="text"
+                    value={lotForm.supplier_name}
+                    onChange={(e) => setLotForm({ ...lotForm, supplier_name: e.target.value })}
+                    className="stock-page-form-input"
+                  />
+                </div>
+                <div className="stock-page-form-group">
+                  <label className="stock-page-form-label">Référence batch</label>
+                  <input
+                    type="text"
+                    value={lotForm.batch_reference}
+                    onChange={(e) => setLotForm({ ...lotForm, batch_reference: e.target.value })}
+                    className="stock-page-form-input"
+                  />
+                </div>
+              </div>
+              <div className="stock-page-form-group">
+                <label className="stock-page-form-label">Notes</label>
+                <textarea
+                  value={lotForm.notes}
+                  onChange={(e) => setLotForm({ ...lotForm, notes: e.target.value })}
+                  rows={3}
+                  className="stock-page-form-textarea"
+                />
+              </div>
+              <div className="stock-page-modal-actions">
+                <button type="button" onClick={() => setShowLotModal(false)} className="btn-secondary">
+                  Annuler
+                </button>
+                <button type="submit" className="btn-primary">
+                  {editingLot ? 'Mettre à jour' : 'Créer'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal Entrepôt */}
       {showWarehouseModal && (
