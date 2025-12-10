@@ -16042,6 +16042,44 @@ app.post(
           [auth?.id || null, id]
         );
       }
+
+      // Envoi email aux destinataires configurés
+      try {
+        const recipients =
+          (process.env.DECLASSEMENT_RECIPIENTS || process.env.BREVO_SENDER_EMAIL || '')
+            .split(',')
+            .map((email) => email.trim())
+            .filter(Boolean);
+        if (recipients.length > 0) {
+          const customerName = dg.lot_origin_client_name || dg.lot_origin_client_id || 'Client inconnu';
+          const subject = `Déclassement matière - ${customerName}`;
+          const textBody = [
+            `Déclassement : ${id}`,
+            `Client : ${customerName}`,
+            `Matière annoncée : ${dg.lot_quality_grade || dg.lot_filiere || '—'}`,
+            `Matière déclassée : ${dg.declassed_material || dg.new_category || '—'}`,
+            `Statut : ${finalize === true ? 'validé' : dg.status || 'pending_completion'}`,
+            '',
+            'Le PDF est joint à cet e-mail.'
+          ].join('\n');
+
+          await sendBrevoEmail({
+            to: recipients,
+            subject,
+            text: textBody,
+            attachments: [
+              {
+                name: filename,
+                content: pdf_base64,
+                type: 'application/pdf'
+              }
+            ]
+          });
+        }
+      } catch (err) {
+        console.error('Erreur envoi email déclassement:', err);
+        // on n'échoue pas la requête API pour un problème d'email
+      }
       
       return res.json({ 
         success: true,
