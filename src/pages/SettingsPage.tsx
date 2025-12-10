@@ -1,17 +1,24 @@
 import { useEffect, useState } from 'react';
-import { Key, Shield, CheckCircle, XCircle, Copy, Download, X, Save, Loader2, LogOut, Clock, MapPin, Edit2, Globe } from 'lucide-react';
+import { Key, Shield, CheckCircle, XCircle, Copy, Download, X, Save, Loader2, LogOut, Clock, MapPin, Edit2, Globe, Settings } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
 import { Api, type TwoFactorSetup, type UserSession, type GDPRConsent } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
+import { useI18n } from '../hooks/useI18n';
 import { SUPPORTED_LANGUAGES, TIMEZONES, type Language } from '../i18n/translations';
+
+// Fonction pour naviguer vers les préférences avancées
+const navigateToAdvancedPreferences = () => {
+  window.dispatchEvent(new CustomEvent('navigate', { detail: { page: 'advancedPreferences' } }));
+};
 
 type TabType = 'security' | 'sessions' | 'gdpr' | 'preferences';
 
 export const SettingsPage = () => {
   const { user, refreshUser, hasRole } = useAuth();
+  const { setLanguage: setI18nLanguage, language: currentLanguage, t } = useI18n();
   const isAdmin = hasRole('admin');
   const [activeTab, setActiveTab] = useState<TabType>('security');
   
@@ -33,7 +40,7 @@ export const SettingsPage = () => {
   
   // Preferences states
   const [preferences, setPreferences] = useState({
-    language: (user as any)?.language || 'fr',
+    language: currentLanguage || (user as any)?.language || localStorage.getItem('language') || 'fr',
     timezone: (user as any)?.timezone || 'Europe/Zurich',
     currency: (user as any)?.currency || 'CHF',
     site_id: (user as any)?.site_id || null
@@ -206,23 +213,24 @@ export const SettingsPage = () => {
     try {
       await Api.updateUserPreferences(preferences);
       
-      // Mettre à jour localStorage pour que le changement soit immédiat
-      if (preferences.language) {
-        localStorage.setItem('language', preferences.language);
+      // Si la langue a changé, utiliser setLanguage du contexte I18n
+      if (preferences.language && preferences.language !== currentLanguage) {
+        await setI18nLanguage(preferences.language as Language);
+        toast.success(t('settings.preferences.saved'));
+        // Recharger la page pour appliquer la nouvelle langue partout
+        setTimeout(() => {
+          window.location.reload();
+        }, 500);
+        return;
       }
       
       // Recharger les données utilisateur pour mettre à jour le contexte
       await refreshUser();
       
       toast.success('Préférences enregistrées');
-      
-      // Recharger la page pour appliquer la nouvelle langue partout
-      setTimeout(() => {
-        window.location.reload();
-      }, 1000);
     } catch (error: any) {
       console.error('Erreur lors de l\'enregistrement des préférences:', error);
-      toast.error('Erreur lors de l\'enregistrement des préférences');
+      toast.error(t('settings.preferences.error'));
     } finally {
       setLoadingPreferences(false);
     }
@@ -248,9 +256,17 @@ export const SettingsPage = () => {
     <div className="page-container">
       <div className="page-header">
         <div>
-          <p className="eyebrow">Paramètres</p>
-          <h1 className="page-title">Paramètres de sécurité</h1>
-          <p className="page-subtitle">Gérez votre authentification, vos sessions et vos données personnelles.</p>
+          <p className="eyebrow">{t('settings.title')}</p>
+          <h1 className="page-title">{t('settings.security.title')}</h1>
+          <p className="page-subtitle">{t('settings.security.subtitle')}</p>
+        </div>
+        <div className="page-actions">
+          <button
+            className="btn-secondary"
+            onClick={navigateToAdvancedPreferences}
+          >
+            <Settings size={16} /> {t('settings.preferences.advanced')}
+          </button>
         </div>
       </div>
 
@@ -261,7 +277,7 @@ export const SettingsPage = () => {
           onClick={() => setActiveTab('security')}
         >
           <Shield size={16} />
-          Sécurité
+          {t('settings.security.tab')}
         </button>
         <button
           type="button"
@@ -269,7 +285,7 @@ export const SettingsPage = () => {
           onClick={() => setActiveTab('sessions')}
         >
           <LogOut size={16} />
-          Sessions
+          {t('settings.sessions.tab')}
         </button>
         <button
           type="button"
@@ -277,7 +293,7 @@ export const SettingsPage = () => {
           onClick={() => setActiveTab('gdpr')}
         >
           <Shield size={16} />
-          RGPD
+          {t('settings.gdpr.tab')}
         </button>
         <button
           type="button"
@@ -285,7 +301,7 @@ export const SettingsPage = () => {
           onClick={() => setActiveTab('preferences')}
         >
           <Clock size={16} />
-          Préférences
+          {t('settings.preferences.tab')}
         </button>
       </div>
 
@@ -576,7 +592,7 @@ export const SettingsPage = () => {
 
         {activeTab === 'preferences' && (
           <div className="destruction-section">
-            <h2 style={{ marginBottom: '24px' }}>Préférences utilisateur</h2>
+            <h2 style={{ marginBottom: '24px' }}>{t('settings.preferences.user')}</h2>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
               <div className="unified-form-field">
@@ -587,7 +603,7 @@ export const SettingsPage = () => {
                   color: '#374151',
                   marginBottom: '8px'
                 }}>
-                  Langue
+                  {t('preferences.language')}
                 </label>
                 <select
                   id="pref-language"
@@ -619,7 +635,7 @@ export const SettingsPage = () => {
                   color: '#374151',
                   marginBottom: '8px'
                 }}>
-                  Fuseau horaire
+                  {t('preferences.timezone')}
                 </label>
                 <select
                   id="pref-timezone"
@@ -651,7 +667,7 @@ export const SettingsPage = () => {
                   color: '#374151',
                   marginBottom: '8px'
                 }}>
-                  Devise
+                  {t('preferences.currency')}
                 </label>
                 <select
                   id="pref-currency"
@@ -683,7 +699,7 @@ export const SettingsPage = () => {
                   color: '#374151',
                   marginBottom: '8px'
                 }}>
-                  Site
+                  {t('preferences.site')}
                 </label>
                 <select
                   id="pref-site"
@@ -699,7 +715,7 @@ export const SettingsPage = () => {
                     cursor: 'pointer'
                   }}
                 >
-                  <option value="">Aucun site</option>
+                  <option value="">{t('settings.preferences.no_site')}</option>
                   {sites.filter(s => s.is_active).map((site) => (
                     <option key={site.id} value={site.id}>
                       {site.code} - {site.name}
@@ -719,7 +735,7 @@ export const SettingsPage = () => {
                   color: '#1e3a8a',
                   lineHeight: '1.6'
                 }}>
-                  <strong>Note :</strong> La modification de la langue nécessitera un rechargement de la page pour être appliquée.
+                  <strong>{t('common.note') || 'Note'} :</strong> {t('settings.preferences.note')}
                 </p>
               </div>
 
@@ -756,7 +772,7 @@ export const SettingsPage = () => {
                   ) : (
                     <>
                       <Save size={16} />
-                      Enregistrer les préférences
+                      {t('settings.preferences.save')}
                     </>
                   )}
                 </button>

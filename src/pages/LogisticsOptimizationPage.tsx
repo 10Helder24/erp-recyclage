@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Api, Customer, Vehicle, OptimizedRoute, RouteScenario, DemandForecast, RealTimeTracking, RoutingConstraint } from '../lib/api';
+import { Api, Customer, Vehicle, OptimizedRoute, RouteScenario, DemandForecast, RealTimeTracking, RoutingConstraint, CantonRule, OfrouClosure, SwissTopoPoint } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
 import { toast } from 'react-hot-toast';
 import {
@@ -14,7 +14,8 @@ import {
   AlertCircle,
   Clock,
   Navigation,
-  Loader
+  Loader,
+  PlusCircle
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -32,6 +33,7 @@ export const LogisticsOptimizationPage = () => {
   const [selectedCustomers, setSelectedCustomers] = useState<string[]>([]);
   const [selectedVehicle, setSelectedVehicle] = useState<string>('');
   const [optimizationAlgorithm, setOptimizationAlgorithm] = useState<string>('nearest_neighbor');
+  const [altitudeWeight, setAltitudeWeight] = useState<number>(1);
   const [optimizedResult, setOptimizedResult] = useState<any>(null);
 
   // Loading optimization state
@@ -72,6 +74,31 @@ export const LogisticsOptimizationPage = () => {
     constraint_description: '',
     constraint_config: {}
   });
+  // Swiss constraints view
+  const [cantonRules, setCantonRules] = useState<CantonRule[]>([]);
+  const [ofrouClosures, setOfrouClosures] = useState<OfrouClosure[]>([]);
+  const [topoLat, setTopoLat] = useState('');
+  const [topoLon, setTopoLon] = useState('');
+  const [topoResult, setTopoResult] = useState<SwissTopoPoint | null>(null);
+  const [topoLoading, setTopoLoading] = useState(false);
+  const [roadWeightRules, setRoadWeightRules] = useState<any[]>([]);
+  const [winterRules, setWinterRules] = useState<any[]>([]);
+  const [telematicsEvents, setTelematicsEvents] = useState<any[]>([]);
+  const [weightForm, setWeightForm] = useState({
+    name: '',
+    geojson: '',
+    max_weight_tons: '',
+    season: '',
+    notes: ''
+  });
+  const [winterForm, setWinterForm] = useState({
+    vehicle_id: '',
+    season: '',
+    winter_tires_required: false,
+    chains_required: false,
+    max_weight_tons: '',
+    notes: ''
+  });
 
   useEffect(() => {
     loadCustomers();
@@ -80,6 +107,11 @@ export const LogisticsOptimizationPage = () => {
     loadScenarios();
     loadTracking();
     loadConstraints();
+    loadCantonRules();
+    loadOfrouClosures();
+    loadRoadWeightRules();
+    loadWinterRules();
+    loadTelematics();
   }, []);
 
   const loadCustomers = async () => {
@@ -136,6 +168,126 @@ export const LogisticsOptimizationPage = () => {
     }
   };
 
+  const loadRoadWeightRules = async () => {
+    try {
+      const data = await Api.fetchRoadWeightRules();
+      setRoadWeightRules(data);
+    } catch (error: any) {
+      console.error('Erreur chargement règles poids:', error);
+    }
+  };
+
+  const loadWinterRules = async (vehicleId?: string) => {
+    try {
+      const data = await Api.fetchVehicleWinterRules(vehicleId);
+      setWinterRules(data);
+    } catch (error: any) {
+      console.error('Erreur chargement règles hiver:', error);
+    }
+  };
+
+  const loadTelematics = async (vehicleId?: string) => {
+    try {
+      const data = await Api.fetchTelematicsEvents(vehicleId);
+      setTelematicsEvents(data);
+    } catch (error: any) {
+      console.error('Erreur chargement télématique:', error);
+    }
+  };
+
+  const loadCantonRules = async () => {
+    try {
+      const data = await Api.fetchCantonRules();
+      setCantonRules(data);
+    } catch (error: any) {
+      console.error('Erreur chargement règles cantonales:', error);
+    }
+  };
+
+  const loadOfrouClosures = async () => {
+    try {
+      const data = await Api.fetchOfrouClosures();
+      setOfrouClosures(data);
+    } catch (error: any) {
+      console.error('Erreur chargement OFROU:', error);
+    }
+  };
+
+  const handleRefreshOfrou = async () => {
+    try {
+      setLoading(true);
+      const res = await Api.refreshOfrouClosures();
+      toast.success(`OFROU rafraîchi (${res.refreshed} enregistrements)`);
+      await loadOfrouClosures();
+    } catch (error: any) {
+      toast.error(error.message || 'Erreur lors du rafraîchissement OFROU');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateWeightRule = async () => {
+    if (!weightForm.name) {
+      toast.error('Nom requis');
+      return;
+    }
+    setLoading(true);
+    try {
+      await Api.createRoadWeightRule({
+        name: weightForm.name,
+        geojson: weightForm.geojson || undefined,
+        max_weight_tons: weightForm.max_weight_tons ? parseFloat(weightForm.max_weight_tons) : undefined,
+        season: weightForm.season || undefined,
+        notes: weightForm.notes || undefined
+      });
+      toast.success('Règle poids tronçon créée');
+      setWeightForm({ name: '', geojson: '', max_weight_tons: '', season: '', notes: '' });
+      await loadRoadWeightRules();
+    } catch (error: any) {
+      toast.error(error.message || 'Erreur création règle poids');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateWinterRule = async () => {
+    if (!winterForm.vehicle_id) {
+      toast.error('Sélectionnez un véhicule');
+      return;
+    }
+    setLoading(true);
+    try {
+      await Api.createVehicleWinterRule({
+        vehicle_id: winterForm.vehicle_id,
+        season: winterForm.season || undefined,
+        winter_tires_required: winterForm.winter_tires_required,
+        chains_required: winterForm.chains_required,
+        max_weight_tons: winterForm.max_weight_tons ? parseFloat(winterForm.max_weight_tons) : undefined,
+        notes: winterForm.notes || undefined
+      });
+      toast.success('Règle hiver enregistrée');
+      setWinterForm({ vehicle_id: '', season: '', winter_tires_required: false, chains_required: false, max_weight_tons: '', notes: '' });
+      await loadWinterRules();
+    } catch (error: any) {
+      toast.error(error.message || 'Erreur création règle hiver');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTopoLookup = async () => {
+    if (!topoLat || !topoLon) return;
+    try {
+      setTopoLoading(true);
+      const res = await Api.fetchSwissTopoPoint(parseFloat(topoLat), parseFloat(topoLon));
+      setTopoResult(res);
+    } catch (error: any) {
+      toast.error(error.message || 'Erreur topo');
+    } finally {
+      setTopoLoading(false);
+    }
+  };
+
   const handleOptimizeRoute = async () => {
     if (selectedCustomers.length === 0) {
       toast.error('Sélectionnez au moins un client');
@@ -147,7 +299,10 @@ export const LogisticsOptimizationPage = () => {
       const result = await Api.optimizeRoute({
         customer_ids: selectedCustomers,
         vehicle_id: selectedVehicle || undefined,
-        algorithm: optimizationAlgorithm
+        algorithm: optimizationAlgorithm,
+        constraints: {
+          altitude_weight: altitudeWeight
+        }
       });
       setOptimizedResult(result);
       toast.success('Tournée optimisée avec succès');
@@ -387,6 +542,22 @@ export const LogisticsOptimizationPage = () => {
                   <option value="genetic">Génétique</option>
                   <option value="simulated_annealing">Recuit simulé</option>
                 </select>
+              </div>
+
+              <div className="form-group">
+                <label>Poids altitude / dénivelé (pondération conso/ETA)</label>
+                <input
+                  type="range"
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={altitudeWeight}
+                  onChange={(e) => setAltitudeWeight(parseFloat(e.target.value))}
+                />
+                <div className="range-value">{altitudeWeight.toFixed(1)}</div>
+                <p className="hint-text">
+                  0 = ignorer l'altitude, 1 = pondération standard, 2 = forte pénalisation des fortes pentes (conso/ETA).
+                </p>
               </div>
 
               <button
@@ -658,10 +829,16 @@ export const LogisticsOptimizationPage = () => {
             <div className="section-header">
               <h2>Suivi en Temps Réel</h2>
               <p>Suivez vos véhicules en temps réel avec ETA</p>
-              <button className="btn-secondary" onClick={loadTracking}>
-                <RefreshCw size={18} />
-                Actualiser
-              </button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button className="btn-secondary" onClick={loadTracking}>
+                  <RefreshCw size={18} />
+                  Actualiser suivi
+                </button>
+                <button className="btn-secondary" onClick={() => loadTelematics()}>
+                  <RefreshCw size={18} />
+                  Actualiser télématique
+                </button>
+              </div>
             </div>
 
             <div className="tracking-list">
@@ -707,12 +884,287 @@ export const LogisticsOptimizationPage = () => {
                 </div>
               )}
             </div>
+
+            <div className="section-header" style={{ marginTop: 24 }}>
+              <h3>Derniers événements télématiques</h3>
+              <p>Logs bruts reçus (Cartrack / Fleet Complete / Webhook générique)</p>
+            </div>
+            <div className="tracking-list">
+              {telematicsEvents.length === 0 ? (
+                <div className="empty-state">
+                  <Navigation size={48} />
+                  <p>Aucun événement télématique</p>
+                </div>
+              ) : (
+                <div className="tracking-grid">
+                  {telematicsEvents.slice(0, 10).map(evt => (
+                    <div key={evt.id} className="tracking-card">
+                      <div className="tracking-header">
+                        <h3>{evt.event_type}</h3>
+                        <span className="muted">{evt.vehicle_id || evt.device_id || 'device'}</span>
+                      </div>
+                      <p className="tracking-destination">
+                        <Navigation size={16} />
+                        {evt.lat && evt.lon ? `${evt.lat.toFixed(5)}, ${evt.lon.toFixed(5)}` : 'Coordonnées indisponibles'}
+                      </p>
+                      <div className="tracking-details">
+                        <span><strong>Vitesse:</strong> {evt.speed_kmh ?? '-'} km/h</span>
+                        <span><strong>Fuel:</strong> {evt.fuel_level_pct ?? '-'}%</span>
+                        <span><strong>Charge:</strong> {evt.load_pct ?? '-'}%</span>
+                        <span><strong>Alt:</strong> {evt.altitude_m ?? '-'} m</span>
+                        <span><strong>Heure:</strong> {evt.occurred_at ? format(new Date(evt.occurred_at), 'dd/MM/yyyy HH:mm', { locale: fr }) : '-'}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
         {/* Constraints Tab */}
         {activeTab === 'constraints' && (
           <div className="constraints-section">
+            <div className="section-header" style={{ marginBottom: 16 }}>
+              <h2>Contraintes CH</h2>
+              <p>Règles cantonales, fermetures OFROU et altitude SwissTopo</p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button className="btn-secondary" onClick={loadCantonRules}>Rafraîchir règles cantonales</button>
+                <button className="btn-secondary" onClick={loadOfrouClosures}>Recharger OFROU</button>
+                <button className="btn-primary" onClick={handleRefreshOfrou} disabled={loading}>Rafraîchir OFROU (admin)</button>
+              </div>
+            </div>
+
+            <div className="grid-2-cols" style={{ gap: 16, marginBottom: 24 }}>
+              <div className="card">
+                <div className="card-header">
+                  <h3>Règles cantonales</h3>
+                </div>
+                <div className="card-body" style={{ maxHeight: 260, overflow: 'auto' }}>
+                  {cantonRules.length === 0 ? (
+                    <p style={{ color: 'var(--text-muted)' }}>Aucune règle enregistrée</p>
+                  ) : (
+                    cantonRules.map((rule) => (
+                      <div key={rule.id} className="mini-row">
+                        <strong>{rule.canton_code}</strong>
+                        {rule.max_weight_tons && <span> • Max {rule.max_weight_tons} t</span>}
+                        {rule.blue_zone && <span> • Zone bleue</span>}
+                        {rule.quiet_hours && <span> • Plages silencieuses</span>}
+                        {rule.quotas && <span> • Quotas</span>}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-header">
+                  <h3>Fermetures OFROU</h3>
+                </div>
+                <div className="card-body" style={{ maxHeight: 260, overflow: 'auto' }}>
+                  {ofrouClosures.length === 0 ? (
+                    <p style={{ color: 'var(--text-muted)' }}>Aucune fermeture en cache</p>
+                  ) : (
+                    ofrouClosures.map((c) => (
+                      <div key={c.id} className="mini-row">
+                        <strong>{c.road_name || 'Route'}</strong> ({c.canton || 'CH'}) — {c.status || 'inconnu'}
+                        {c.valid_from && c.valid_to && (
+                          <span> • {new Date(c.valid_from).toLocaleDateString()} → {new Date(c.valid_to).toLocaleDateString()}</span>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="card" style={{ marginBottom: 24 }}>
+              <div className="card-header">
+                <h3>Altitude SwissTopo</h3>
+              </div>
+              <div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  type="number"
+                  placeholder="Lat"
+                  value={topoLat}
+                  onChange={(e) => setTopoLat(e.target.value)}
+                  style={{ width: 120 }}
+                />
+                <input
+                  type="number"
+                  placeholder="Lon"
+                  value={topoLon}
+                  onChange={(e) => setTopoLon(e.target.value)}
+                  style={{ width: 120 }}
+                />
+                <button className="btn-secondary" onClick={handleTopoLookup} disabled={topoLoading}>
+                  {topoLoading ? 'Recherche...' : 'Obtenir altitude'}
+                </button>
+                {topoResult && (
+                  <span style={{ color: 'var(--text-secondary)' }}>
+                    Alt: {topoResult.altitude_m ?? 'n/a'} m · pente: {topoResult.gradient ?? 'n/a'}
+                    {topoResult.cached ? ' (cache)' : ''}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="grid-2-cols" style={{ gap: 16, marginBottom: 24 }}>
+              <div className="card">
+                <div className="card-header">
+                  <h3>Règles poids par tronçon</h3>
+                </div>
+                <div className="card-body">
+                  <div className="form-group">
+                    <label>Nom / tronçon</label>
+                    <input
+                      type="text"
+                      value={weightForm.name}
+                      onChange={(e) => setWeightForm({ ...weightForm, name: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Max poids (tonnes)</label>
+                    <input
+                      type="number"
+                      value={weightForm.max_weight_tons}
+                      onChange={(e) => setWeightForm({ ...weightForm, max_weight_tons: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Saison</label>
+                    <input
+                      type="text"
+                      placeholder="hiver/été..."
+                      value={weightForm.season}
+                      onChange={(e) => setWeightForm({ ...weightForm, season: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>GeoJSON (optionnel)</label>
+                    <textarea
+                      rows={3}
+                      value={weightForm.geojson}
+                      onChange={(e) => setWeightForm({ ...weightForm, geojson: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Notes</label>
+                    <textarea
+                      rows={2}
+                      value={weightForm.notes}
+                      onChange={(e) => setWeightForm({ ...weightForm, notes: e.target.value })}
+                    />
+                  </div>
+                  <button className="btn-primary" onClick={handleCreateWeightRule} disabled={loading}>
+                    <PlusCircle size={18} />
+                    Ajouter règle poids
+                  </button>
+
+                  <div className="divider" />
+                  <div className="card-body" style={{ maxHeight: 220, overflow: 'auto', padding: 0 }}>
+                    {roadWeightRules.length === 0 ? (
+                      <p style={{ color: 'var(--text-muted)', padding: 8 }}>Aucune règle</p>
+                    ) : (
+                      roadWeightRules.map((r) => (
+                        <div key={r.id} className="mini-row">
+                          <strong>{r.name}</strong>
+                          {r.max_weight_tons && <span> • {r.max_weight_tons} t</span>}
+                          {r.season && <span> • {r.season}</span>}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-header">
+                  <h3>Pneus hiver / chaînes par véhicule</h3>
+                </div>
+                <div className="card-body">
+                  <div className="form-group">
+                    <label>Véhicule</label>
+                    <select
+                      value={winterForm.vehicle_id}
+                      onChange={(e) => setWinterForm({ ...winterForm, vehicle_id: e.target.value })}
+                    >
+                      <option value="">Sélectionner un véhicule</option>
+                      {vehicles.map(vehicle => (
+                        <option key={vehicle.id} value={vehicle.id}>
+                          {vehicle.internal_number || vehicle.plate_number || vehicle.id}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Saison</label>
+                    <input
+                      type="text"
+                      placeholder="hiver/été..."
+                      value={winterForm.season}
+                      onChange={(e) => setWinterForm({ ...winterForm, season: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group checkbox-row">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={winterForm.winter_tires_required}
+                        onChange={(e) => setWinterForm({ ...winterForm, winter_tires_required: e.target.checked })}
+                      />
+                      Pneus hiver obligatoires
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={winterForm.chains_required}
+                        onChange={(e) => setWinterForm({ ...winterForm, chains_required: e.target.checked })}
+                      />
+                      Chaînes requises
+                    </label>
+                  </div>
+                  <div className="form-group">
+                    <label>Max poids (tonnes)</label>
+                    <input
+                      type="number"
+                      value={winterForm.max_weight_tons}
+                      onChange={(e) => setWinterForm({ ...winterForm, max_weight_tons: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Notes</label>
+                    <textarea
+                      rows={2}
+                      value={winterForm.notes}
+                      onChange={(e) => setWinterForm({ ...winterForm, notes: e.target.value })}
+                    />
+                  </div>
+                  <button className="btn-primary" onClick={handleCreateWinterRule} disabled={loading}>
+                    <PlusCircle size={18} />
+                    Enregistrer règle hiver
+                  </button>
+
+                  <div className="divider" />
+                  <div className="card-body" style={{ maxHeight: 220, overflow: 'auto', padding: 0 }}>
+                    {winterRules.length === 0 ? (
+                      <p style={{ color: 'var(--text-muted)', padding: 8 }}>Aucune règle</p>
+                    ) : (
+                      winterRules.map((r) => (
+                        <div key={r.id} className="mini-row">
+                          <strong>{r.vehicle_id || 'Véhicule'}</strong>
+                          {r.season && <span> • {r.season}</span>}
+                          {r.winter_tires_required && <span> • pneus hiver</span>}
+                          {r.chains_required && <span> • chaînes</span>}
+                          {r.max_weight_tons && <span> • {r.max_weight_tons} t</span>}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="section-header">
               <h2>Contraintes de Routage</h2>
               <p>Gérez les contraintes pour l'optimisation</p>

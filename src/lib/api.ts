@@ -377,6 +377,36 @@ export type InvoiceDetail = Invoice & {
   payments: Payment[];
 };
 
+// Swiss logistics types
+export type CantonRule = {
+  id: string;
+  canton_code: string;
+  quiet_hours?: any | null;
+  blue_zone: boolean;
+  waste_types?: any | null;
+  quotas?: any | null;
+  max_weight_tons?: number | null;
+  notes?: string | null;
+  updated_at?: string | null;
+};
+
+export type OfrouClosure = {
+  id: string;
+  road_name?: string | null;
+  canton?: string | null;
+  status?: string | null;
+  reason?: string | null;
+  valid_from?: string | null;
+  valid_to?: string | null;
+  updated_at?: string | null;
+};
+
+export type SwissTopoPoint = {
+  altitude_m: number | null;
+  gradient: number | null;
+  cached?: boolean;
+};
+
 export type CreateInvoicePayload = {
   customer_id?: string;
   customer_name: string;
@@ -1104,6 +1134,10 @@ export const Api = {
 
   // Materials API
   fetchMaterials: () => request<Material[]>('/materials'),
+  searchMaterials: (q: string) =>
+    request<Material[]>(`/materials/search?q=${encodeURIComponent(q)}`),
+  searchCustomers: (q: string) =>
+    request<Customer[]>(`/customers/search?q=${encodeURIComponent(q)}`),
   createMaterial: (payload: {
     famille?: string;
     numero?: string;
@@ -2138,6 +2172,19 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
+  fetchRoadWeightRules: () => request<any[]>('/logistics/road-weight-rules'),
+  createRoadWeightRule: (payload: { name: string; geojson?: string; max_weight_tons?: number; season?: string; notes?: string }) =>
+    request<any>('/logistics/road-weight-rules', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchVehicleWinterRules: (vehicleId?: string) =>
+    request<any[]>(`/logistics/vehicle-winter-rules${vehicleId ? `?vehicle_id=${vehicleId}` : ''}`),
+  createVehicleWinterRule: (payload: { vehicle_id?: string; season?: string; winter_tires_required?: boolean; chains_required?: boolean; max_weight_tons?: number; notes?: string }) =>
+    request<any>('/logistics/vehicle-winter-rules', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
   simulateScenario: (payload: CreateScenarioPayload) =>
     request<{ scenario: RouteScenario }>('/logistics/simulate-scenario', {
       method: 'POST',
@@ -2181,6 +2228,68 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
+  // Telematics
+  postTelematicsWebhook: (payload: any) =>
+    request<{ status: string; event: any }>('/telematics/webhook', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchTelematicsEvents: (vehicleId?: string) => request<any[]>(`/telematics/events${vehicleId ? `?vehicle_id=${vehicleId}` : ''}`),
+
+  // VeVA / filières CH
+  fetchVevaCategories: () => request<any[]>('/veva/categories'),
+  upsertVevaCategory: (payload: { code: string; name: string; description?: string; type?: string }) =>
+    request<any>('/veva/categories', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchVevaSlips: () => request<any[]>('/veva/slips'),
+  createVevaSlip: (payload: { customer_id?: string; waste_type?: string; veva_category_code?: string; metadata?: any }) =>
+    request<any>('/veva/slips', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  signVevaSlip: (id: string) =>
+    request<any>(`/veva/slips/${id}/sign`, {
+      method: 'POST'
+    }),
+  fetchCustomsExports: () => request<any[]>('/customs/exports'),
+  createCustomsExport: (payload: { direction?: string; country?: string; document_url?: string; status?: string; metadata?: any }) =>
+    request<any>('/customs/exports', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  createSwissComplianceCertificate: (payload: { entity_type: string; entity_id?: string; pdf_url?: string; status?: string }) =>
+    request<any>('/swiss-compliance/certificates', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  // Déclassements avancés
+  fetchDowngrades: (lotId?: string) => request<any[]>(`/downgrades${lotId ? `?lot_id=${lotId}` : ''}`),
+  fetchDowngrade: (id: string) => request<any>(`/downgrades/${id}`),
+  createDowngrade: (payload: any) =>
+    request<any>('/downgrades', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateDowngrade: (id: string, payload: any) =>
+    request<any>(`/downgrades/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  fetchDowngradesPending: () => request<any[]>('/downgrades/pending'),
+  generateDowngradePdf: (id: string, payload?: { pdf_base64?: string; pdf_filename?: string; finalize?: boolean }) =>
+    request<any>(`/downgrades/${id}/pdf`, {
+      method: 'POST',
+      body: JSON.stringify(payload || {})
+    }),
+  createDowngradeVevaSlip: (id: string) =>
+    request<any>(`/downgrades/${id}/veva-slip`, {
+      method: 'POST'
+    }),
+  exportDowngrades: (format: 'excel' | 'sap' | 'ofrou' = 'excel') =>
+    request<any>(`/downgrades/export?format=${format}`),
   fetchRoutingConstraints: (filters?: { constraint_type?: string; is_active?: boolean }) => {
     const params = new URLSearchParams();
     if (filters?.constraint_type) params.set('constraint_type', filters.constraint_type);
@@ -2968,7 +3077,22 @@ export const Api = {
     }),
 
   // ===== RH avancé - Dashboard RH =====
-  fetchHrDashboard: () => request<HrDashboard>('/api/hr/dashboard')
+  fetchHrDashboard: () => request<HrDashboard>('/api/hr/dashboard'),
+
+  // ===== Swiss logistics utilities =====
+  fetchCantonRules: () => request<CantonRule[]>('/logistics/cantons/rules'),
+  upsertCantonRule: (payload: Partial<CantonRule> & { canton_code: string }) =>
+    request<CantonRule>('/logistics/cantons/rules', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  fetchOfrouClosures: () => request<OfrouClosure[]>('/logistics/ofrou/closures'),
+  refreshOfrouClosures: () =>
+    request<{ refreshed: number }>('/logistics/ofrou/refresh', {
+      method: 'POST'
+    }),
+  fetchSwissTopoPoint: (lat: number, lon: number) =>
+    request<SwissTopoPoint>(`/logistics/topo?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`)
 };
 
 // Alert & Notification types

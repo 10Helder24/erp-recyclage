@@ -3,6 +3,7 @@ import { ChevronDown, Menu, Loader2 } from 'lucide-react';
 
 import DestructionPage from './pages/DestructionPage';
 import DeclassementPage from './pages/DeclassementPage';
+import DeclassementDispoPage from './pages/DeclassementDispoPage';
 import EmployeesPage from './pages/EmployeesPage';
 import LeavePage from './pages/LeavePage';
 import CDTSheets from './pages/CDTSheets';
@@ -27,6 +28,7 @@ import { MobileOperatorPage } from './pages/MobileOperatorPage';
 import { AlertsPage } from './pages/AlertsPage';
 import { SecurityAlertsSettingsPage } from './pages/SecurityAlertsSettingsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { AdvancedPreferencesPage } from './pages/AdvancedPreferencesPage';
 import { MultiSitesPage } from './pages/MultiSitesPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { CompliancePage } from './pages/CompliancePage';
@@ -43,6 +45,7 @@ import { TrainingPage } from './pages/TrainingPage';
 import { RecruitmentPage } from './pages/RecruitmentPage';
 import { DriversHSETimeClockPage } from './pages/DriversHSETimeClockPage';
 import { useAuth } from './hooks/useAuth';
+import { useI18n } from './context/I18nContext';
 import { useOffline } from './hooks/useOffline';
 import { useServiceWorkerUpdate } from './hooks/useServiceWorkerUpdate';
 import { Api } from './lib/api';
@@ -86,10 +89,12 @@ const NAV_LINK_IDS = [
   'gamification',
   'global-search',
   'bi',
+  'DeclassementDispo',
   'payroll-contracts',
   'training',
   'recruitment',
-  'drivers-hse'
+  'drivers-hse',
+  'advancedPreferences'
 ] as const;
 type NavId = (typeof NAV_LINK_IDS)[number];
 
@@ -111,94 +116,9 @@ type NavSection =
       children: NavLink[];
     };
 
-    
-const NAV_SECTIONS: NavSection[] = [
-  { type: 'link', id: 'dashboard', label: 'Tableau de bord' },
-  { type: 'link', id: 'alerts', label: 'Alertes' },
-  { type: 'link', id: 'global-search', label: 'Recherche Globale' },
-  {
-    type: 'group',
-    id: 'rhPlus',
-    label: 'RH+',
-    children: [
-      { id: 'hr-dashboard', label: 'Dashboard RH+' },
-      { id: 'calendar', label: 'Calendrier' },
-      { id: 'employees', label: 'Employés' },
-      { id: 'payroll-contracts', label: 'Paie & Contrats', requiresManager: true },
-      { id: 'training', label: 'Formation continue', requiresManager: true },
-      { id: 'recruitment', label: 'Recrutement', requiresManager: true },
-      { id: 'drivers-hse', label: 'Chauffeurs & HSE', requiresManager: true }
-    ]
-  },
-  {
-    type: 'group',
-    id: 'inventaires',
-    label: 'Inventaires',
-    children: [
-      { id: 'CDTSheets', label: 'CDT' },
-          { id: 'IvntaireHalle', label: 'Inventaire halle' },
-      { id: 'expedition', label: 'Expéditions' }
-    ]
-  },
-  {
-    type: 'group',
-    id: 'matieres',
-    label: 'Matières',
-    children: [
-      { id: 'destruction', label: 'Destruction matières' },
-          { id: 'Declassement', label: 'Déclassement matières' }
-    ]
-  },
-  {
-    type: 'group',
-    id: 'logistique',
-    label: 'Logistique',
-    children: [
-      { id: 'map', label: 'Carte', requiresManager: true, requiresPermissions: ['view_map'] },
-      { id: 'interventions', label: 'Interventions', requiresManager: true, requiresPermissions: ['view_interventions'] },
-      { id: 'vehicles', label: 'Véhicules', requiresManager: true, requiresPermissions: ['view_vehicles'] },
-      { id: 'weighbridge', label: 'Pont-bascule', requiresManager: true, requiresPermissions: ['view_routes'] },
-      { id: 'routes', label: 'Routes & Tournées', requiresManager: true, requiresPermissions: ['view_routes'] },
-      { id: 'logistics', label: 'Tableau logistique', requiresManager: true, requiresPermissions: ['view_routes'] },
-      { id: 'mobile', label: 'Application Mobile', requiresManager: false }
-    ]
-  },
-  {
-    type: 'group',
-    id: 'gestion',
-    label: 'Gestion',
-    children: [
-      { id: 'customers', label: 'Clients', requiresManager: true, requiresPermissions: ['view_customers'] },
-      { id: 'materials', label: 'Gestion des matières', requiresManager: true, requiresPermissions: ['view_materials'] },
-      { id: 'finance', label: 'Finance', requiresManager: true, requiresPermissions: ['view_customers'] },
-      { id: 'stocks', label: 'Gestion des stocks', requiresManager: true, requiresPermissions: ['view_materials'] },
-      { id: 'crm', label: 'CRM', requiresManager: true, requiresPermissions: ['view_customers'] },
-      { id: 'reports', label: 'Rapports & Analytics', requiresManager: true, requiresPermissions: ['view_customers'] },
-      { id: 'bi', label: 'Business Intelligence', requiresManager: true, requiresPermissions: ['view_customers'] },
-      { id: 'compliance', label: 'Conformité & Traçabilité', requiresManager: true, requiresPermissions: ['view_customers'] },
-      { id: 'logistics-optimization', label: 'Optimisation Logistique', requiresManager: true, requiresPermissions: ['view_customers'] },
-      { id: 'suppliers', label: 'Gestion des Fournisseurs', requiresManager: true, requiresPermissions: ['view_customers'] },
-      { id: 'documents', label: 'Gestion Documentaire', requiresManager: true, requiresPermissions: ['view_customers'] },
-      { id: 'integrations', label: 'Intégrations Externes', requiresAdmin: true },
-      { id: 'gamification', label: 'Gamification', requiresManager: false }
-    ]
-  },
-  {
-    type: 'group',
-    id: 'parametres',
-    label: 'Paramètres',
-    children: [
-      { id: 'settings', label: 'Sécurité & Confidentialité' },
-      { id: 'pdfTemplates', label: 'Templates PDF', requiresAdmin: true },
-      { id: 'adminUsers', label: 'Utilisateurs', requiresAdmin: true },
-      { id: 'multiSites', label: 'Multi-sites & Devises', requiresAdmin: true },
-      { id: 'securityAlertsSettings', label: 'Alertes sécurité', requiresAdmin: true }
-    ]
-  }
-];
-
 const App = () => {
   const { user, loading, logout, hasRole, hasPermission } = useAuth();
+  const { t } = useI18n();
   const { pendingCount } = useOffline();
   const { checkForUpdate } = useServiceWorkerUpdate(); // Vérifie automatiquement les mises à jour
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -209,6 +129,98 @@ const App = () => {
   const [showGeoPrompt, setShowGeoPrompt] = useState(false);
   const [geoWatchId, setGeoWatchId] = useState<number | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
+
+  // Fonction helper pour traduire les labels de navigation
+  const getNavLabel = (id: string): string => {
+    return t(`nav.${id}`) || id;
+  };
+
+  // Navigation avec traductions dynamiques
+  const NAV_SECTIONS: NavSection[] = useMemo(() => [
+    { type: 'link', id: 'dashboard', label: getNavLabel('dashboard') },
+    { type: 'link', id: 'alerts', label: getNavLabel('alerts') },
+    { type: 'link', id: 'global-search', label: getNavLabel('global-search') },
+    {
+      type: 'group',
+      id: 'rhPlus',
+      label: getNavLabel('rhPlus'),
+      children: [
+        { id: 'hr-dashboard', label: getNavLabel('hr-dashboard') },
+        { id: 'calendar', label: getNavLabel('calendar') },
+        { id: 'employees', label: getNavLabel('employees') },
+        { id: 'payroll-contracts', label: getNavLabel('payroll-contracts'), requiresManager: true },
+        { id: 'training', label: getNavLabel('training'), requiresManager: true },
+        { id: 'recruitment', label: getNavLabel('recruitment'), requiresManager: true },
+        { id: 'drivers-hse', label: getNavLabel('drivers-hse'), requiresManager: true }
+      ]
+    },
+    {
+      type: 'group',
+      id: 'inventaires',
+      label: getNavLabel('inventaires'),
+      children: [
+        { id: 'CDTSheets', label: getNavLabel('CDTSheets') },
+        { id: 'IvntaireHalle', label: getNavLabel('IvntaireHalle') },
+        { id: 'expedition', label: getNavLabel('expedition') }
+      ]
+    },
+    {
+      type: 'group',
+      id: 'matieres',
+      label: getNavLabel('matieres'),
+      children: [
+        { id: 'destruction', label: getNavLabel('destruction') },
+        { id: 'Declassement', label: getNavLabel('Declassement') },
+        { id: 'DeclassementDispo', label: 'Déclassements (Dispo)', requiresManager: true }
+      ]
+    },
+    {
+      type: 'group',
+      id: 'logistique',
+      label: getNavLabel('logistique'),
+      children: [
+        { id: 'map', label: getNavLabel('map'), requiresManager: true, requiresPermissions: ['view_map'] },
+        { id: 'interventions', label: getNavLabel('interventions'), requiresManager: true, requiresPermissions: ['view_interventions'] },
+        { id: 'vehicles', label: getNavLabel('vehicles'), requiresManager: true, requiresPermissions: ['view_vehicles'] },
+        { id: 'weighbridge', label: getNavLabel('weighbridge'), requiresManager: true, requiresPermissions: ['view_routes'] },
+        { id: 'routes', label: getNavLabel('routes'), requiresManager: true, requiresPermissions: ['view_routes'] },
+        { id: 'logistics', label: getNavLabel('logistics'), requiresManager: true, requiresPermissions: ['view_routes'] },
+        { id: 'mobile', label: getNavLabel('mobile'), requiresManager: false }
+      ]
+    },
+    {
+      type: 'group',
+      id: 'gestion',
+      label: getNavLabel('gestion'),
+      children: [
+        { id: 'customers', label: getNavLabel('customers'), requiresManager: true, requiresPermissions: ['view_customers'] },
+        { id: 'materials', label: getNavLabel('materials'), requiresManager: true, requiresPermissions: ['view_materials'] },
+        { id: 'finance', label: getNavLabel('finance'), requiresManager: true, requiresPermissions: ['view_customers'] },
+        { id: 'stocks', label: getNavLabel('stocks'), requiresManager: true, requiresPermissions: ['view_materials'] },
+        { id: 'crm', label: getNavLabel('crm'), requiresManager: true, requiresPermissions: ['view_customers'] },
+        { id: 'reports', label: getNavLabel('reports'), requiresManager: true, requiresPermissions: ['view_customers'] },
+        { id: 'bi', label: getNavLabel('bi'), requiresManager: true, requiresPermissions: ['view_customers'] },
+        { id: 'compliance', label: getNavLabel('compliance'), requiresManager: true, requiresPermissions: ['view_customers'] },
+        { id: 'logistics-optimization', label: getNavLabel('logistics-optimization'), requiresManager: true, requiresPermissions: ['view_customers'] },
+        { id: 'suppliers', label: getNavLabel('suppliers'), requiresManager: true, requiresPermissions: ['view_customers'] },
+        { id: 'documents', label: getNavLabel('documents'), requiresManager: true, requiresPermissions: ['view_customers'] },
+        { id: 'integrations', label: getNavLabel('integrations'), requiresAdmin: true },
+        { id: 'gamification', label: getNavLabel('gamification'), requiresManager: false }
+      ]
+    },
+    {
+      type: 'group',
+      id: 'parametres',
+      label: getNavLabel('parametres'),
+      children: [
+        { id: 'settings', label: getNavLabel('settings') },
+        { id: 'pdfTemplates', label: getNavLabel('pdfTemplates'), requiresAdmin: true },
+        { id: 'adminUsers', label: getNavLabel('adminUsers'), requiresAdmin: true },
+        { id: 'multiSites', label: getNavLabel('multiSites'), requiresAdmin: true },
+        { id: 'securityAlertsSettings', label: getNavLabel('securityAlertsSettings'), requiresAdmin: true }
+      ]
+    }
+  ], [t]);
 
   // Service Worker est déjà enregistré dans main.tsx, pas besoin de le refaire ici
 
@@ -221,9 +233,11 @@ const App = () => {
 
   useEffect(() => {
     if (user) {
+      // Ne pas déclencher automatiquement la géoloc : attendre un geste utilisateur (bouton)
       const storedConsent = typeof window !== 'undefined' ? window.localStorage.getItem('geoConsent') : null;
       if (storedConsent === 'granted') {
-        handleEnableGeolocation(true);
+        // On affiche le prompt/bouton mais on ne déclenche pas la requête pour éviter le warning
+        setShowGeoPrompt(true);
       } else {
         setShowGeoPrompt(true);
       }
@@ -333,6 +347,17 @@ const App = () => {
     closeSidebarOnMobile();
   };
 
+  useEffect(() => {
+    const handleNavigate = (event: CustomEvent) => {
+      if (event.detail?.page) {
+        setActiveNav(event.detail.page as NavId);
+        closeSidebarOnMobile();
+      }
+    };
+    window.addEventListener('navigate', handleNavigate as EventListener);
+    return () => window.removeEventListener('navigate', handleNavigate as EventListener);
+  }, []);
+
   const activePage = useMemo(() => {
     if (!user) {
       return null;
@@ -364,6 +389,8 @@ const App = () => {
         return <ExpeditionPage />;
       case 'Declassement':
         return <DeclassementPage />;
+      case 'DeclassementDispo':
+        return <DeclassementDispoPage />;
       case 'map':
         return hasRole('admin') || hasRole('manager') || hasPermission('view_map') ? (
           <MapPage />
@@ -446,6 +473,8 @@ const App = () => {
         );
       case 'settings':
         return <SettingsPage />;
+      case 'advancedPreferences':
+        return <AdvancedPreferencesPage />;
       case 'securityAlertsSettings':
         return hasRole('admin') ? (
           <SecurityAlertsSettingsPage />

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { Api } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
+import { useI18n } from '../context/I18nContext';
 import toast from 'react-hot-toast';
 
 type DashboardKpis = {
@@ -64,6 +65,7 @@ type DashboardKpis = {
 
 const DashboardPage = () => {
   const { hasRole } = useAuth();
+  const { t } = useI18n();
   const isAdmin = hasRole('admin');
   const isManager = hasRole('manager');
   
@@ -101,10 +103,10 @@ const DashboardPage = () => {
 
   const formatPeriodLabel = (p: string) => {
     switch (p) {
-      case 'day': return "Aujourd'hui";
-      case 'week': return 'Cette semaine';
-      case 'month': return 'Ce mois';
-      case 'year': return 'Cette année';
+      case 'day': return t('dashboard.period.today');
+      case 'week': return t('dashboard.period.thisWeek');
+      case 'month': return t('dashboard.period.thisMonth');
+      case 'year': return t('dashboard.period.thisYear');
       default: return p;
     }
   };
@@ -116,10 +118,10 @@ const DashboardPage = () => {
     if (total === 0) return [];
     
     return [
-      { name: 'Halle (BB)', value: dist.halle, percentage: (dist.halle / total) * 100, color: '#3b82f6' },
-      { name: 'Plastique (balles)', value: dist.plastique, percentage: (dist.plastique / total) * 100, color: '#10b981' },
-      { name: 'CDT (m³)', value: dist.cdt, percentage: (dist.cdt / total) * 100, color: '#f59e0b' },
-      { name: 'Papier (balles)', value: dist.papier, percentage: (dist.papier / total) * 100, color: '#ef4444' }
+      { name: t('dashboard.material.halle'), value: dist.halle, percentage: (dist.halle / total) * 100, color: '#3b82f6' },
+      { name: t('dashboard.material.plastique'), value: dist.plastique, percentage: (dist.plastique / total) * 100, color: '#10b981' },
+      { name: t('dashboard.material.cdt'), value: dist.cdt, percentage: (dist.cdt / total) * 100, color: '#f59e0b' },
+      { name: t('dashboard.material.papier'), value: dist.papier, percentage: (dist.papier / total) * 100, color: '#ef4444' }
     ].filter(item => item.value > 0);
   }, [kpis]);
 
@@ -130,7 +132,7 @@ const DashboardPage = () => {
           <div className="destruction-card">
             <div style={{ padding: '40px', textAlign: 'center' }}>
               <RefreshCw className="spinner" size={32} style={{ animation: 'spin 1s linear infinite' }} />
-              <p style={{ marginTop: '16px' }}>Chargement des données...</p>
+              <p style={{ marginTop: '16px' }}>{t('dashboard.loading')}</p>
             </div>
           </div>
         </div>
@@ -145,7 +147,7 @@ const DashboardPage = () => {
           <div className="destruction-card">
             <div style={{ padding: '40px', textAlign: 'center' }}>
               <AlertCircle size={32} style={{ color: 'var(--text-secondary)' }} />
-              <p style={{ marginTop: '16px' }}>Aucune donnée disponible</p>
+              <p style={{ marginTop: '16px' }}>{t('dashboard.noData')}</p>
             </div>
           </div>
         </div>
@@ -159,9 +161,9 @@ const DashboardPage = () => {
         <div className="destruction-card">
           <div className="destruction-card__header">
             <div>
-              <p className="eyebrow">Tableau de bord</p>
-              <h1>Vue d'ensemble</h1>
-              <p>Indicateurs clés de performance en temps réel</p>
+              <p className="eyebrow">{t('dashboard.title')}</p>
+              <h1>{t('dashboard.overview')}</h1>
+              <p>{t('dashboard.subtitle')}</p>
             </div>
             <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
               <div className="destruction-field" style={{ maxWidth: 200 }}>
@@ -170,10 +172,10 @@ const DashboardPage = () => {
                   value={period}
                   onChange={(e) => setPeriod(e.target.value as any)}
                 >
-                  <option value="day">Aujourd'hui</option>
-                  <option value="week">Cette semaine</option>
-                  <option value="month">Ce mois</option>
-                  <option value="year">Cette année</option>
+                  <option value="day">{t('dashboard.period.today')}</option>
+                  <option value="week">{t('dashboard.period.thisWeek')}</option>
+                  <option value="month">{t('dashboard.period.thisMonth')}</option>
+                  <option value="year">{t('dashboard.period.thisYear')}</option>
                 </select>
               </div>
               <button
@@ -182,7 +184,7 @@ const DashboardPage = () => {
                 disabled={loading}
               >
                 <RefreshCw size={18} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-                Actualiser
+                {t('dashboard.refresh')}
               </button>
             </div>
           </div>
@@ -206,7 +208,7 @@ const DashboardPage = () => {
                 </span>
               </div>
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                Dernière mise à jour : {lastUpdate.toLocaleTimeString('fr-FR')}
+                {t('dashboard.lastUpdate')}: {lastUpdate.toLocaleTimeString('fr-FR')}
               </div>
             </div>
 
@@ -221,7 +223,7 @@ const DashboardPage = () => {
               <div className="kpi-card">
                 <div className="kpi-card__header">
                   <Package size={20} style={{ color: 'var(--primary)' }} />
-                  <span className="kpi-card__label">Volume total</span>
+                  <span className="kpi-card__label">{t('dashboard.kpi.totalVolume')}</span>
                 </div>
                 <div className="kpi-card__value">{formatNumber(kpis.volumes.total)}</div>
                 <div className="kpi-card__details">
@@ -237,17 +239,17 @@ const DashboardPage = () => {
               <div className="kpi-card">
                 <div className="kpi-card__header">
                   <Truck size={20} style={{ color: 'var(--primary)' }} />
-                  <span className="kpi-card__label">Routes</span>
+                  <span className="kpi-card__label">{t('dashboard.kpi.routes')}</span>
                 </div>
                 <div className="kpi-card__value">
                   {kpis.performance.routes.completed} / {kpis.performance.routes.total}
                 </div>
                 <div className="kpi-card__details">
-                  <span>{kpis.performance.routes.completion_rate}% complétées</span>
+                  <span>{kpis.performance.routes.completion_rate}% {t('dashboard.kpi.completed')}</span>
                   {kpis.performance.routes.avg_duration_minutes > 0 && (
                     <>
                       <span>•</span>
-                      <span>Durée moy: {Math.round(kpis.performance.routes.avg_duration_minutes / 60)}h{Math.round(kpis.performance.routes.avg_duration_minutes % 60)}</span>
+                      <span>{t('dashboard.kpi.avgDuration')}: {Math.round(kpis.performance.routes.avg_duration_minutes / 60)}h{Math.round(kpis.performance.routes.avg_duration_minutes % 60)}</span>
                     </>
                   )}
                 </div>
@@ -257,17 +259,17 @@ const DashboardPage = () => {
               <div className="kpi-card">
                 <div className="kpi-card__header">
                   <AlertCircle size={20} style={{ color: 'var(--primary)' }} />
-                  <span className="kpi-card__label">Interventions</span>
+                  <span className="kpi-card__label">{t('dashboard.kpi.interventions')}</span>
                 </div>
                 <div className="kpi-card__value">
                   {kpis.performance.interventions.completed} / {kpis.performance.interventions.total}
                 </div>
                 <div className="kpi-card__details">
-                  <span>{kpis.performance.interventions.completion_rate}% complétées</span>
+                  <span>{kpis.performance.interventions.completion_rate}% {t('dashboard.kpi.completed')}</span>
                   {kpis.performance.interventions.pending > 0 && (
                     <>
                       <span>•</span>
-                      <span style={{ color: 'var(--warning)' }}>{kpis.performance.interventions.pending} en attente</span>
+                      <span style={{ color: 'var(--warning)' }}>{kpis.performance.interventions.pending} {t('dashboard.kpi.pending')}</span>
                     </>
                   )}
                 </div>
@@ -277,13 +279,13 @@ const DashboardPage = () => {
               <div className="kpi-card">
                 <div className="kpi-card__header">
                   <BarChart3 size={20} style={{ color: 'var(--primary)' }} />
-                  <span className="kpi-card__label">Remplissage véhicules</span>
+                  <span className="kpi-card__label">{t('dashboard.kpi.vehicleFill')}</span>
                 </div>
                 <div className="kpi-card__value">
                   {Math.round(kpis.performance.vehicle_fill_rate * 100)}%
                 </div>
                 <div className="kpi-card__details">
-                  <span>Taux moyen de remplissage</span>
+                  <span>{t('dashboard.kpi.avgFillRate')}</span>
                 </div>
               </div>
             </div>
@@ -299,7 +301,7 @@ const DashboardPage = () => {
               <div className="chart-card">
                 <div className="chart-card__header">
                   <BarChart3 size={20} />
-                  <h3>Évolution des volumes (12 mois)</h3>
+                  <h3>{t('dashboard.chart.monthlyEvolution')}</h3>
                 </div>
                 <div className="chart-card__body">
                   {kpis.charts.monthly_evolution.length > 0 ? (
@@ -350,7 +352,7 @@ const DashboardPage = () => {
               <div className="chart-card">
                 <div className="chart-card__header">
                   <PieChart size={20} />
-                  <h3>Répartition par type de matière</h3>
+                  <h3>{t('dashboard.chart.materialDistribution')}</h3>
                 </div>
                 <div className="chart-card__body">
                   {materialDistributionData.length > 0 ? (

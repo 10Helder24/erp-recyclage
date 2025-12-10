@@ -35,7 +35,10 @@ const AUTH_SETUP_TOKEN = process.env.AUTH_SETUP_TOKEN;
 // VAPID keys pour les notifications push
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
-const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@retripa.com';
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:h.ferreira@retripa.com';
+const SWISS_TOPO_URL = process.env.SWISS_TOPO_URL || 'https://api3.geo.admin.ch/rest/services/profile.json';
+const SWISS_TOPO_HEIGHT_URL = process.env.SWISS_TOPO_HEIGHT_URL || 'https://api3.geo.admin.ch/rest/services/height';
+const OFROU_GEOADMIN_LAYER = process.env.OFROU_GEOADMIN_LAYER || 'ch.astra.wanderland-sperrungen_umleitungen';
 
 // Configurer web-push si les clés sont disponibles
 let webpush: any = null;
@@ -134,6 +137,38 @@ type MapRouteStopRow = {
   vehicle_id: string | null;
   internal_number: string | null;
   plate_number: string | null;
+};
+
+type CantonRuleRow = {
+  id: string;
+  canton_code: string;
+  quiet_hours: any | null;
+  blue_zone: boolean;
+  waste_types: any | null;
+  quotas: any | null;
+  max_weight_tons: number | null;
+  notes: string | null;
+  updated_at: string | null;
+};
+
+type OfrouClosureRow = {
+  id: string;
+  road_name: string | null;
+  canton: string | null;
+  status: string | null;
+  reason: string | null;
+  valid_from: string | null;
+  valid_to: string | null;
+  updated_at: string | null;
+};
+
+type SwissTopoCacheRow = {
+  id: string;
+  lat: number;
+  lon: number;
+  altitude_m: number | null;
+  gradient: number | null;
+  updated_at: string | null;
 };
 
 type UserRow = {
@@ -1733,6 +1768,11 @@ const ensureSchema = async () => {
       created_at timestamptz not null default now()
     )
   `);
+  await run(`alter table vehicles add column if not exists vehicle_type text`);
+  await run(`alter table vehicles add column if not exists max_weight_kg numeric`);
+  await run(`alter table vehicles add column if not exists max_volume_m3 numeric`);
+  await run(`alter table vehicles add column if not exists compatible_materials text[]`);
+  await run(`alter table vehicles add column if not exists status text`);
 
   await run(`
     create table if not exists customers (
@@ -1768,6 +1808,7 @@ const ensureSchema = async () => {
   await run('create index if not exists sites_customer_idx on sites(customer_id)');
   await run('create index if not exists sites_active_idx on sites(active)');
 
+  // Table matières (recréation/alignement)
   await run(`
     create table if not exists materials (
       id uuid primary key default gen_random_uuid(),
@@ -1775,14 +1816,27 @@ const ensureSchema = async () => {
       numero text,
       abrege text,
       description text,
+      description_sortante text,
+      services text,
       unite text,
       me_bez text,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     )
   `);
+  await run('alter table materials add column if not exists famille text');
+  await run('alter table materials add column if not exists numero text');
+  await run('alter table materials add column if not exists abrege text');
+  await run('alter table materials add column if not exists description text');
+  await run('alter table materials add column if not exists description_sortante text');
+  await run('alter table materials add column if not exists services text');
+  await run('alter table materials add column if not exists unite text');
+  await run('alter table materials add column if not exists me_bez text');
+  await run('alter table materials add column if not exists created_at timestamptz not null default now()');
+  await run('alter table materials add column if not exists updated_at timestamptz not null default now()');
   await run('create index if not exists materials_abrege_idx on materials(abrege)');
   await run('create index if not exists materials_famille_idx on materials(famille)');
+  await run('create index if not exists materials_numero_idx on materials(numero)');
 
   // Qualités de matières (MaterialQualities)
   await run(`
@@ -2699,6 +2753,9 @@ const ensureSchema = async () => {
       updated_at timestamptz not null default now()
     )
   `);
+  // Sécurise la présence de la colonne code si la table existait sans elle
+  await run(`alter table sites add column if not exists code text`);
+  await run(`update sites set code = coalesce(code, name) where code is null`);
   await run('create index if not exists sites_code_idx on sites(code)');
   await run('create index if not exists sites_active_idx on sites(is_active)');
   
@@ -2729,6 +2786,9 @@ const ensureSchema = async () => {
       updated_at timestamptz not null default now()
     )
   `);
+  // Sécurise la présence de la colonne code si la table existait sans elle
+  await run(`alter table currencies add column if not exists code text`);
+  await run(`update currencies set code = coalesce(code, name) where code is null`);
   await run('create index if not exists currencies_code_idx on currencies(code)');
   await run('create index if not exists currencies_active_idx on currencies(is_active)');
 
@@ -2759,6 +2819,150 @@ const ensureSchema = async () => {
   `);
   await run('create index if not exists site_consolidations_date_idx on site_consolidations(consolidation_date desc)');
   await run('create index if not exists site_consolidations_site_idx on site_consolidations(site_id)');
+
+  // ==================== Parc véhicules & télématique (CH) ====================
+  await run(`
+    create table if not exists telematics_connectors (
+      id uuid primary key default gen_random_uuid(),
+      name text not null,
+      provider text not null,
+      webhook_secret text,
+      config jsonb,
+      created_at timestamptz not null default now()
+    )
+  `);
+
+  await run(`
+    create table if not exists telematics_devices (
+      id uuid primary key default gen_random_uuid(),
+      vehicle_id uuid references vehicles(id) on delete set null,
+      connector_id uuid references telematics_connectors(id) on delete set null,
+      external_id text,
+      metadata jsonb,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists telematics_devices_vehicle_idx on telematics_devices(vehicle_id)');
+
+  await run(`
+    create table if not exists telematics_events (
+      id uuid primary key default gen_random_uuid(),
+      device_id uuid references telematics_devices(id) on delete set null,
+      vehicle_id uuid references vehicles(id) on delete set null,
+      event_type text not null,
+      payload jsonb,
+      lat numeric,
+      lon numeric,
+      speed_kmh numeric,
+      fuel_level_pct numeric,
+      load_pct numeric,
+      altitude_m numeric,
+      occurred_at timestamptz default now(),
+      received_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists telematics_events_vehicle_idx on telematics_events(vehicle_id)');
+  await run('create index if not exists telematics_events_occurred_idx on telematics_events(occurred_at desc)');
+
+  await run(`
+    create table if not exists vehicle_checklists (
+      id uuid primary key default gen_random_uuid(),
+      vehicle_id uuid references vehicles(id) on delete cascade,
+      items jsonb not null,
+      status text not null default 'pending',
+      driver_id uuid references employees(id) on delete set null,
+      performed_at timestamptz,
+      created_at timestamptz not null default now()
+    )
+  `);
+
+  await run(`
+    create table if not exists vehicle_maintenance_alerts (
+      id uuid primary key default gen_random_uuid(),
+      vehicle_id uuid references vehicles(id) on delete cascade,
+      obd_code text,
+      severity text,
+      message text,
+      triggered_at timestamptz not null default now(),
+      cleared_at timestamptz
+    )
+  `);
+
+  await run(`
+    create table if not exists road_weight_rules (
+      id uuid primary key default gen_random_uuid(),
+      name text not null,
+      geojson text,
+      max_weight_tons numeric,
+      season text,
+      notes text,
+      created_at timestamptz not null default now()
+    )
+  `);
+
+  await run(`
+    create table if not exists vehicle_winter_rules (
+      id uuid primary key default gen_random_uuid(),
+      vehicle_id uuid references vehicles(id) on delete cascade,
+      season text,
+      winter_tires_required boolean default false,
+      chains_required boolean default false,
+      max_weight_tons numeric,
+      notes text,
+      created_at timestamptz not null default now()
+    )
+  `);
+
+  // ==================== VeVA / filières CH ====================
+  await run(`
+    create table if not exists veva_categories (
+      code text primary key,
+      name text not null,
+      description text,
+      type text
+    )
+  `);
+
+  await run(`
+    create table if not exists veva_slips (
+      id uuid primary key default gen_random_uuid(),
+      slip_number text unique,
+      customer_id uuid references customers(id) on delete set null,
+      downgrade_id uuid references downgrades(id) on delete set null,
+      waste_type text,
+      veva_category_code text references veva_categories(code) on delete set null,
+      qr_reference text,
+      pdf_url text,
+      status text default 'draft',
+      issued_at timestamptz default now(),
+      signed_at timestamptz,
+      swissid_status text,
+      metadata jsonb
+    )
+  `);
+
+  await run(`
+    create table if not exists customs_exports (
+      id uuid primary key default gen_random_uuid(),
+      direction text not null, -- export/import
+      country text,
+      document_url text,
+      status text default 'draft',
+      created_at timestamptz not null default now(),
+      metadata jsonb
+    )
+  `);
+
+  await run(`
+    create table if not exists swiss_compliance_certificates (
+      id uuid primary key default gen_random_uuid(),
+      entity_type text not null,
+      entity_id uuid,
+      pdf_url text,
+      issued_at timestamptz not null default now(),
+      status text default 'issued'
+    )
+  `);
 
   // Initialiser les devises par défaut si elles n'existent pas
   try {
@@ -3093,6 +3297,8 @@ const ensureSchema = async () => {
   await run('create index if not exists invoices_status_idx on invoices(status)');
   await run('create index if not exists invoices_issue_date_idx on invoices(issue_date desc)');
   await run('create index if not exists invoices_due_date_idx on invoices(due_date)');
+  await run('alter table invoices add column if not exists vat_ch_rate numeric default 0.077');
+  await run('alter table invoices add column if not exists swiss_compliance_cert boolean default false');
 
   // Lignes de facture
   await run(`
@@ -3298,8 +3504,100 @@ const ensureSchema = async () => {
   `);
   await run('alter table downgrades add column if not exists from_quality_id uuid references material_qualities(id) on delete set null');
   await run('alter table downgrades add column if not exists to_quality_id uuid references material_qualities(id) on delete set null');
+  await run('alter table downgrades add column if not exists lot_origin_site_id uuid references sites(id) on delete set null');
+  await run('alter table downgrades add column if not exists lot_origin_client_id uuid references customers(id) on delete set null');
+  await run('alter table downgrades add column if not exists lot_origin_canton text');
+  await run('alter table downgrades add column if not exists lot_origin_commune text');
+  await run('alter table downgrades add column if not exists lot_entry_date date');
+  await run('alter table downgrades add column if not exists lot_entry_at timestamptz');
+  await run('alter table downgrades add column if not exists lot_veva_code text');
+  await run('alter table downgrades add column if not exists lot_internal_code text');
+  await run('alter table downgrades add column if not exists lot_filiere text');
+  await run('alter table downgrades add column if not exists lot_quality_grade text');
+  await run('alter table downgrades add column if not exists lot_quality_metrics jsonb');
+  await run('alter table downgrades add column if not exists lot_weight_brut numeric');
+  await run('alter table downgrades add column if not exists lot_weight_tare numeric');
+  await run('alter table downgrades add column if not exists lot_weight_net numeric');
+  await run('alter table downgrades add column if not exists status text default \'draft\' check (status in (\'draft\', \'pending_completion\', \'pending_validation\', \'validated\', \'sent\'))');
+  await run('alter table downgrades add column if not exists validated_at timestamptz');
+  await run('alter table downgrades add column if not exists validated_by uuid references users(id) on delete set null');
+  await run('alter table downgrades add column if not exists sent_at timestamptz');
+  await run('alter table downgrades add column if not exists sent_by uuid references users(id) on delete set null');
+  await run('alter table downgrades add column if not exists motive_principal text');
+  await run('alter table downgrades add column if not exists motive_description text');
+  await run('alter table downgrades add column if not exists photos_avant text[]');
+  await run('alter table downgrades add column if not exists photos_apres text[]');
+  await run('alter table downgrades add column if not exists controller_name text');
+  await run('alter table downgrades add column if not exists controller_signature text');
+  await run('alter table downgrades add column if not exists incident_number text');
+  await run('alter table downgrades add column if not exists new_category text');
+  await run('alter table downgrades add column if not exists new_veva_code text');
+  await run('alter table downgrades add column if not exists new_quality text');
+  await run('alter table downgrades add column if not exists poids_net_declasse numeric');
+  await run('alter table downgrades add column if not exists stockage_type text');
+  await run('alter table downgrades add column if not exists destination text');
+  await run('alter table downgrades add column if not exists veva_type text');
+  await run('alter table downgrades add column if not exists previous_producer text');
+  await run('alter table downgrades add column if not exists planned_transporter text');
+  await run('alter table downgrades add column if not exists veva_slip_number text');
+  await run('alter table downgrades add column if not exists swissid_signature text');
+  await run('alter table downgrades add column if not exists documents jsonb');
+  await run('alter table downgrades add column if not exists omod_category text');
+  await run('alter table downgrades add column if not exists omod_dangerosity text');
+  await run('alter table downgrades add column if not exists omod_dismantling_required boolean');
+  await run('alter table downgrades add column if not exists ldtr_canton text');
+  await run('alter table downgrades add column if not exists canton_rules_applied text');
+  await run('alter table downgrades add column if not exists proof_photos text[]');
+  await run('alter table downgrades add column if not exists emplacement_actuel text');
+  await run('alter table downgrades add column if not exists nouvel_emplacement text');
+  await run('alter table downgrades add column if not exists mouvement_type text');
+  await run('alter table downgrades add column if not exists transport_number text');
+  await run('alter table downgrades add column if not exists driver_id uuid references employees(id) on delete set null');
+  await run('alter table downgrades add column if not exists vehicle_id uuid references vehicles(id) on delete set null');
+  await run('alter table downgrades add column if not exists weighbridge_id uuid references weighings(id) on delete set null');
+  await run('alter table downgrades add column if not exists poids_final_brut numeric');
+  await run('alter table downgrades add column if not exists poids_final_tare numeric');
+  await run('alter table downgrades add column if not exists poids_final_net numeric');
+  await run('alter table downgrades add column if not exists seal_number text');
+  await run('alter table downgrades add column if not exists valeur_avant numeric');
+  await run('alter table downgrades add column if not exists valeur_apres numeric');
+  await run('alter table downgrades add column if not exists perte_gain numeric');
+  await run('alter table downgrades add column if not exists responsable_validation text');
+  await run('alter table downgrades add column if not exists cause_economique text');
+  await run('alter table downgrades add column if not exists impact_marge numeric');
+  await run('alter table downgrades add column if not exists risques_identifies text[]');
+  await run('alter table downgrades add column if not exists epis_requis text[]');
+  await run('alter table downgrades add column if not exists procedure_suivie text');
+  await run('alter table downgrades add column if not exists anomalie_signalee boolean');
+  await run('alter table downgrades add column if not exists declaration_securite text');
+  await run('alter table downgrades add column if not exists declassed_material text');
+  await run('alter table downgrades add column if not exists status text default \'draft\' check (status in (\'draft\', \'pending_completion\', \'pending_validation\', \'validated\', \'sent\'))');
+  await run('alter table downgrades add column if not exists validated_at timestamptz');
+  await run('alter table downgrades add column if not exists validated_by uuid references users(id) on delete set null');
+  await run('alter table downgrades add column if not exists sent_at timestamptz');
+  await run('alter table downgrades add column if not exists sent_by uuid references users(id) on delete set null');
   await run('create index if not exists downgrades_lot_idx on downgrades(lot_id, performed_at desc)');
   await run('create index if not exists downgrades_from_quality_idx on downgrades(from_quality_id) where from_quality_id is not null');
+  await run('create index if not exists downgrades_status_idx on downgrades(status, performed_at desc)');
+  
+  // Archivage des PDF de déclassements (rétention 10 ans)
+  await run(`
+    create table if not exists downgrade_archives (
+      id uuid primary key default gen_random_uuid(),
+      downgrade_id uuid references downgrades(id) on delete cascade,
+      pdf_data bytea not null,
+      pdf_filename text not null,
+      pdf_size_bytes integer,
+      retention_years integer not null default 10,
+      archived_at timestamptz not null default now(),
+      archived_by uuid references users(id) on delete set null,
+      expires_at timestamptz generated always as (archived_at + (retention_years || ' years')::interval) stored,
+      metadata jsonb,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists downgrade_archives_downgrade_idx on downgrade_archives(downgrade_id)');
+  await run('create index if not exists downgrade_archives_expires_idx on downgrade_archives(expires_at)');
   await run('create index if not exists downgrades_to_quality_idx on downgrades(to_quality_id) where to_quality_id is not null');
 
   // Lier les factures aux lots et aux collectes
@@ -3338,6 +3636,50 @@ const ensureSchema = async () => {
   await run('create index if not exists stock_movements_warehouse_idx on stock_movements(warehouse_id, created_at desc)');
   await run('create index if not exists stock_movements_type_idx on stock_movements(movement_type, created_at desc)');
   await run('create index if not exists stock_movements_reference_idx on stock_movements(reference_type, reference_id)');
+
+  // Canton rules for Swiss logistics
+  await run(`
+    create table if not exists canton_rules (
+      id uuid primary key default gen_random_uuid(),
+      canton_code text not null unique,
+      quiet_hours jsonb,
+      blue_zone boolean default false,
+      waste_types jsonb,
+      quotas jsonb,
+      max_weight_tons numeric,
+      notes text,
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists canton_rules_canton_idx on canton_rules(canton_code)');
+
+  // OFROU closures cache
+  await run(`
+    create table if not exists ofrou_closures (
+      id uuid primary key default gen_random_uuid(),
+      road_name text,
+      canton text,
+      status text,
+      reason text,
+      valid_from timestamptz,
+      valid_to timestamptz,
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists ofrou_closures_canton_idx on ofrou_closures(canton)');
+
+  // SwissTopo altitude cache
+  await run(`
+    create table if not exists swiss_topo_cache (
+      id uuid primary key default gen_random_uuid(),
+      lat numeric not null,
+      lon numeric not null,
+      altitude_m numeric,
+      gradient numeric,
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists swiss_topo_cache_lat_lon_idx on swiss_topo_cache(lat, lon)');
 
   // Niveaux de stock actuels (vue agrégée des mouvements)
   await run(`
@@ -4062,6 +4404,113 @@ const ensureSchema = async () => {
     )
   `);
   await run('create index if not exists saved_search_filters_created_by_idx on saved_search_filters(created_by)');
+};
+
+// Conversion WGS84 -> LV95 (approx) pour SwissTopo height service
+const wgs84ToLv95 = (lat: number, lon: number) => {
+  // Formules officielles swisstopo (approximation simple)
+  const phi = (lat * Math.PI) / 180;
+  const lambda = (lon * Math.PI) / 180;
+  const lambda0 = (7.439583333 * Math.PI) / 180; // 7°26'22.5''
+  const phi0 = (46.95240556 * Math.PI) / 180; // 46°57'08.66''
+  const R = 6378137;
+
+  const y_aux = (lambda - lambda0) * Math.cos(phi0);
+  const x_aux = phi - phi0;
+
+  const east = 2600000 + R * y_aux;
+  const north = 1200000 + R * x_aux;
+  return { east, north };
+};
+
+// Helpers: SwissTopo + OFROU (placeholders; to be wired with real APIs/keys)
+const fetchSwissTopo = async (lat: number, lon: number) => {
+  // On tente d'abord le service "height" (plus simple), puis le profil en fallback
+  try {
+    const isLv95 = Math.abs(lat) > 90 || Math.abs(lon) > 180; // heuristique simple
+    let east = lon;
+    let north = lat;
+    if (!isLv95) {
+      const conv = wgs84ToLv95(lat, lon);
+      east = conv.east;
+      north = conv.north;
+    }
+    // Service height (LV95 attendu)
+    const heightUrl = `${SWISS_TOPO_HEIGHT_URL}?easting=${encodeURIComponent(east)}&northing=${encodeURIComponent(north)}&sr=2056`;
+    const hResp = await fetch(heightUrl);
+    if (hResp.ok) {
+      const hData: any = await hResp.json();
+      const altitude = hData?.height ?? hData?.elevation ?? null;
+      if (altitude !== null && altitude !== undefined) {
+        return { altitude_m: altitude, gradient: null };
+      }
+    }
+    // Fallback profil
+    const sr = isLv95 ? 2056 : 4326;
+    const url = `${SWISS_TOPO_URL}?geom=POINT(${encodeURIComponent(lon)}%20${encodeURIComponent(lat)})&sr=${sr}&nb_points=2`;
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      console.warn('SwissTopo API error', resp.status);
+      return { altitude_m: null, gradient: null };
+    }
+    const data = await resp.json();
+    const profile = (data.profile as any[]) || data.alti || [];
+    const first = Array.isArray(profile) && profile.length > 0 ? profile[0] : null;
+    const altitude = first?.elevation ?? first?.altitude ?? first?.height ?? null;
+    return { altitude_m: altitude ?? null, gradient: null };
+  } catch (error) {
+    console.warn('SwissTopo fetch error', error);
+    return { altitude_m: null, gradient: null };
+  }
+};
+
+const refreshOfrouClosures = async () => {
+  // Fetch GeoAdmin layer (OFROU/ASTRA) en GeoJSON
+  try {
+    // Essai principal
+    let url = `https://api3.geo.admin.ch/rest/services/ech/MapServer/${OFROU_GEOADMIN_LAYER}?geometryFormat=geojson&sr=4326`;
+    const resp = await fetch(url);
+    let data: any = null;
+    if (resp.ok) {
+      data = await resp.json();
+    } else {
+      // Fallback : tenter layers=all
+      url = `https://api3.geo.admin.ch/rest/services/all/MapServer/${OFROU_GEOADMIN_LAYER}?geometryFormat=geojson&sr=4326`;
+      const resp2 = await fetch(url);
+      if (!resp2.ok) {
+        console.warn('OFROU GeoAdmin error', resp.status, resp2.status);
+        return [];
+      }
+      data = await resp2.json();
+    }
+    const features: any[] = data?.features || [];
+    const closures: OfrouClosureRow[] = features.map((f) => {
+      const props = f.properties || {};
+      return {
+        id: randomUUID(),
+        road_name: props.name || props.road || props.title || null,
+        canton: props.canton || props.kanton || null,
+        status: props.status || props.state || 'closed',
+        reason: props.reason || props.bemerkung || props.remark || null,
+        valid_from: props.start || props.startdatum || null,
+        valid_to: props.end || props.enddatum || null,
+        updated_at: new Date().toISOString()
+      };
+    });
+
+    await run(`delete from ofrou_closures`);
+    for (const c of closures) {
+      await run(
+        `insert into ofrou_closures (id, road_name, canton, status, reason, valid_from, valid_to, updated_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [c.id, c.road_name, c.canton, c.status, c.reason, c.valid_from, c.valid_to, c.updated_at]
+      );
+    }
+    return closures;
+  } catch (error) {
+    console.warn('OFROU fetch error', error);
+    return [];
+  }
 };
 
 // Fonction pour générer un numéro de facture séquentiel
@@ -7690,6 +8139,29 @@ app.get(
   })
 );
 
+// Recherche clients (nom ou adresse) pour autocomplétion
+app.get(
+  '/api/customers/search',
+  requireAuth({ roles: ['admin', 'manager', 'user'], permissions: ['view_customers'] }),
+  asyncHandler(async (req, res) => {
+    const q = ((req.query.q as string) || '').trim().toLowerCase();
+    if (!q || q.length < 2) {
+      return res.json([]);
+    }
+    const searchTerm = `%${q}%`;
+    const rows = await run(
+      `select id, name, address
+       from customers
+       where lower(name) like $1
+          or lower(coalesce(address, '')) like $1
+       order by name
+       limit 15`,
+      [searchTerm]
+    );
+    res.json(rows);
+  })
+);
+
 app.post(
   '/api/customers',
   requireAuth({ roles: ['admin', 'manager'], permissions: ['edit_customers'] }),
@@ -7803,6 +8275,30 @@ app.get(
       created_at: string;
       updated_at: string;
     }>('select * from materials order by famille, abrege');
+    res.json(rows);
+  })
+);
+
+// Recherche matières (code ou nom) pour autocomplétion
+app.get(
+  '/api/materials/search',
+  requireAuth({ roles: ['admin', 'manager', 'user'], permissions: ['view_materials'] }),
+  asyncHandler(async (req, res) => {
+    const q = ((req.query.q as string) || '').trim().toLowerCase();
+    if (!q || q.length < 2) {
+      return res.json([]);
+    }
+    const searchTerm = `%${q}%`;
+    const rows = await run(
+      `select id, numero, abrege, description, unite, famille
+       from materials
+       where lower(coalesce(numero, '')) like $1
+          or lower(coalesce(abrege, '')) like $1
+          or lower(coalesce(description, '')) like $1
+       order by numero nulls last, abrege nulls last
+       limit 15`,
+      [searchTerm]
+    );
     res.json(rows);
   })
 );
@@ -14847,6 +15343,8 @@ app.post(
     const { route_id, customer_ids, vehicle_id, algorithm, constraints } = req.body;
     const auth = (req as AuthenticatedRequest).auth;
 
+    await ensureLogisticsInfraOnce();
+
     if (!customer_ids || !Array.isArray(customer_ids) || customer_ids.length === 0) {
       return res.status(400).json({ message: 'Liste de clients requise' });
     }
@@ -14876,8 +15374,27 @@ app.post(
       vehicle = vehicles[0] || null;
     }
 
-    // Algorithme simple de Nearest Neighbor pour l'optimisation
-    const optimizedOrder = optimizeRouteNearestNeighbor(customers, vehicle);
+    // Charger les règles cantonales et le cache OFROU
+    const cantonRules = await run<CantonRuleRow>('select * from canton_rules');
+    const ofrouClosures = await run<OfrouClosureRow>('select * from ofrou_closures where status is null or status not in (\'open\', \'ok\')');
+
+    // Récupérer altitude/gradient depuis le cache SwissTopo
+    const customersWithAltitude = [];
+    for (const c of customers) {
+      const [topo] = await run<SwissTopoCacheRow>(
+        'select altitude_m, gradient from swiss_topo_cache where lat = $1 and lon = $2 order by updated_at desc limit 1',
+        [c.latitude, c.longitude]
+      );
+      customersWithAltitude.push({ ...c, altitude_m: topo?.altitude_m ?? null, gradient: topo?.gradient ?? null });
+    }
+
+    // Paramètres de pondération (altitude / dénivelé)
+    const altitudeWeight = Math.min(2, Math.max(0, Number(constraints?.altitude_weight ?? 1)));
+
+    // Algorithme simple de Nearest Neighbor pondéré (altitude)
+    const optimizedOrder = optimizeRouteNearestNeighbor(customersWithAltitude, vehicle, {
+      altitudeWeight
+    });
 
     // Calculer les métriques
     const totalDistance = calculateTotalDistance(optimizedOrder);
@@ -14920,8 +15437,643 @@ app.post(
   })
 );
 
+// Règles poids par tronçon (CH)
+app.get(
+  '/api/logistics/road-weight-rules',
+  requireAuth(),
+  asyncHandler(async (_req, res) => {
+    await ensureLogisticsInfraOnce();
+    const rows = await run('select * from road_weight_rules order by created_at desc limit 200');
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/logistics/road-weight-rules',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (req, res) => {
+    await ensureLogisticsInfraOnce();
+    const { name, geojson, max_weight_tons, season, notes } = req.body;
+    const [row] = await run(
+      `insert into road_weight_rules (name, geojson, max_weight_tons, season, notes)
+       values ($1,$2,$3,$4,$5)
+       returning *`,
+      [name, geojson || null, max_weight_tons || null, season || null, notes || null]
+    );
+    res.json(row);
+  })
+);
+
+// Règles hiver/pneus par véhicule
+app.get(
+  '/api/logistics/vehicle-winter-rules',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    await ensureLogisticsInfraOnce();
+    const vehicleId = req.query.vehicle_id as string | undefined;
+    const params: any[] = [];
+    let sql = 'select * from vehicle_winter_rules';
+    if (vehicleId) {
+      sql += ' where vehicle_id = $1';
+      params.push(vehicleId);
+    }
+    sql += ' order by created_at desc limit 200';
+    const rows = await run(sql, params);
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/logistics/vehicle-winter-rules',
+  requireAuth({ roles: ['admin', 'manager'] }),
+  asyncHandler(async (req, res) => {
+    await ensureLogisticsInfraOnce();
+    const { vehicle_id, season, winter_tires_required, chains_required, max_weight_tons, notes } = req.body;
+    const [row] = await run(
+      `insert into vehicle_winter_rules (vehicle_id, season, winter_tires_required, chains_required, max_weight_tons, notes)
+       values ($1,$2,$3,$4,$5,$6)
+       returning *`,
+      [vehicle_id || null, season || null, !!winter_tires_required, !!chains_required, max_weight_tons || null, notes || null]
+    );
+    res.json(row);
+  })
+);
+
+// -------------------- Canton rules --------------------
+app.get(
+  '/api/logistics/cantons/rules',
+  requireAuth(),
+  asyncHandler(async (_req, res) => {
+    await ensureLogisticsInfraOnce();
+    const rows = await run<CantonRuleRow>('select * from canton_rules order by canton_code asc');
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/logistics/cantons/rules',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (req, res) => {
+    await ensureLogisticsInfraOnce();
+    const { canton_code, quiet_hours, blue_zone, waste_types, quotas, max_weight_tons, notes } = req.body;
+    if (!canton_code) {
+      return res.status(400).json({ message: 'canton_code requis' });
+    }
+    const now = new Date().toISOString();
+    await run(
+      `insert into canton_rules (id, canton_code, quiet_hours, blue_zone, waste_types, quotas, max_weight_tons, notes, updated_at)
+       values (gen_random_uuid(), $1,$2,$3,$4,$5,$6,$7,$8)
+       on conflict (canton_code)
+       do update set quiet_hours = excluded.quiet_hours,
+                     blue_zone = excluded.blue_zone,
+                     waste_types = excluded.waste_types,
+                     quotas = excluded.quotas,
+                     max_weight_tons = excluded.max_weight_tons,
+                     notes = excluded.notes,
+                     updated_at = excluded.updated_at`,
+      [canton_code, quiet_hours ?? null, blue_zone ?? false, waste_types ?? null, quotas ?? null, max_weight_tons ?? null, notes ?? null, now]
+    );
+    const [row] = await run<CantonRuleRow>('select * from canton_rules where canton_code = $1', [canton_code]);
+    res.json(row);
+  })
+);
+
+// -------------------- OFROU closures --------------------
+app.get(
+  '/api/logistics/ofrou/closures',
+  requireAuth(),
+  asyncHandler(async (_req, res) => {
+    await ensureLogisticsInfraOnce();
+    const rows = await run<OfrouClosureRow>('select * from ofrou_closures order by updated_at desc, valid_from desc nulls last limit 500');
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/logistics/ofrou/refresh',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (_req, res) => {
+    await ensureLogisticsInfraOnce();
+    const rows = await refreshOfrouClosures();
+    res.json({ refreshed: rows.length });
+  })
+);
+
+// -------------------- SwissTopo altitude --------------------
+app.get(
+  '/api/logistics/topo',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    await ensureLogisticsInfraOnce();
+    const lat = parseFloat(req.query.lat as string);
+    const lon = parseFloat(req.query.lon as string);
+    if (Number.isNaN(lat) || Number.isNaN(lon)) {
+      return res.status(400).json({ message: 'lat/lon requis' });
+    }
+    const [cached] = await run<SwissTopoCacheRow>(
+      'select * from swiss_topo_cache where lat = $1 and lon = $2 order by updated_at desc limit 1',
+      [lat, lon]
+    );
+    if (cached && cached.altitude_m !== null) {
+      return res.json({ altitude_m: cached.altitude_m, gradient: cached.gradient, cached: true });
+    }
+    const point = await fetchSwissTopo(lat, lon);
+    await run(
+      `insert into swiss_topo_cache (lat, lon, altitude_m, gradient)
+       values ($1,$2,$3,$4)`,
+      [lat, lon, point.altitude_m, point.gradient]
+    );
+    res.json({ ...point, cached: false });
+  })
+);
+
+// ==================== Telematics (webhook + lecture) ====================
+app.post(
+  '/api/telematics/webhook',
+  asyncHandler(async (req, res) => {
+    const { connector_id, secret, external_id, vehicle_id, event_type, data } = req.body || {};
+    if (!event_type) {
+      return res.status(400).json({ message: 'event_type requis' });
+    }
+
+    if (connector_id) {
+      const [connector] = await run('select * from telematics_connectors where id = $1', [connector_id]);
+      if (connector?.webhook_secret && connector.webhook_secret !== secret) {
+        return res.status(401).json({ message: 'secret invalide' });
+      }
+    }
+
+    let deviceId: string | null = null;
+    let vehId: string | null = vehicle_id || null;
+
+    if (external_id) {
+      const [device] = await run(
+        'select * from telematics_devices where external_id = $1 order by created_at desc limit 1',
+        [external_id]
+      );
+      if (device) {
+        deviceId = device.id;
+        vehId = vehId || device.vehicle_id;
+      }
+    }
+
+    const [row] = await run(
+      `insert into telematics_events (device_id, vehicle_id, event_type, payload, lat, lon, speed_kmh, fuel_level_pct, load_pct, altitude_m, occurred_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       returning *`,
+      [
+        deviceId,
+        vehId,
+        event_type,
+        data || req.body || {},
+        data?.lat ?? null,
+        data?.lon ?? null,
+        data?.speed_kmh ?? null,
+        data?.fuel_level_pct ?? null,
+        data?.load_pct ?? null,
+        data?.altitude_m ?? null,
+        data?.occurred_at ?? null
+      ]
+    );
+
+    res.json({ status: 'ok', event: row });
+  })
+);
+
+app.get(
+  '/api/telematics/events',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const vehicleId = req.query.vehicle_id as string | undefined;
+    const params: any[] = [];
+    let sql = 'select * from telematics_events';
+    if (vehicleId) {
+      sql += ' where vehicle_id = $1';
+      params.push(vehicleId);
+    }
+    sql += ' order by occurred_at desc nulls last, received_at desc limit 200';
+    const rows = await run(sql, params);
+    res.json(rows);
+  })
+);
+
+// ==================== VeVA / filières CH ====================
+app.get(
+  '/api/veva/categories',
+  requireAuth(),
+  asyncHandler(async (_req, res) => {
+    const rows = await run('select * from veva_categories order by code asc');
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/veva/categories',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (req, res) => {
+    const { code, name, description, type } = req.body;
+    if (!code || !name) return res.status(400).json({ message: 'code et name requis' });
+    const [row] = await run(
+      `insert into veva_categories (code, name, description, type)
+       values ($1,$2,$3,$4)
+       on conflict (code) do update set name = excluded.name, description = excluded.description, type = excluded.type
+       returning *`,
+      [code, name, description || null, type || null]
+    );
+    res.json(row);
+  })
+);
+
+app.get(
+  '/api/veva/slips',
+  requireAuth(),
+  asyncHandler(async (_req, res) => {
+    const rows = await run('select * from veva_slips order by issued_at desc nulls last limit 200');
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/veva/slips',
+  requireAuth({ roles: ['admin', 'manager'] }),
+  asyncHandler(async (req, res) => {
+    const { customer_id, waste_type, veva_category_code, metadata } = req.body;
+    const slipNumber = `VEVA-${Date.now()}`;
+    const qrRef = `QR-${Math.random().toString(36).slice(2, 10)}`;
+    const pdfUrl = `https://example.com/veva/${slipNumber}.pdf`;
+    const [row] = await run(
+      `insert into veva_slips (slip_number, customer_id, waste_type, veva_category_code, qr_reference, pdf_url, status, metadata)
+       values ($1,$2,$3,$4,$5,$6,'issued',$7)
+       returning *`,
+      [slipNumber, customer_id || null, waste_type || null, veva_category_code || null, qrRef, pdfUrl, metadata || null]
+    );
+    res.json(row);
+  })
+);
+
+app.post(
+  '/api/veva/slips/:id/sign',
+  requireAuth({ roles: ['admin', 'manager'] }),
+  asyncHandler(async (req, res) => {
+    const id = req.params.id;
+    const [row] = await run(
+      `update veva_slips
+       set status = 'signed', signed_at = now(), swissid_status = 'signed'
+       where id = $1
+       returning *`,
+      [id]
+    );
+    if (!row) return res.status(404).json({ message: 'Slip introuvable' });
+    res.json(row);
+  })
+);
+
+app.get(
+  '/api/customs/exports',
+  requireAuth(),
+  asyncHandler(async (_req, res) => {
+    const rows = await run('select * from customs_exports order by created_at desc limit 200');
+    res.json(rows);
+  })
+);
+
+app.post(
+  '/api/customs/exports',
+  requireAuth({ roles: ['admin', 'manager'] }),
+  asyncHandler(async (req, res) => {
+    const { direction, country, document_url, status, metadata } = req.body;
+    const [row] = await run(
+      `insert into customs_exports (direction, country, document_url, status, metadata)
+       values ($1,$2,$3,$4,$5)
+       returning *`,
+      [direction || 'export', country || null, document_url || null, status || 'draft', metadata || null]
+    );
+    res.json(row);
+  })
+);
+
+app.post(
+  '/api/swiss-compliance/certificates',
+  requireAuth({ roles: ['admin', 'manager'] }),
+  asyncHandler(async (req, res) => {
+    const { entity_type, entity_id, pdf_url, status } = req.body;
+    if (!entity_type) return res.status(400).json({ message: 'entity_type requis' });
+    const [row] = await run(
+      `insert into swiss_compliance_certificates (entity_type, entity_id, pdf_url, status)
+       values ($1,$2,$3,$4)
+       returning *`,
+      [entity_type, entity_id || null, pdf_url || null, status || 'issued']
+    );
+    res.json(row);
+  })
+);
+
+// ==================== Déclassement matières avancé ====================
+app.get(
+  '/api/downgrades',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const lotId = req.query.lot_id as string | undefined;
+    const status = req.query.status as string | undefined;
+    const params: any[] = [];
+    let sql = 'select * from downgrades where 1=1';
+    let paramIndex = 1;
+    
+    if (lotId) {
+      sql += ` and lot_id = $${paramIndex}`;
+      params.push(lotId);
+      paramIndex++;
+    }
+    
+    if (status) {
+      sql += ` and status = $${paramIndex}`;
+      params.push(status);
+      paramIndex++;
+    }
+    
+    sql += ' order by performed_at desc limit 200';
+    const rows = await run(sql, params);
+    res.json(rows);
+  })
+);
+
+app.get(
+  '/api/downgrades/pending',
+  requireAuth({ roles: ['admin', 'manager'] }),
+  asyncHandler(async (req, res) => {
+    const rows = await run(
+      `select * from downgrades 
+       where status = 'pending_completion' 
+       order by performed_at desc`
+    );
+    res.json(rows);
+  })
+);
+
+app.get(
+  '/api/downgrades/:id',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const [row] = await run('select * from downgrades where id = $1', [id]);
+    if (!row) return res.status(404).json({ message: 'Déclassement introuvable' });
+    res.json(row);
+  })
+);
+
+app.post(
+  '/api/downgrades',
+  requireAuth({ roles: ['admin', 'manager'] }),
+  asyncHandler(async (req, res) => {
+    const payload = req.body || {};
+    const isDraft = payload.status === 'draft' || payload.save_as_draft === true;
+    
+    // Validation minimale pour brouillon (parties 1-2 seulement)
+    if (!isDraft) {
+      if (!payload.lot_id && !payload.lot_internal_code) {
+        return res.status(400).json({ message: 'ID lot ou code interne requis' });
+      }
+      if (!payload.motive_principal) {
+        return res.status(400).json({ message: 'Motif principal requis' });
+      }
+    }
+    
+    const fields = [
+      'lot_id', 'from_quality_id', 'from_quality', 'to_quality_id', 'to_quality', 'reason',
+      'adjusted_weight', 'adjusted_value', 'performed_at', 'motive_principal', 'motive_description',
+      'photos_avant', 'photos_apres', 'controller_name', 'controller_signature', 'incident_number',
+      'new_category', 'new_veva_code', 'new_quality', 'poids_net_declasse', 'stockage_type', 'destination',
+      'veva_type', 'previous_producer', 'planned_transporter', 'veva_slip_number', 'swissid_signature',
+      'documents', 'omod_category', 'omod_dangerosity', 'omod_dismantling_required', 'ldtr_canton',
+      'canton_rules_applied', 'proof_photos', 'emplacement_actuel', 'nouvel_emplacement', 'mouvement_type',
+      'transport_number', 'driver_id', 'vehicle_id', 'weighbridge_id', 'poids_final_brut', 'poids_final_tare',
+      'poids_final_net', 'seal_number', 'valeur_avant', 'valeur_apres', 'perte_gain', 'responsable_validation',
+      'cause_economique', 'impact_marge', 'risques_identifies', 'epis_requis', 'procedure_suivie',
+      'anomalie_signalee', 'declaration_securite',
+      'lot_origin_site_id', 'lot_origin_client_id', 'lot_origin_canton', 'lot_origin_commune',
+      'lot_entry_date', 'lot_entry_at', 'lot_veva_code', 'lot_internal_code', 'lot_filiere', 'lot_quality_grade',
+      'lot_quality_metrics', 'lot_weight_brut', 'lot_weight_tare', 'lot_weight_net', 'declassed_material',
+      'status'
+    ];
+    const cols: string[] = [];
+    const values: any[] = [];
+    const params: string[] = [];
+    fields.forEach((f, idx) => {
+      if (payload[f] !== undefined) {
+        cols.push(f);
+        values.push(payload[f]);
+        params.push(`$${values.length}`);
+      }
+    });
+    
+    // Définir le statut par défaut si non fourni
+    if (!payload.status) {
+      cols.push('status');
+      values.push(isDraft ? 'draft' : 'pending_completion');
+      params.push(`$${values.length}`);
+    }
+    
+    cols.push('performed_by');
+    values.push((req as AuthenticatedRequest).auth?.id || null);
+    params.push(`$${values.length}`);
+
+    const insertSql = `
+      insert into downgrades (${cols.join(',')})
+      values (${params.join(',')})
+      returning *
+    `;
+    const [row] = await run(insertSql, values);
+    res.status(201).json(row);
+  })
+);
+
+app.patch(
+  '/api/downgrades/:id',
+  requireAuth({ roles: ['admin', 'manager'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const payload = req.body || {};
+    
+    // Vérifier que le déclassement existe
+    const [existing] = await run('select * from downgrades where id = $1', [id]);
+    if (!existing) {
+      return res.status(404).json({ message: 'Déclassement introuvable' });
+    }
+    
+    // Ne pas permettre la modification si déjà envoyé (sauf admin)
+    if (existing.status === 'sent' && (req as AuthenticatedRequest).auth?.role !== 'admin') {
+      return res.status(403).json({ message: 'Déclassement déjà envoyé, modification non autorisée' });
+    }
+    
+    const fields = [
+      'lot_id', 'from_quality_id', 'from_quality', 'to_quality_id', 'to_quality', 'reason',
+      'adjusted_weight', 'adjusted_value', 'performed_at', 'motive_principal', 'motive_description',
+      'photos_avant', 'photos_apres', 'controller_name', 'controller_signature', 'incident_number',
+      'new_category', 'new_veva_code', 'new_quality', 'poids_net_declasse', 'stockage_type', 'destination',
+      'veva_type', 'previous_producer', 'planned_transporter', 'veva_slip_number', 'swissid_signature',
+      'documents', 'omod_category', 'omod_dangerosity', 'omod_dismantling_required', 'ldtr_canton',
+      'canton_rules_applied', 'proof_photos', 'emplacement_actuel', 'nouvel_emplacement', 'mouvement_type',
+      'transport_number', 'driver_id', 'vehicle_id', 'weighbridge_id', 'poids_final_brut', 'poids_final_tare',
+      'poids_final_net', 'seal_number', 'valeur_avant', 'valeur_apres', 'perte_gain', 'responsable_validation',
+      'cause_economique', 'impact_marge', 'risques_identifies', 'epis_requis', 'procedure_suivie',
+      'anomalie_signalee', 'declaration_securite',
+      'lot_origin_site_id', 'lot_origin_client_id', 'lot_origin_canton', 'lot_origin_commune',
+      'lot_entry_date', 'lot_entry_at', 'lot_veva_code', 'lot_internal_code', 'lot_filiere', 'lot_quality_grade',
+      'lot_quality_metrics', 'lot_weight_brut', 'lot_weight_tare', 'lot_weight_net', 'declassed_material',
+      'status'
+    ];
+    
+    const updates: string[] = [];
+    const values: any[] = [];
+    let paramIndex = 1;
+    
+    fields.forEach((f) => {
+      if (payload[f] !== undefined) {
+        updates.push(`${f} = $${paramIndex}`);
+        values.push(payload[f]);
+        paramIndex++;
+      }
+    });
+    
+    // Gestion des changements de statut
+    if (payload.status === 'validated') {
+      updates.push(`validated_at = $${paramIndex}`);
+      values.push(new Date().toISOString());
+      paramIndex++;
+      updates.push(`validated_by = $${paramIndex}`);
+      values.push((req as AuthenticatedRequest).auth?.id || null);
+      paramIndex++;
+    }
+    
+    if (payload.status === 'sent') {
+      updates.push(`sent_at = $${paramIndex}`);
+      values.push(new Date().toISOString());
+      paramIndex++;
+      updates.push(`sent_by = $${paramIndex}`);
+      values.push((req as AuthenticatedRequest).auth?.id || null);
+      paramIndex++;
+    }
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ message: 'Aucune modification à appliquer' });
+    }
+    
+    values.push(id);
+    const updateSql = `
+      update downgrades
+      set ${updates.join(', ')}
+      where id = $${paramIndex}
+      returning *
+    `;
+    const [row] = await run(updateSql, values);
+    res.json(row);
+  })
+);
+
+app.post(
+  '/api/downgrades/:id/veva-slip',
+  requireAuth({ roles: ['admin', 'manager'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const [dg] = await run('select * from downgrades where id = $1', [id]);
+    if (!dg) return res.status(404).json({ message: 'Déclassement introuvable' });
+    const slipNumber = `VEVA-${Date.now()}`;
+    const qrRef = `QR-${Math.random().toString(36).slice(2, 10)}`;
+    const pdfUrl = `https://example.com/veva/${slipNumber}.pdf`;
+    const [slip] = await run(
+      `insert into veva_slips (slip_number, customer_id, downgrade_id, waste_type, veva_category_code, qr_reference, pdf_url, status, metadata)
+       values ($1,$2,$3,$4,$5,$6,$7,'issued',$8)
+       returning *`,
+      [
+        slipNumber,
+        dg.lot_origin_client_id || null,
+        id,
+        dg.new_category || dg.lot_filiere || null,
+        dg.new_veva_code || dg.lot_veva_code || null,
+        qrRef,
+        pdfUrl,
+        { from_downgrade: id }
+      ]
+    );
+    res.json(slip);
+  })
+);
+
+app.post(
+  '/api/downgrades/:id/pdf',
+  requireAuth({ roles: ['admin', 'manager'] }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { pdf_base64, pdf_filename, finalize } = req.body;
+    const auth = (req as AuthenticatedRequest).auth;
+    
+    const [dg] = await run('select * from downgrades where id = $1', [id]);
+    if (!dg) return res.status(404).json({ message: 'Déclassement introuvable' });
+    
+    // Si PDF fourni, l'archiver
+    if (pdf_base64 && pdf_filename) {
+      const pdfBuffer = Buffer.from(pdf_base64, 'base64');
+      const filename = pdf_filename || `declassement_${id}_${Date.now()}.pdf`;
+      
+      // Archiver le PDF (rétention 10 ans)
+      const [archive] = await run(
+        `insert into downgrade_archives (downgrade_id, pdf_data, pdf_filename, pdf_size_bytes, retention_years, archived_by, metadata)
+         values ($1, $2, $3, $4, 10, $5, $6)
+         returning id, archived_at, expires_at`,
+        [
+          id,
+          pdfBuffer,
+          filename,
+          pdfBuffer.length,
+          auth?.id || null,
+          JSON.stringify({ 
+            status_at_archive: dg.status,
+            archived_by_name: auth?.email || null
+          })
+        ]
+      );
+      
+      // Si finalize=true, mettre à jour le statut à 'validated'
+      if (finalize === true) {
+        await run(
+          `update downgrades 
+           set status = 'validated', validated_at = now(), validated_by = $1
+           where id = $2`,
+          [auth?.id || null, id]
+        );
+      }
+      
+      return res.json({ 
+        success: true,
+        archive_id: archive.id,
+        archived_at: archive.archived_at,
+        expires_at: archive.expires_at,
+        message: 'PDF archivé avec succès (rétention 10 ans)'
+      });
+    }
+    
+    // Sinon, retourner l'URL placeholder (compatibilité)
+    const pdfUrl = `https://example.com/downgrade/${id}.pdf`;
+    res.json({ pdf_url: pdfUrl });
+  })
+);
+
+app.get(
+  '/api/downgrades/export',
+  requireAuth({ roles: ['admin', 'manager'] }),
+  asyncHandler(async (req, res) => {
+    const format = (req.query.format as string) || 'excel';
+    const rows = await run('select * from downgrades order by performed_at desc limit 1000');
+    res.json({ format, rows });
+  })
+);
+
 // Fonction helper pour optimiser avec Nearest Neighbor
-const optimizeRouteNearestNeighbor = (customers: any[], vehicle: any | null) => {
+const optimizeRouteNearestNeighbor = (
+  customers: any[],
+  vehicle: any | null,
+  options?: { altitudeWeight?: number }
+) => {
   if (customers.length === 0) return [];
   if (customers.length === 1) return customers;
 
@@ -14939,11 +16091,14 @@ const optimizeRouteNearestNeighbor = (customers: any[], vehicle: any | null) => 
 
     for (let i = 0; i < remaining.length; i++) {
       const customer = remaining[i];
-      const distance = calculateDistance(
+      const distance = calculateDistanceWithAltitude(
         current.latitude || 0,
         current.longitude || 0,
         customer.latitude || 0,
-        customer.longitude || 0
+        customer.longitude || 0,
+        current.altitude_m,
+        customer.altitude_m,
+        options?.altitudeWeight
       );
 
       if (distance < nearestDistance) {
@@ -14977,6 +16132,172 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
+};
+
+// Distance pondérée altitude/dénivelé (pénalité si fort dénivelé)
+const calculateDistanceWithAltitude = (
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+  alt1?: number | null,
+  alt2?: number | null,
+  altitudeWeight: number = 1
+): number => {
+  const base = calculateDistance(lat1, lon1, lat2, lon2);
+  if (alt1 == null || alt2 == null || base === 0) return base;
+  const deltaAlt = Math.abs(alt2 - alt1); // en mètres
+  const gradient = deltaAlt / (base * 1000); // pente moyenne
+  // Pénalité max +30% si pente moyenne >= 8%
+  const penaltyFactor = Math.min(0.3, Math.max(0, gradient - 0.02)); // commence à 2% de pente
+  const weightedPenalty = penaltyFactor * Math.max(0, altitudeWeight);
+  return Math.round((base * (1 + weightedPenalty)) * 100) / 100;
+};
+
+// Assurer la présence des tables/logistique CH (fallback si ensureSchema pas rejoué)
+const ensureLogisticsInfra = async () => {
+  await run(`
+    create table if not exists canton_rules (
+      id uuid primary key default gen_random_uuid(),
+      canton_code text not null unique,
+      quiet_hours jsonb,
+      blue_zone boolean default false,
+      waste_types jsonb,
+      quotas jsonb,
+      max_weight_tons numeric,
+      notes text,
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists canton_rules_canton_idx on canton_rules(canton_code)');
+
+  await run(`
+    create table if not exists ofrou_closures (
+      id uuid primary key default gen_random_uuid(),
+      road_name text,
+      canton text,
+      status text,
+      reason text,
+      valid_from timestamptz,
+      valid_to timestamptz,
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists ofrou_closures_canton_idx on ofrou_closures(canton)');
+
+  await run(`
+    create table if not exists swiss_topo_cache (
+      id uuid primary key default gen_random_uuid(),
+      lat numeric not null,
+      lon numeric not null,
+      altitude_m numeric,
+      gradient numeric,
+      updated_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists swiss_topo_cache_lat_lon_idx on swiss_topo_cache(lat, lon)');
+
+  // Colonnes véhicules requises
+  await run(`alter table vehicles add column if not exists vehicle_type text`);
+  await run(`alter table vehicles add column if not exists max_weight_kg numeric`);
+  await run(`alter table vehicles add column if not exists max_volume_m3 numeric`);
+  await run(`alter table vehicles add column if not exists compatible_materials text[]`);
+  await run(`alter table vehicles add column if not exists status text`);
+
+  // Telematics + règles poids / hiver (fallback)
+  await run(`
+    create table if not exists telematics_connectors (
+      id uuid primary key default gen_random_uuid(),
+      name text not null,
+      provider text not null,
+      webhook_secret text,
+      config jsonb,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run(`
+    create table if not exists telematics_devices (
+      id uuid primary key default gen_random_uuid(),
+      vehicle_id uuid references vehicles(id) on delete set null,
+      connector_id uuid references telematics_connectors(id) on delete set null,
+      external_id text,
+      metadata jsonb,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists telematics_devices_vehicle_idx on telematics_devices(vehicle_id)');
+  await run(`
+    create table if not exists telematics_events (
+      id uuid primary key default gen_random_uuid(),
+      device_id uuid references telematics_devices(id) on delete set null,
+      vehicle_id uuid references vehicles(id) on delete set null,
+      event_type text not null,
+      payload jsonb,
+      lat numeric,
+      lon numeric,
+      speed_kmh numeric,
+      fuel_level_pct numeric,
+      load_pct numeric,
+      altitude_m numeric,
+      occurred_at timestamptz default now(),
+      received_at timestamptz not null default now()
+    )
+  `);
+  await run('create index if not exists telematics_events_vehicle_idx on telematics_events(vehicle_id)');
+  await run('create index if not exists telematics_events_occurred_idx on telematics_events(occurred_at desc)');
+
+  await run(`
+    create table if not exists road_weight_rules (
+      id uuid primary key default gen_random_uuid(),
+      name text not null,
+      geojson text,
+      max_weight_tons numeric,
+      season text,
+      notes text,
+      created_at timestamptz not null default now()
+    )
+  `);
+
+  await run(`
+    create table if not exists vehicle_winter_rules (
+      id uuid primary key default gen_random_uuid(),
+      vehicle_id uuid references vehicles(id) on delete cascade,
+      season text,
+      winter_tires_required boolean default false,
+      chains_required boolean default false,
+      max_weight_tons numeric,
+      notes text,
+      created_at timestamptz not null default now()
+    )
+  `);
+};
+
+let logisticsInfraReady = false;
+let logisticsInfraPromise: Promise<void> | null = null;
+const ensureLogisticsInfraOnce = async () => {
+  if (logisticsInfraReady) return;
+  if (logisticsInfraPromise) return logisticsInfraPromise;
+  logisticsInfraPromise = (async () => {
+    try {
+      await ensureLogisticsInfra();
+      logisticsInfraReady = true;
+    } catch (error: any) {
+      const msg = error?.message || '';
+      // Ignore duplicates/race on type/index creation
+      if (
+        msg.includes('pg_type_typname_nsp_index') ||
+        msg.includes('already exists') ||
+        msg.includes('duplicate key value')
+      ) {
+        logisticsInfraReady = true;
+      } else {
+        throw error;
+      }
+    } finally {
+      logisticsInfraPromise = null;
+    }
+  })();
+  return logisticsInfraPromise;
 };
 
 // Fonction helper pour calculer la distance totale

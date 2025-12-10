@@ -4,6 +4,8 @@ import App from './App';
 import './index.css';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
+import { I18nProvider } from './context/I18nContext';
 
 // Correctif pour les avertissements "non-passive event listener"
 // Intercepte addEventListener pour marquer automatiquement les événements de scroll/touch comme passifs
@@ -141,10 +143,14 @@ if (!rootElement) {
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <AuthProvider>
-        <App />
-        <Toaster position="top-right" />
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <I18nProvider>
+            <App />
+            <Toaster position="top-right" />
+          </I18nProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   </React.StrictMode>
 );

@@ -4,11 +4,13 @@ import toast from 'react-hot-toast';
 
 import { useAuth } from '../hooks/useAuth';
 import { Api } from '../lib/api';
+import { useI18n } from '../context/I18nContext';
 
 type ViewMode = 'login' | 'request' | 'reset';
 
 const LoginPage = () => {
   const { login } = useAuth();
+  const { t } = useI18n();
   const queryToken = useMemo(() => new URLSearchParams(window.location.search).get('resetToken') || '', []);
   const [mode, setMode] = useState<ViewMode>(queryToken ? 'reset' : 'login');
   const [email, setEmail] = useState('');
@@ -22,10 +24,10 @@ const LoginPage = () => {
     setSubmitting(true);
     try {
       await login(email, password);
-      toast.success('Connexion réussie');
+      toast.success(t('login.success'));
     } catch (error) {
       // Ne logger que si ce n'est pas une erreur d'authentification normale
-      const errorMessage = error instanceof Error ? error.message : 'Connexion impossible';
+      const errorMessage = error instanceof Error ? error.message : t('login.error');
       if (!errorMessage.includes('Identifiants invalides')) {
         console.error('Erreur de connexion:', error);
       }
@@ -40,10 +42,10 @@ const LoginPage = () => {
     setSubmitting(true);
     try {
       await Api.requestPasswordReset({ email });
-      toast.success('Si un compte existe, un email a été envoyé.');
+      toast.success(t('login.request.success'));
       setMode('login');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Impossible denvoyer linstruction');
+      toast.error(error instanceof Error ? error.message : t('login.request.error'));
     } finally {
       setSubmitting(false);
     }
@@ -52,20 +54,20 @@ const LoginPage = () => {
   const handleResetPassword = async (event: React.FormEvent) => {
     event.preventDefault();
     if (password !== confirmPassword) {
-      toast.error('Les mots de passe ne correspondent pas');
+      toast.error(t('login.reset.passwordMismatch'));
       return;
     }
     setSubmitting(true);
     try {
       await Api.resetPassword({ token, password });
-      toast.success('Mot de passe mis à jour');
+      toast.success(t('login.reset.success'));
       setMode('login');
       setToken('');
       setPassword('');
       setConfirmPassword('');
       window.history.replaceState({}, document.title, window.location.pathname);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Impossible de réinitialiser');
+      toast.error(error instanceof Error ? error.message : t('login.reset.error'));
     } finally {
       setSubmitting(false);
     }
@@ -77,20 +79,20 @@ const LoginPage = () => {
         return (
           <form className="login-form" onSubmit={handleRequestReset}>
             <label>
-              <span>Email</span>
+              <span>{t('login.email')}</span>
               <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
             </label>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
               {submitting ? (
                 <>
-                  <Loader2 className="spinner" size={16} /> Envoi…
+                  <Loader2 className="spinner" size={16} /> {t('login.request.submitting')}
                 </>
               ) : (
-                'Envoyer le lien'
+                t('login.request.submit')
               )}
             </button>
             <button type="button" className="btn btn-outline" onClick={() => setMode('login')}>
-              Retour à la connexion
+              {t('login.backToLogin')}
             </button>
           </form>
         );
@@ -98,15 +100,15 @@ const LoginPage = () => {
         return (
           <form className="login-form" onSubmit={handleResetPassword}>
             <label>
-              <span>Token</span>
+              <span>{t('login.token')}</span>
               <input value={token} onChange={(event) => setToken(event.target.value)} required />
             </label>
             <label>
-              <span>Nouveau mot de passe</span>
+              <span>{t('login.newPassword')}</span>
               <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
             </label>
             <label>
-              <span>Confirmation</span>
+              <span>{t('login.confirmPassword')}</span>
               <input
                 type="password"
                 value={confirmPassword}
@@ -117,14 +119,14 @@ const LoginPage = () => {
             <button type="submit" className="btn btn-primary" disabled={submitting}>
               {submitting ? (
                 <>
-                  <Loader2 className="spinner" size={16} /> Réinitialisation…
+                  <Loader2 className="spinner" size={16} /> {t('login.reset.submitting')}
                 </>
               ) : (
-                'Réinitialiser'
+                t('login.reset.submit')
               )}
             </button>
             <button type="button" className="btn btn-outline" onClick={() => setMode('login')}>
-              Retour à la connexion
+              {t('login.backToLogin')}
             </button>
           </form>
         );
@@ -133,7 +135,7 @@ const LoginPage = () => {
         return (
           <form className="login-form" onSubmit={handleLogin}>
             <label>
-              <span>Email</span>
+              <span>{t('login.email')}</span>
               <input
                 type="email"
                 value={email}
@@ -143,7 +145,7 @@ const LoginPage = () => {
               />
             </label>
             <label>
-              <span>Mot de passe</span>
+              <span>{t('login.password')}</span>
               <input
                 type="password"
                 value={password}
@@ -155,14 +157,14 @@ const LoginPage = () => {
             <button type="submit" className="btn btn-primary" disabled={submitting}>
               {submitting ? (
                 <>
-                  <Loader2 className="spinner" size={16} /> Connexion…
+                  <Loader2 className="spinner" size={16} /> {t('login.submitting')}
                 </>
               ) : (
-                'Se connecter'
+                t('login.submit')
               )}
             </button>
             <button type="button" className="btn btn-link" onClick={() => setMode('request')}>
-              Mot de passe oublié ?
+              {t('login.forgotPassword')}
             </button>
           </form>
         );
@@ -176,22 +178,22 @@ const LoginPage = () => {
           <p className="eyebrow">ERP</p>
           <h1>
             {mode === 'login'
-              ? 'Portail interne'
+              ? t('login.title')
               : mode === 'request'
-              ? 'Réinitialiser le mot de passe'
-              : 'Choisissez un nouveau mot de passe'}
+              ? t('login.request.title')
+              : t('login.reset.title')}
           </h1>
           <p className="login-subtitle">
             {mode === 'login'
-              ? 'Connectez-vous pour accéder aux modules RH.'
+              ? t('login.subtitle')
               : mode === 'request'
-              ? 'Entrez votre email pour recevoir un lien de réinitialisation.'
-              : 'Saisissez le code reçu par email et votre nouveau mot de passe.'}
+              ? t('login.request.subtitle')
+              : t('login.reset.subtitle')}
           </p>
         </div>
         {renderForm()}
         <p className="login-hint">
-          Besoin d’un accès ? Demandez à l’administrateur de créer un compte dans la console utilisateurs.
+          {t('login.hint')}
         </p>
       </div>
     </div>

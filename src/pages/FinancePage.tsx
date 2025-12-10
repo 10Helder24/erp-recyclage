@@ -6,6 +6,7 @@ import { fr } from 'date-fns/locale';
 
 import { Api, type Invoice, type Quote, type InvoiceLine, type QuoteLine, type InvoiceDetail, type QuoteDetail } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
+import { useI18n } from '../context/I18nContext';
 
 type InvoiceForm = {
   customer_id: string;
@@ -75,6 +76,7 @@ const DEFAULT_QUOTE_FORM: QuoteForm = {
 
 export const FinancePage = () => {
   const { hasRole, hasPermission } = useAuth();
+  const { t } = useI18n();
   const isAdmin = hasRole('admin');
   const isManager = hasRole('manager');
   const canEdit = isAdmin || isManager || hasPermission('view_customers');
@@ -99,7 +101,7 @@ export const FinancePage = () => {
       setInvoices(data);
     } catch (error: any) {
       console.error(error);
-      toast.error('Erreur lors du chargement des factures');
+      toast.error(t('finance.error.loadInvoices'));
     } finally {
       setLoading(false);
     }
@@ -112,7 +114,7 @@ export const FinancePage = () => {
       setQuotes(data);
     } catch (error: any) {
       console.error(error);
-      toast.error('Erreur lors du chargement des devis');
+      toast.error(t('finance.error.loadQuotes'));
     } finally {
       setLoading(false);
     }
@@ -170,7 +172,7 @@ export const FinancePage = () => {
       });
       setShowInvoiceModal(true);
     } catch (error: any) {
-      toast.error('Erreur lors du chargement de la facture');
+      toast.error(t('finance.error.loadInvoice'));
     }
   };
 
@@ -204,81 +206,81 @@ export const FinancePage = () => {
       });
       setShowQuoteModal(true);
     } catch (error: any) {
-      toast.error('Erreur lors du chargement du devis');
+      toast.error(t('finance.error.loadQuote'));
     }
   };
 
   const handleInvoiceSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!invoiceForm.customer_name || !invoiceForm.issue_date || !invoiceForm.due_date) {
-      toast.error('Les champs obligatoires doivent être remplis');
+      toast.error(t('finance.error.requiredFields'));
       return;
     }
     if (invoiceForm.lines.length === 0 || invoiceForm.lines.some((l) => !l.description)) {
-      toast.error('Au moins une ligne avec description est requise');
+      toast.error(t('finance.error.lineDescription'));
       return;
     }
 
     try {
       if (editingInvoice) {
         await Api.updateInvoice(editingInvoice.id, invoiceForm);
-        toast.success('Facture mise à jour avec succès');
+        toast.success(t('finance.success.invoiceUpdate'));
       } else {
         await Api.createInvoice(invoiceForm);
-        toast.success('Facture créée avec succès');
+        toast.success(t('finance.success.invoiceCreate'));
       }
       setShowInvoiceModal(false);
       loadInvoices();
     } catch (error: any) {
-      toast.error(error.message || 'Erreur lors de la sauvegarde');
+      toast.error(error.message || t('finance.error.save'));
     }
   };
 
   const handleQuoteSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!quoteForm.customer_name || !quoteForm.issue_date || !quoteForm.valid_until) {
-      toast.error('Les champs obligatoires doivent être remplis');
+      toast.error(t('finance.error.requiredFields'));
       return;
     }
     if (quoteForm.lines.length === 0 || quoteForm.lines.some((l) => !l.description)) {
-      toast.error('Au moins une ligne avec description est requise');
+      toast.error(t('finance.error.lineDescription'));
       return;
     }
 
     try {
       if (editingQuote) {
         await Api.updateQuote(editingQuote.id, quoteForm);
-        toast.success('Devis mis à jour avec succès');
+        toast.success(t('finance.success.quoteUpdate'));
       } else {
         await Api.createQuote(quoteForm);
-        toast.success('Devis créé avec succès');
+        toast.success(t('finance.success.quoteCreate'));
       }
       setShowQuoteModal(false);
       loadQuotes();
     } catch (error: any) {
-      toast.error(error.message || 'Erreur lors de la sauvegarde');
+      toast.error(error.message || t('finance.error.save'));
     }
   };
 
   const handleDeleteInvoice = async (id: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer cette facture ?')) return;
+    if (!confirm(t('finance.confirm.deleteInvoice'))) return;
     try {
       await Api.deleteInvoice(id);
-      toast.success('Facture supprimée avec succès');
+      toast.success(t('finance.success.invoiceDelete'));
       loadInvoices();
     } catch (error: any) {
-      toast.error('Erreur lors de la suppression');
+      toast.error(t('finance.error.delete'));
     }
   };
 
   const handleDeleteQuote = async (id: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer ce devis ?')) return;
+    if (!confirm(t('finance.confirm.deleteQuote'))) return;
     try {
       await Api.deleteQuote(id);
-      toast.success('Devis supprimé avec succès');
+      toast.success(t('finance.success.quoteDelete'));
       loadQuotes();
     } catch (error: any) {
-      toast.error('Erreur lors de la suppression');
+      toast.error(t('finance.error.delete'));
     }
   };
 
@@ -287,7 +289,7 @@ export const FinancePage = () => {
       const detail = await Api.fetchInvoice(invoice.id);
       setViewingDetail(detail);
     } catch (error: any) {
-      toast.error('Erreur lors du chargement des détails');
+      toast.error(t('finance.error.loadDetail'));
     }
   };
 
@@ -296,7 +298,7 @@ export const FinancePage = () => {
       const detail = await Api.fetchQuote(quote.id);
       setViewingDetail(detail);
     } catch (error: any) {
-      toast.error('Erreur lors du chargement des détails');
+      toast.error(t('finance.error.loadDetail'));
     }
   };
 
@@ -325,10 +327,10 @@ export const FinancePage = () => {
     return (
       <div className="page-container">
         <div className="page-header">
-          <h1>Finance</h1>
+          <h1>{t('finance.title')}</h1>
         </div>
         <div className="page-content">
-          <p>Vous n'avez pas accès à cette page.</p>
+          <p>{t('finance.noAccess')}</p>
         </div>
       </div>
     );
@@ -337,17 +339,17 @@ export const FinancePage = () => {
   return (
     <div className="page-container finance-page">
       <div className="page-header">
-        <h1>Finance</h1>
+        <h1>{t('finance.title')}</h1>
         <div className="page-actions">
           {activeTab === 'invoices' ? (
             <button onClick={openAddInvoiceModal} className="btn-primary">
               <Plus size={16} />
-              Nouvelle facture
+              {t('finance.addInvoice')}
             </button>
           ) : (
             <button onClick={openAddQuoteModal} className="btn-primary">
               <Plus size={16} />
-              Nouveau devis
+              {t('finance.addQuote')}
             </button>
           )}
         </div>
@@ -359,14 +361,14 @@ export const FinancePage = () => {
           onClick={() => setActiveTab('invoices')}
         >
           <FileText size={16} />
-          Factures
+          {t('finance.tab.invoices')}
         </button>
         <button
           className={activeTab === 'quotes' ? 'active' : ''}
           onClick={() => setActiveTab('quotes')}
         >
           <FileCheck size={16} />
-          Devis
+          {t('finance.tab.quotes')}
         </button>
       </div>
 
@@ -375,7 +377,11 @@ export const FinancePage = () => {
           <Search size={20} />
           <input
             type="text"
-            placeholder={`Rechercher ${activeTab === 'invoices' ? 'une facture' : 'un devis'}...`}
+            placeholder={
+              activeTab === 'invoices'
+                ? t('finance.search.invoices')
+                : t('finance.search.quotes')
+            }
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
@@ -390,22 +396,22 @@ export const FinancePage = () => {
             <table>
               <thead>
                 <tr>
-                  <th>Numéro</th>
-                  <th>Client</th>
-                  <th>Date émission</th>
-                  <th>Échéance</th>
-                  <th>Montant</th>
-                  <th>Payé</th>
-                  <th>Reste</th>
-                  <th>Statut</th>
-                  <th>Actions</th>
+                  <th>{t('finance.table.number')}</th>
+                  <th>{t('finance.table.customer')}</th>
+                  <th>{t('finance.table.issueDate')}</th>
+                  <th>{t('finance.table.dueDate')}</th>
+                  <th>{t('finance.table.amount')}</th>
+                  <th>{t('finance.table.paid')}</th>
+                  <th>{t('finance.table.remaining')}</th>
+                  <th>{t('finance.table.status')}</th>
+                  <th>{t('finance.table.actions')}</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredInvoices.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="text-center py-8 text-gray-500">
-                      Aucune facture trouvée
+                      {t('finance.empty.invoices')}
                     </td>
                   </tr>
                 ) : (
@@ -428,21 +434,21 @@ export const FinancePage = () => {
                           <button
                             onClick={() => viewInvoiceDetail(invoice)}
                             className="btn-icon"
-                            title="Voir détails"
+                        title={t('finance.actions.view')}
                           >
                             <Eye size={16} />
                           </button>
                           <button
                             onClick={() => openEditInvoiceModal(invoice)}
                             className="btn-icon"
-                            title="Modifier"
+                        title={t('finance.actions.edit')}
                           >
                             <Edit2 size={16} />
                           </button>
                           <button
                             onClick={() => handleDeleteInvoice(invoice.id)}
                             className="btn-icon text-red-600"
-                            title="Supprimer"
+                        title={t('finance.actions.delete')}
                           >
                             <Trash2 size={16} />
                           </button>
@@ -459,20 +465,20 @@ export const FinancePage = () => {
             <table>
               <thead>
                 <tr>
-                  <th>Numéro</th>
-                  <th>Client</th>
-                  <th>Date émission</th>
-                  <th>Valide jusqu'au</th>
-                  <th>Montant</th>
-                  <th>Statut</th>
-                  <th>Actions</th>
+                  <th>{t('finance.table.number')}</th>
+                  <th>{t('finance.table.customer')}</th>
+                  <th>{t('finance.table.issueDate')}</th>
+                  <th>{t('finance.table.validUntil')}</th>
+                  <th>{t('finance.table.amount')}</th>
+                  <th>{t('finance.table.status')}</th>
+                  <th>{t('finance.table.actions')}</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredQuotes.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="text-center py-8 text-gray-500">
-                      Aucun devis trouvé
+                      {t('finance.empty.quotes')}
                     </td>
                   </tr>
                 ) : (
@@ -493,21 +499,21 @@ export const FinancePage = () => {
                           <button
                             onClick={() => viewQuoteDetail(quote)}
                             className="btn-icon"
-                            title="Voir détails"
+                        title={t('finance.actions.view')}
                           >
                             <Eye size={16} />
                           </button>
                           <button
                             onClick={() => openEditQuoteModal(quote)}
                             className="btn-icon"
-                            title="Modifier"
+                        title={t('finance.actions.edit')}
                           >
                             <Edit2 size={16} />
                           </button>
                           <button
                             onClick={() => handleDeleteQuote(quote.id)}
                             className="btn-icon text-red-600"
-                            title="Supprimer"
+                        title={t('finance.actions.delete')}
                           >
                             <Trash2 size={16} />
                           </button>
@@ -526,11 +532,11 @@ export const FinancePage = () => {
       {showInvoiceModal && (
         <div className="modal-overlay" onClick={() => setShowInvoiceModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h2>{editingInvoice ? 'Modifier la facture' : 'Nouvelle facture'}</h2>
+            <h2>{editingInvoice ? t('finance.modal.invoice.editTitle') : t('finance.modal.invoice.createTitle')}</h2>
             <form onSubmit={handleInvoiceSubmit}>
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Nom du client *</label>
+                  <label>{t('finance.fields.customerName')} *</label>
                   <input
                     type="text"
                     value={invoiceForm.customer_name}
@@ -539,7 +545,7 @@ export const FinancePage = () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Adresse</label>
+                  <label>{t('finance.fields.address')}</label>
                   <input
                     type="text"
                     value={invoiceForm.customer_address}
@@ -547,7 +553,7 @@ export const FinancePage = () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label>N° TVA</label>
+                  <label>{t('finance.fields.vat')}</label>
                   <input
                     type="text"
                     value={invoiceForm.customer_vat_number}
@@ -555,7 +561,7 @@ export const FinancePage = () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Date d'émission *</label>
+                  <label>{t('finance.fields.issueDate')} *</label>
                   <input
                     type="date"
                     value={invoiceForm.issue_date}
@@ -564,7 +570,7 @@ export const FinancePage = () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Date d'échéance *</label>
+                  <label>{t('finance.fields.dueDate')} *</label>
                   <input
                     type="date"
                     value={invoiceForm.due_date}
@@ -573,7 +579,7 @@ export const FinancePage = () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Devise *</label>
+                  <label>{t('finance.fields.currency')} *</label>
                   <select
                     value={invoiceForm.currency}
                     onChange={(e) => setInvoiceForm({ ...invoiceForm, currency: e.target.value })}
@@ -594,7 +600,7 @@ export const FinancePage = () => {
                   </select>
                 </div>
                 <div className="form-group">
-                  <label>Conditions de paiement</label>
+                  <label>{t('finance.fields.paymentTerms')}</label>
                   <input
                     type="text"
                     value={invoiceForm.payment_terms}
@@ -602,7 +608,7 @@ export const FinancePage = () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Référence</label>
+                  <label>{t('finance.fields.reference')}</label>
                   <input
                     type="text"
                     value={invoiceForm.reference}
@@ -611,7 +617,7 @@ export const FinancePage = () => {
                 </div>
               </div>
               <div className="form-group">
-                <label>Notes</label>
+                <label>{t('finance.fields.notes')}</label>
                 <textarea
                   value={invoiceForm.notes}
                   onChange={(e) => setInvoiceForm({ ...invoiceForm, notes: e.target.value })}
@@ -621,7 +627,7 @@ export const FinancePage = () => {
 
               <div className="form-group">
                 <div className="finance-lines-header">
-                  <label className="finance-section-title">Lignes de facture</label>
+                  <label className="finance-section-title">{t('finance.lines.title')}</label>
                   <button
                     type="button"
                     onClick={() => {
@@ -636,7 +642,7 @@ export const FinancePage = () => {
                     className="btn-secondary btn-sm"
                   >
                     <Plus size={14} />
-                    Ajouter une ligne
+                  {t('finance.lines.add')}
                   </button>
                 </div>
                 <div className="finance-lines-container">
@@ -647,7 +653,7 @@ export const FinancePage = () => {
                     return (
                       <div key={index} className="finance-line-card">
                         <div className="finance-line-header">
-                          <span className="finance-line-number">Ligne {index + 1}</span>
+                        <span className="finance-line-number">{t('finance.lines.line')} {index + 1}</span>
                           <button
                             type="button"
                             onClick={() => {
@@ -655,14 +661,14 @@ export const FinancePage = () => {
                               setInvoiceForm({ ...invoiceForm, lines: newLines });
                             }}
                             className="btn-icon btn-icon-danger"
-                            title="Supprimer cette ligne"
+                          title={t('finance.lines.deleteLine')}
                           >
                             <Trash2 size={16} />
                           </button>
                         </div>
                         <div className="form-grid form-grid-4-cols">
                           <div className="form-group form-group-full">
-                            <label>Description *</label>
+                          <label>{t('finance.lines.description')} *</label>
                             <input
                               type="text"
                               value={line.description}
@@ -672,11 +678,11 @@ export const FinancePage = () => {
                                 setInvoiceForm({ ...invoiceForm, lines: newLines });
                               }}
                               required
-                              placeholder="Description de la prestation"
+                            placeholder={t('finance.lines.descriptionPlaceholder')}
                             />
                           </div>
                           <div className="form-group">
-                            <label>Quantité</label>
+                          <label>{t('finance.lines.qty')}</label>
                             <input
                               type="number"
                               step="0.01"
@@ -687,11 +693,11 @@ export const FinancePage = () => {
                                 newLines[index].quantity = parseFloat(e.target.value) || 0;
                                 setInvoiceForm({ ...invoiceForm, lines: newLines });
                               }}
-                              placeholder="1"
+                            placeholder="1"
                             />
                           </div>
                           <div className="form-group">
-                            <label>Prix unitaire</label>
+                          <label>{t('finance.lines.unitPrice')}</label>
                             <input
                               type="number"
                               step="0.01"
@@ -702,11 +708,11 @@ export const FinancePage = () => {
                                 newLines[index].unit_price = parseFloat(e.target.value) || 0;
                                 setInvoiceForm({ ...invoiceForm, lines: newLines });
                               }}
-                              placeholder="0.00"
+                            placeholder="0.00"
                             />
                           </div>
                           <div className="form-group">
-                            <label>Taux TVA (%)</label>
+                          <label>{t('finance.lines.taxRate')}</label>
                             <input
                               type="number"
                               step="0.01"

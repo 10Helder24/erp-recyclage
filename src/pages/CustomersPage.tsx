@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 
 import { Api, type Customer } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
+import { useI18n } from '../context/I18nContext';
 import CustomerDetailPage from './CustomerDetailPage';
 
 type CustomerForm = {
@@ -24,6 +25,7 @@ const DEFAULT_FORM: CustomerForm = {
 
 export const CustomersPage = () => {
   const { hasRole, hasPermission } = useAuth();
+  const { t } = useI18n();
   const isAdmin = hasRole('admin');
   const isManager = hasRole('manager');
   const canEdit = isAdmin || isManager || hasPermission('edit_customers');
@@ -43,7 +45,7 @@ export const CustomersPage = () => {
       setCustomers(data);
     } catch (error) {
       console.error(error);
-      toast.error('Erreur lors du chargement des clients');
+      toast.error(t('customers.error.load'));
     } finally {
       setLoading(false);
     }
@@ -80,7 +82,7 @@ export const CustomersPage = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.name.trim()) {
-      toast.error('Le nom du client est requis');
+      toast.error(t('customers.error.nameRequired'));
       return;
     }
 
@@ -93,7 +95,7 @@ export const CustomersPage = () => {
           longitude: form.longitude ? parseFloat(form.longitude) : undefined,
           risk_level: form.risk_level || undefined
         });
-        toast.success('Client mis à jour avec succès');
+        toast.success(t('customers.success.update'));
       } else {
         await Api.createCustomer({
           name: form.name,
@@ -102,25 +104,25 @@ export const CustomersPage = () => {
           longitude: form.longitude ? parseFloat(form.longitude) : undefined,
           risk_level: form.risk_level || undefined
         });
-        toast.success('Client créé avec succès');
+        toast.success(t('customers.success.create'));
       }
       setShowModal(false);
       loadCustomers();
     } catch (error) {
       console.error(error);
-      toast.error('Erreur lors de la sauvegarde');
+      toast.error(t('customers.error.save'));
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer ce client ?')) return;
+    if (!confirm(t('customers.confirm.delete'))) return;
     try {
       await Api.deleteCustomer(id);
-      toast.success('Client supprimé avec succès');
+      toast.success(t('customers.success.delete'));
       loadCustomers();
     } catch (error) {
       console.error(error);
-      toast.error('Erreur lors de la suppression');
+      toast.error(t('customers.error.delete'));
     }
   };
 
@@ -133,13 +135,13 @@ export const CustomersPage = () => {
   };
 
   const getRiskLabel = (risk?: string | null) => {
-    if (!risk) return 'Normal';
+    if (!risk) return t('customers.risk.normal');
     const level = risk.toLowerCase();
-    if (level === 'high') return 'Élevé';
-    if (level === 'sensitive') return 'Sensible';
-    if (level === 'urgent') return 'Urgent';
-    if (level === 'medium') return 'Moyen';
-    if (level === 'low') return 'Faible';
+    if (level === 'high') return t('customers.risk.high');
+    if (level === 'sensitive') return t('customers.risk.sensitive');
+    if (level === 'urgent') return t('customers.risk.urgent');
+    if (level === 'medium') return t('customers.risk.medium');
+    if (level === 'low') return t('customers.risk.low');
     return risk;
   };
 
@@ -147,14 +149,14 @@ export const CustomersPage = () => {
     <section className="destruction-page">
       <div className="page-header">
         <div>
-          <p className="eyebrow">Gestion</p>
-          <h1 className="page-title">Clients</h1>
-          <p className="page-subtitle">Gérez vos clients, leurs adresses et niveaux de risque.</p>
+          <p className="eyebrow">{t('customers.section')}</p>
+          <h1 className="page-title">{t('customers.title')}</h1>
+          <p className="page-subtitle">{t('customers.subtitle')}</p>
         </div>
         {canEdit && (
           <button type="button" className="btn btn-primary" onClick={openAddModal}>
             <Plus size={18} />
-            Ajouter un client
+            {t('customers.add')}
           </button>
         )}
       </div>
@@ -166,7 +168,7 @@ export const CustomersPage = () => {
               <Search size={16} />
               <input
                 type="text"
-                placeholder="Rechercher un client..."
+                placeholder={t('customers.searchPlaceholder')}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 style={{ border: 'none', background: 'transparent', outline: 'none', flex: 1 }}
@@ -177,11 +179,11 @@ export const CustomersPage = () => {
           {loading ? (
             <div style={{ textAlign: 'center', padding: '40px' }}>
               <Loader2 className="spinner" size={32} />
-              <p style={{ marginTop: '16px', color: 'var(--text-muted)' }}>Chargement...</p>
+              <p style={{ marginTop: '16px', color: 'var(--text-muted)' }}>{t('common.loading')}</p>
             </div>
           ) : filteredCustomers.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-              <p>Aucun client trouvé</p>
+              <p>{t('customers.empty')}</p>
             </div>
           ) : (
             <div className="employees-grid">
@@ -211,7 +213,7 @@ export const CustomersPage = () => {
                         onClick={() => setSelectedCustomerId(customer.id)}
                       >
                         <Eye size={14} />
-                        Fiche
+                    {t('customers.detail')}
                       </button>
                       {canEdit && (
                         <>
@@ -244,7 +246,7 @@ export const CustomersPage = () => {
                     {customer.latitude && customer.longitude && (
                       <div className="info-row">
                         <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                          Coordonnées : {customer.latitude.toFixed(6)}, {customer.longitude.toFixed(6)}
+                          {t('customers.coordinates')}: {customer.latitude.toFixed(6)}, {customer.longitude.toFixed(6)}
                         </span>
                       </div>
                     )}
@@ -261,7 +263,7 @@ export const CustomersPage = () => {
         <div className="modal-backdrop" onClick={() => setShowModal(false)}>
           <div className="modal-panel unified-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2 className="modal-title">{editingCustomer ? 'Modifier le client' : 'Nouveau client'}</h2>
+              <h2 className="modal-title">{editingCustomer ? t('customers.editTitle') : t('customers.createTitle')}</h2>
               <button
                 type="button"
                 className="modal-close"
@@ -274,7 +276,7 @@ export const CustomersPage = () => {
               <div className="form-section">
                 <div className="form-group">
                   <label htmlFor="customer-name">
-                    Nom du client <span className="required-indicator">*</span>
+                    {t('customers.fields.name')} <span className="required-indicator">*</span>
                   </label>
                   <input
                     id="customer-name"
@@ -285,61 +287,61 @@ export const CustomersPage = () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label htmlFor="customer-address">Adresse</label>
+                  <label htmlFor="customer-address">{t('customers.fields.address')}</label>
                   <input
                     id="customer-address"
                     type="text"
                     value={form.address}
                     onChange={(e) => setForm((prev) => ({ ...prev, address: e.target.value }))}
-                    placeholder="Adresse complète"
+                    placeholder={t('customers.placeholders.address')}
                   />
                 </div>
                 <div className="form-grid-2-cols">
                   <div className="form-group">
-                    <label htmlFor="customer-latitude">Latitude</label>
+                    <label htmlFor="customer-latitude">{t('customers.fields.latitude')}</label>
                     <input
                       id="customer-latitude"
                       type="number"
                       step="any"
                       value={form.latitude}
                       onChange={(e) => setForm((prev) => ({ ...prev, latitude: e.target.value }))}
-                      placeholder="46.548452"
+                    placeholder={t('customers.placeholders.latitude')}
                     />
                   </div>
                   <div className="form-group">
-                    <label htmlFor="customer-longitude">Longitude</label>
+                    <label htmlFor="customer-longitude">{t('customers.fields.longitude')}</label>
                     <input
                       id="customer-longitude"
                       type="number"
                       step="any"
                       value={form.longitude}
                       onChange={(e) => setForm((prev) => ({ ...prev, longitude: e.target.value }))}
-                      placeholder="6.572221"
+                    placeholder={t('customers.placeholders.longitude')}
                     />
                   </div>
                 </div>
                 <div className="form-group">
-                  <label htmlFor="customer-risk-level">Niveau de risque</label>
+                  <label htmlFor="customer-risk-level">{t('customers.fields.risk')}</label>
                   <select
                     id="customer-risk-level"
                     value={form.risk_level}
                     onChange={(e) => setForm((prev) => ({ ...prev, risk_level: e.target.value }))}
                   >
-                    <option value="">Normal</option>
-                    <option value="low">Faible</option>
-                    <option value="medium">Moyen</option>
-                    <option value="sensitive">Sensible</option>
-                    <option value="high">Élevé</option>
-                    <option value="urgent">Urgent</option>
+                    <option value="">{t('customers.risk.normal')}</option>
+                    <option value="low">{t('customers.risk.low')}</option>
+                    <option value="medium">{t('customers.risk.medium')}</option>
+                    <option value="sensitive">{t('customers.risk.sensitive')}</option>
+                    <option value="high">{t('customers.risk.high')}</option>
+                    <option value="urgent">{t('customers.risk.urgent')}</option>
                   </select>
                 </div>
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-outline" onClick={() => setShowModal(false)}>
-                  Annuler
+                  {t('common.cancel')}
                 </button>
                 <button type="submit" className="btn btn-primary">
-                  {editingCustomer ? 'Modifier' : 'Créer'}
+                  {editingCustomer ? t('common.edit') : t('common.create')}
                 </button>
               </div>
             </form>
