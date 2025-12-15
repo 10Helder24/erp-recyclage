@@ -50,15 +50,26 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   }
 
   try {
-    const response = await fetch(`${API_URL}${path}`, {
+    const url = `${API_URL}${path}`;
+    const response = await fetch(url, {
       headers: buildHeaders(options),
       ...options
     });
 
     if (!response.ok) {
       const isJson = response.headers.get('Content-Type')?.includes('application/json');
-      const errorMessage = isJson ? JSON.stringify(await response.json()) : await response.text();
-      throw new Error(errorMessage || 'Erreur API');
+      let errorMessage = 'Erreur API';
+      try {
+        if (isJson) {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorData.detail || JSON.stringify(errorData);
+        } else {
+          errorMessage = await response.text() || `Erreur HTTP ${response.status}`;
+        }
+      } catch (parseError) {
+        errorMessage = `Erreur HTTP ${response.status}: ${response.statusText}`;
+      }
+      throw new Error(errorMessage);
     }
 
     const contentType = response.headers.get('Content-Type');
@@ -67,6 +78,10 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     }
     return (await response.text()) as unknown as T;
   } catch (error: any) {
+    // Si c'est une erreur réseau (connexion refusée, timeout, etc.)
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      throw new Error(`Impossible de se connecter au serveur. Vérifiez que le serveur backend est démarré (${API_URL})`);
+    }
     // Relever les erreurs hors ligne déjà gérées plus haut
     throw error;
   }

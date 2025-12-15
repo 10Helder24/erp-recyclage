@@ -731,36 +731,53 @@ const mergeTemplateConfig = (module: string, config?: PdfTemplateConfig | null):
 };
 
 const getPdfTemplate = async (module: string): Promise<PdfTemplateRow> => {
-  const rows = await run<
-    PdfTemplateRow & {
-      updated_by_name: string | null;
+  try {
+    const rows = await run<
+      PdfTemplateRow & {
+        updated_by_name: string | null;
+      }
+    >(
+      `select t.id,
+              t.module,
+              t.config,
+              t.updated_at,
+              t.updated_by,
+              u.full_name as updated_by_name
+       from pdf_templates t
+       left join users u on u.id = t.updated_by
+       where module = $1`,
+      [module]
+    );
+    if (!rows.length) {
+      return {
+        id: '',
+        module,
+        config: mergeTemplateConfig(module),
+        updated_at: new Date().toISOString(),
+        updated_by: null,
+        updated_by_name: null
+      };
     }
-  >(
-    `select t.id,
-            t.module,
-            t.config,
-            t.updated_at,
-            t.updated_by,
-            u.full_name as updated_by_name
-     from pdf_templates t
-     left join users u on u.id = t.updated_by
-     where module = $1`,
-    [module]
-  );
-  if (!rows.length) {
     return {
-      id: '',
-      module,
-      config: mergeTemplateConfig(module),
-      updated_at: new Date().toISOString(),
-      updated_by: null,
-      updated_by_name: null
+      ...rows[0],
+      config: mergeTemplateConfig(module, rows[0].config)
     };
+  } catch (err: any) {
+    // Si la table n'existe pas ou erreur SQL, retourner le template par défaut
+    if (err.message?.includes('does not exist') || err.message?.includes('relation')) {
+      console.warn(`[getPdfTemplate] Table pdf_templates n'existe pas encore pour le module "${module}", retour du template par défaut`);
+      return {
+        id: '',
+        module,
+        config: mergeTemplateConfig(module),
+        updated_at: new Date().toISOString(),
+        updated_by: null,
+        updated_by_name: null
+      };
+    }
+    // Sinon, relever l'erreur
+    throw err;
   }
-  return {
-    ...rows[0],
-    config: mergeTemplateConfig(module, rows[0].config)
-  };
 };
 
 const upsertPdfTemplate = async (module: string, config: PdfTemplateConfig, userId?: string) => {
@@ -963,7 +980,7 @@ const app = express();
 const PORT = Number(process.env.PORT) || 4000;
 
 app.use(cors());
-app.use(express.json({ limit: '25mb' }));
+app.use(express.json({ limit: '100mb' })); // Augmenté pour supporter les PDFs avec photos
 
 // Augmenter le timeout pour les requêtes longues (génération PDF avec images)
 app.use((req, res, next) => {
@@ -2755,6 +2772,7 @@ const ensureSchema = async () => {
   `);
   // Sécurise la présence de la colonne code si la table existait sans elle
   await run(`alter table sites add column if not exists code text`);
+  await run(`alter table sites add column if not exists is_active boolean not null default true`);
   await run(`update sites set code = coalesce(code, name) where code is null`);
   await run('create index if not exists sites_code_idx on sites(code)');
   await run('create index if not exists sites_active_idx on sites(is_active)');
@@ -3495,13 +3513,15 @@ const ensureSchema = async () => {
       from_quality text, -- Garde pour compatibilité/référence texte
       to_quality_id uuid references material_qualities(id) on delete set null,
       to_quality text, -- Garde pour compatibilité/référence texte
-      reason text not null,
+      reason text,
       adjusted_weight numeric,
       adjusted_value numeric,
       performed_at timestamptz not null default now(),
       performed_by uuid references users(id) on delete set null
     )
   `);
+  // Rendre reason nullable si ce n'est pas déjà le cas
+  await run('alter table downgrades alter column reason drop not null');
   await run('alter table downgrades add column if not exists from_quality_id uuid references material_qualities(id) on delete set null');
   await run('alter table downgrades add column if not exists to_quality_id uuid references material_qualities(id) on delete set null');
   await run('alter table downgrades add column if not exists lot_origin_site_id uuid references sites(id) on delete set null');
@@ -3571,6 +3591,14 @@ const ensureSchema = async () => {
   await run('alter table downgrades add column if not exists anomalie_signalee boolean');
   await run('alter table downgrades add column if not exists declaration_securite text');
   await run('alter table downgrades add column if not exists declassed_material text');
+  await run('alter table downgrades add column if not exists declassed_material_code text');
+  await run('alter table downgrades add column if not exists vehicle_plate text');
+  await run('alter table downgrades add column if not exists slip_number text');
+  await run('alter table downgrades add column if not exists motive_ratio text');
+  await run('alter table downgrades add column if not exists sorting_time_minutes text');
+  await run('alter table downgrades add column if not exists machines_used text[]');
+  await run('alter table downgrades add column if not exists lot_origin_client_name text');
+  await run('alter table downgrades add column if not exists lot_origin_client_address text');
   await run('alter table downgrades add column if not exists status text default \'draft\' check (status in (\'draft\', \'pending_completion\', \'pending_validation\', \'validated\', \'sent\'))');
   await run('alter table downgrades add column if not exists validated_at timestamptz');
   await run('alter table downgrades add column if not exists validated_by uuid references users(id) on delete set null');
@@ -4709,11 +4737,28 @@ app.get(
     if (!userId) {
       return res.status(401).json({ message: 'Session expirée' });
     }
-    const [user] = await run<UserRow>('select * from users where id = $1', [userId]);
-    if (!user) {
-      return res.status(401).json({ message: 'Utilisateur introuvable' });
+    try {
+      const [user] = await run<UserRow>('select * from users where id = $1', [userId]);
+      if (!user) {
+        console.warn(`[Auth /me] Utilisateur introuvable pour userId: ${userId}`);
+        return res.status(401).json({ message: 'Utilisateur introuvable' });
+      }
+      res.json({ user: mapUserRow(user) });
+    } catch (err: any) {
+      console.error('[Auth /me] Erreur lors de la récupération de l\'utilisateur:', err);
+      // Si c'est une erreur de colonne manquante, retourner 500 avec un message clair
+      if (err.message?.includes('column') || err.message?.includes('does not exist')) {
+        return res.status(500).json({ 
+          message: 'Erreur de configuration base de données',
+          detail: 'La table users ou certaines colonnes sont manquantes. Vérifiez les migrations.'
+        });
+      }
+      // Sinon, retourner une erreur générique
+      return res.status(500).json({ 
+        message: 'Erreur serveur lors de la récupération de l\'utilisateur',
+        detail: err.message || 'Erreur inconnue'
+      });
     }
-    res.json({ user: mapUserRow(user) });
   })
 );
 
@@ -8142,23 +8187,33 @@ app.get(
 // Recherche clients (nom ou adresse) pour autocomplétion
 app.get(
   '/api/customers/search',
-  requireAuth({ roles: ['admin', 'manager', 'user'], permissions: ['view_customers'] }),
+  requireAuth(), // Permissions simplifiées - tous les utilisateurs authentifiés peuvent rechercher
   asyncHandler(async (req, res) => {
-    const q = ((req.query.q as string) || '').trim().toLowerCase();
-    if (!q || q.length < 2) {
-      return res.json([]);
+    try {
+      const q = ((req.query.q as string) || '').trim().toLowerCase();
+      if (!q || q.length < 2) {
+        return res.json([]);
+      }
+      const searchTerm = `%${q}%`;
+      const rows = await run(
+        `select id, name, address
+         from customers
+         where lower(name) like $1
+            or lower(coalesce(address, '')) like $1
+         order by name
+         limit 15`,
+        [searchTerm]
+      );
+      res.json(rows);
+    } catch (err: any) {
+      console.error('[Customers search] Erreur:', err);
+      // Si la table n'existe pas, retourner un tableau vide plutôt qu'une erreur 500
+      if (err.message?.includes('does not exist') || err.message?.includes('relation')) {
+        console.warn('[Customers search] Table customers n\'existe pas encore');
+        return res.json([]);
+      }
+      throw err; // Relever l'erreur pour asyncHandler
     }
-    const searchTerm = `%${q}%`;
-    const rows = await run(
-      `select id, name, address
-       from customers
-       where lower(name) like $1
-          or lower(coalesce(address, '')) like $1
-       order by name
-       limit 15`,
-      [searchTerm]
-    );
-    res.json(rows);
   })
 );
 
@@ -8282,24 +8337,34 @@ app.get(
 // Recherche matières (code ou nom) pour autocomplétion
 app.get(
   '/api/materials/search',
-  requireAuth({ roles: ['admin', 'manager', 'user'], permissions: ['view_materials'] }),
+  requireAuth(), // Permissions simplifiées - tous les utilisateurs authentifiés peuvent rechercher
   asyncHandler(async (req, res) => {
-    const q = ((req.query.q as string) || '').trim().toLowerCase();
-    if (!q || q.length < 2) {
-      return res.json([]);
+    try {
+      const q = ((req.query.q as string) || '').trim().toLowerCase();
+      if (!q || q.length < 2) {
+        return res.json([]);
+      }
+      const searchTerm = `%${q}%`;
+      const rows = await run(
+        `select id, numero, abrege, description, unite, famille
+         from materials
+         where lower(coalesce(numero, '')) like $1
+            or lower(coalesce(abrege, '')) like $1
+            or lower(coalesce(description, '')) like $1
+         order by numero nulls last, abrege nulls last
+         limit 15`,
+        [searchTerm]
+      );
+      res.json(rows);
+    } catch (err: any) {
+      console.error('[Materials search] Erreur:', err);
+      // Si la table n'existe pas, retourner un tableau vide plutôt qu'une erreur 500
+      if (err.message?.includes('does not exist') || err.message?.includes('relation')) {
+        console.warn('[Materials search] Table materials n\'existe pas encore');
+        return res.json([]);
+      }
+      throw err; // Relever l'erreur pour asyncHandler
     }
-    const searchTerm = `%${q}%`;
-    const rows = await run(
-      `select id, numero, abrege, description, unite, famille
-       from materials
-       where lower(coalesce(numero, '')) like $1
-          or lower(coalesce(abrege, '')) like $1
-          or lower(coalesce(description, '')) like $1
-       order by numero nulls last, abrege nulls last
-       limit 15`,
-      [searchTerm]
-    );
-    res.json(rows);
   })
 );
 
@@ -9373,9 +9438,26 @@ app.get(
   '/api/pdf-templates/:module',
   requireAuth(), // Tous les utilisateurs authentifiés peuvent lire les templates
   asyncHandler(async (req, res) => {
-    const module = req.params.module;
-    const template = await getPdfTemplate(module);
-    res.json(template);
+    try {
+      const module = req.params.module;
+      const template = await getPdfTemplate(module);
+      res.json(template);
+    } catch (err: any) {
+      console.error('[PDF Templates] Erreur lors de la récupération du template:', err);
+      // Si la table n'existe pas, retourner le template par défaut
+      if (err.message?.includes('does not exist') || err.message?.includes('relation')) {
+        const defaultTemplate = mergeTemplateConfig(req.params.module);
+        return res.json({
+          id: '',
+          module: req.params.module,
+          config: defaultTemplate,
+          updated_at: new Date().toISOString(),
+          updated_by: null,
+          updated_by_name: null
+        });
+      }
+      throw err; // Relever l'erreur pour asyncHandler
+    }
   })
 );
 
@@ -13485,6 +13567,37 @@ app.delete(
   })
 );
 
+// GET /api/alerts/status - Obtenir le statut de la génération d'alertes
+app.get(
+  '/api/alerts/status',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (req, res) => {
+    res.json({
+      enabled: ALERTS_ENABLED,
+      message: ALERTS_ENABLED 
+        ? 'Génération d\'alertes activée' 
+        : 'Génération d\'alertes désactivée (ENABLE_ALERTS=false)'
+    });
+  })
+);
+
+// POST /api/alerts/toggle - Activer/désactiver la génération d'alertes (admin uniquement)
+// Note: Ceci nécessite un redémarrage du serveur pour prendre effet complètement
+app.post(
+  '/api/alerts/toggle',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (req, res) => {
+    const { enabled } = req.body;
+    res.json({
+      message: 'Pour activer/désactiver les alertes, modifiez ENABLE_ALERTS dans votre fichier .env et redémarrez le serveur',
+      current_status: ALERTS_ENABLED,
+      instruction: enabled 
+        ? 'Ajoutez ENABLE_ALERTS=true (ou supprimez la variable) dans .env'
+        : 'Ajoutez ENABLE_ALERTS=false dans .env'
+    });
+  })
+);
+
 // Fonctions de génération automatique d'alertes
 const generateAlerts = async () => {
   try {
@@ -13999,13 +14112,52 @@ const sendAlertNotificationsToRecipients = async () => {
   }
 };
 
-// Planifier la génération automatique d'alertes toutes les heures
-setInterval(() => {
-  generateAlerts().catch(console.error);
-}, 60 * 60 * 1000); // Toutes les heures
+// Contrôle de la génération d'alertes (peut être désactivée via variable d'environnement)
+const ALERTS_ENABLED = process.env.ENABLE_ALERTS !== 'false'; // Par défaut activé, désactiver avec ENABLE_ALERTS=false
 
-// Générer les alertes au démarrage
-generateAlerts().catch(console.error);
+// Wrapper pour gérer les erreurs de quota et autres erreurs critiques
+const generateAlertsSafe = async () => {
+  // Vérifier si les alertes sont activées
+  if (!ALERTS_ENABLED) {
+    console.log('[generateAlerts] ⏸️ Génération d\'alertes désactivée (ENABLE_ALERTS=false)');
+    return;
+  }
+  
+  try {
+    await generateAlerts();
+  } catch (error: any) {
+    // Gérer spécifiquement les erreurs de quota Neon
+    if (error?.message?.includes('exceeded the compute time quota') || 
+        error?.message?.includes('quota') ||
+        error?.code === 'XX000') {
+      console.warn('[generateAlerts] ⚠️ Quota de base de données dépassé. Génération d\'alertes désactivée temporairement.');
+      console.warn('[generateAlerts] Pour réactiver, mettez à jour votre plan Neon ou attendez la réinitialisation du quota.');
+      console.warn('[generateAlerts] Pour désactiver manuellement, ajoutez ENABLE_ALERTS=false dans votre fichier .env');
+      // Ne pas relancer l'erreur pour ne pas bloquer le serveur
+      return;
+    }
+    // Pour les autres erreurs, logger mais ne pas bloquer
+    console.error('[generateAlerts] Erreur lors de la génération d\'alertes:', error?.message || error);
+  }
+};
+
+// Planifier la génération automatique d'alertes toutes les heures (seulement si activée)
+let alertsInterval: NodeJS.Timeout | null = null;
+if (ALERTS_ENABLED) {
+  alertsInterval = setInterval(() => {
+    generateAlertsSafe();
+  }, 60 * 60 * 1000); // Toutes les heures
+  console.log('[generateAlerts] ✅ Génération d\'alertes activée (toutes les heures)');
+} else {
+  console.log('[generateAlerts] ⏸️ Génération d\'alertes désactivée (ENABLE_ALERTS=false)');
+}
+
+// Générer les alertes au démarrage (de manière asynchrone pour ne pas bloquer, seulement si activée)
+if (ALERTS_ENABLED) {
+  setTimeout(() => {
+    generateAlertsSafe();
+  }, 5000); // Attendre 5 secondes après le démarrage
+}
 
 const start = async () => {
   try {
@@ -15769,6 +15921,197 @@ app.post(
 );
 
 // ==================== Déclassement matières avancé ====================
+// Fonction helper pour garantir que la table downgrade_archives existe
+const ensureDowngradeArchivesTable = async () => {
+  try {
+    await run(`
+      create table if not exists downgrade_archives (
+        id uuid primary key default gen_random_uuid(),
+        downgrade_id uuid references downgrades(id) on delete cascade,
+        pdf_data bytea not null,
+        pdf_filename text not null,
+        pdf_size_bytes integer,
+        retention_years integer not null default 10,
+        archived_at timestamptz not null default now(),
+        archived_by uuid references users(id) on delete set null,
+        expires_at timestamptz generated always as (archived_at + (retention_years || ' years')::interval) stored,
+        metadata jsonb,
+        created_at timestamptz not null default now()
+      )
+    `);
+    await run('create index if not exists downgrade_archives_downgrade_idx on downgrade_archives(downgrade_id)');
+    await run('create index if not exists downgrade_archives_expires_idx on downgrade_archives(expires_at)');
+  } catch (err: any) {
+    // Ignorer les erreurs de table/index déjà existants
+    if (!err.message?.includes('already exists') && !err.message?.includes('duplicate')) {
+      console.warn('[ensureDowngradeArchivesTable] Erreur:', err.message);
+    }
+  }
+};
+
+// Fonction helper pour garantir que toutes les colonnes downgrades existent
+const ensureDowngradesColumns = async () => {
+  const columns: [string, string][] = [
+    ['motive_principal', 'text'],
+    ['motive_description', 'text'],
+    ['declassed_material_code', 'text'],
+    ['vehicle_plate', 'text'],
+    ['slip_number', 'text'],
+    ['motive_ratio', 'text'],
+    ['sorting_time_minutes', 'text'],
+    ['machines_used', 'text[]'],
+    ['lot_origin_client_name', 'text'],
+    ['lot_origin_client_address', 'text'],
+    ['photos_avant', 'text[]'],
+    ['photos_apres', 'text[]'],
+    ['proof_photos', 'text[]'],
+    ['controller_name', 'text'],
+    ['controller_signature', 'text'],
+    ['incident_number', 'text'],
+    ['new_category', 'text'],
+    ['new_veva_code', 'text'],
+    ['new_quality', 'text'],
+    ['poids_net_declasse', 'numeric'],
+    ['stockage_type', 'text'],
+    ['destination', 'text'],
+    ['veva_type', 'text'],
+    ['previous_producer', 'text'],
+    ['planned_transporter', 'text'],
+    ['veva_slip_number', 'text'],
+    ['swissid_signature', 'text'],
+    ['documents', 'jsonb'],
+    ['omod_category', 'text'],
+    ['omod_dangerosity', 'text'],
+    ['omod_dismantling_required', 'boolean'],
+    ['ldtr_canton', 'text'],
+    ['canton_rules_applied', 'text'],
+    ['emplacement_actuel', 'text'],
+    ['nouvel_emplacement', 'text'],
+    ['mouvement_type', 'text'],
+    ['transport_number', 'text'],
+    ['driver_id', 'uuid'],
+    ['vehicle_id', 'uuid'],
+    ['weighbridge_id', 'uuid'],
+    ['poids_final_brut', 'numeric'],
+    ['poids_final_tare', 'numeric'],
+    ['poids_final_net', 'numeric'],
+    ['seal_number', 'text'],
+    ['valeur_avant', 'numeric'],
+    ['valeur_apres', 'numeric'],
+    ['perte_gain', 'numeric'],
+    ['responsable_validation', 'text'],
+    ['cause_economique', 'text'],
+    ['impact_marge', 'numeric'],
+    ['risques_identifies', 'text[]'],
+    ['epis_requis', 'text[]'],
+    ['procedure_suivie', 'text'],
+    ['anomalie_signalee', 'boolean'],
+    ['declaration_securite', 'text'],
+    ['lot_origin_site_id', 'uuid'],
+    ['lot_origin_client_id', 'uuid'],
+    ['lot_origin_canton', 'text'],
+    ['lot_origin_commune', 'text'],
+    ['lot_entry_date', 'date'],
+    ['lot_entry_at', 'timestamptz'],
+    ['lot_veva_code', 'text'],
+    ['lot_internal_code', 'text'],
+    ['lot_filiere', 'text'],
+    ['lot_quality_grade', 'text'],
+    ['lot_quality_metrics', 'jsonb'],
+    ['lot_weight_brut', 'numeric'],
+    ['lot_weight_tare', 'numeric'],
+    ['lot_weight_net', 'numeric'],
+    ['declassed_material', 'text'],
+    ['status', 'text']
+  ];
+  
+  for (const [colName, colType] of columns) {
+    try {
+      await run(`alter table downgrades add column if not exists ${colName} ${colType}`);
+    } catch (err: any) {
+      // Logger l'erreur mais continuer
+      if (!err.message?.includes('already exists') && !err.message?.includes('duplicate')) {
+        console.log(`[ensureDowngradesColumns] Erreur pour ${colName}:`, err.message);
+      }
+    }
+  }
+};
+
+// Fonction helper pour valider et nettoyer les valeurs UUID
+const cleanUuidValue = (value: any, fieldName: string): any => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  // Convertir en string si ce n'est pas déjà le cas
+  const strValue = String(value).trim();
+  if (strValue === '' || strValue === 'null' || strValue === 'undefined') {
+    return null;
+  }
+  // Si c'est déjà un UUID valide, le retourner
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(strValue)) {
+    return strValue;
+  }
+  // Si c'est un nombre ou une chaîne qui n'est pas un UUID, logger et retourner null
+  if (strValue.match(/^\d+$/)) {
+    console.warn(`[cleanUuidValue] Valeur numérique "${strValue}" rejetée pour le champ UUID "${fieldName}"`);
+  } else {
+    console.warn(`[cleanUuidValue] Valeur non-UUID "${strValue}" rejetée pour le champ UUID "${fieldName}"`);
+  }
+  return null;
+};
+
+// Fonction helper pour valider et nettoyer les valeurs numeric
+const cleanNumericValue = (value: any, fieldName: string): any => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  // Si c'est déjà un nombre, le retourner
+  if (typeof value === 'number') {
+    return isNaN(value) || !isFinite(value) ? null : value;
+  }
+  // Si c'est une chaîne, essayer de la convertir
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '' || trimmed === 'null' || trimmed === 'undefined') {
+      return null;
+    }
+    const num = parseFloat(trimmed);
+    if (!isNaN(num) && isFinite(num)) {
+      return num;
+    }
+  }
+  // Si la valeur n'est pas convertible, retourner null
+  return null;
+};
+
+// Fonction helper pour valider et nettoyer les valeurs array
+const cleanArrayValue = (value: any, fieldName: string): any => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  // Si c'est déjà un tableau, le retourner (même vide)
+  if (Array.isArray(value)) {
+    return value.length === 0 ? null : value;
+  }
+  // Si c'est une chaîne vide, retourner null
+  if (typeof value === 'string' && value.trim() === '') {
+    return null;
+  }
+  // Si c'est une chaîne qui ressemble à un tableau JSON, essayer de la parser
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed.length === 0 ? null : parsed;
+      }
+    } catch (e) {
+      // Ignorer les erreurs de parsing
+    }
+  }
+  // Si la valeur n'est pas un tableau valide, retourner null
+  return null;
+};
+
 app.get(
   '/api/downgrades',
   requireAuth(),
@@ -15823,12 +16166,15 @@ app.get(
 
 app.post(
   '/api/downgrades',
-  requireAuth({ roles: ['admin', 'manager'] }),
+  requireAuth(), // Tous les utilisateurs authentifiés peuvent créer des déclassements
   asyncHandler(async (req, res) => {
+    // Garantir que toutes les colonnes existent AVANT l'insertion
+    await ensureDowngradesColumns();
+    
     const payload = req.body || {};
     const isDraft = payload.status === 'draft' || payload.save_as_draft === true;
     
-    // Validation minimale pour brouillon (parties 1-2 seulement)
+    // Validation minimale pour brouillon
     if (!isDraft) {
       if (!payload.lot_id && !payload.lot_internal_code) {
         return res.status(400).json({ message: 'ID lot ou code interne requis' });
@@ -15838,7 +16184,8 @@ app.post(
       }
     }
     
-    const fields = [
+    // Tous les champs autorisés (utilisateurs terrain remplissent 1-2, dispo complète 3-8)
+    const allFields = [
       'lot_id', 'from_quality_id', 'from_quality', 'to_quality_id', 'to_quality', 'reason',
       'adjusted_weight', 'adjusted_value', 'performed_at', 'motive_principal', 'motive_description',
       'photos_avant', 'photos_apres', 'controller_name', 'controller_signature', 'incident_number',
@@ -15853,18 +16200,77 @@ app.post(
       'lot_origin_site_id', 'lot_origin_client_id', 'lot_origin_canton', 'lot_origin_commune',
       'lot_entry_date', 'lot_entry_at', 'lot_veva_code', 'lot_internal_code', 'lot_filiere', 'lot_quality_grade',
       'lot_quality_metrics', 'lot_weight_brut', 'lot_weight_tare', 'lot_weight_net', 'declassed_material',
+      'declassed_material_code', 'vehicle_plate', 'slip_number', 'motive_ratio', 'sorting_time_minutes',
+      'machines_used', 'lot_origin_client_name', 'lot_origin_client_address',
       'status'
     ];
     const cols: string[] = [];
     const values: any[] = [];
     const params: string[] = [];
-    fields.forEach((f, idx) => {
-      if (payload[f] !== undefined) {
-        cols.push(f);
-        values.push(payload[f]);
-        params.push(`$${values.length}`);
+    // Définir les champs numeric
+    const numericFields = [
+      'adjusted_weight', 'adjusted_value', 'poids_net_declasse', 'poids_final_brut', 'poids_final_tare',
+      'poids_final_net', 'valeur_avant', 'valeur_apres', 'perte_gain', 'impact_marge',
+      'lot_weight_brut', 'lot_weight_tare', 'lot_weight_net'
+    ];
+    
+    // Définir les champs array
+    const arrayFields = [
+      'photos_avant', 'photos_apres', 'proof_photos', 'machines_used', 'risques_identifies', 'epis_requis'
+    ];
+    
+    allFields.forEach((f) => {
+      // Ignorer les valeurs undefined, mais traiter null et chaînes vides
+      if (payload[f] === undefined) {
+        return;
       }
+      
+      let value = payload[f];
+      
+      // Nettoyer TOUS les champs qui se terminent par _id (UUID)
+      if (f.endsWith('_id')) {
+        value = cleanUuidValue(value, f);
+        // Si la valeur n'est pas un UUID valide, ne pas l'inclure
+        if (value === null) {
+          return;
+        }
+      }
+      // Nettoyer les valeurs numeric
+      else if (numericFields.includes(f)) {
+        value = cleanNumericValue(value, f);
+        // Si la valeur n'est pas un numeric valide, ne pas l'inclure
+        if (value === null) {
+          return;
+        }
+      }
+      // Nettoyer les valeurs array (AVANT de vérifier si c'est undefined)
+      else if (arrayFields.includes(f)) {
+        // Si c'est une chaîne vide, retourner null directement
+        if (typeof value === 'string' && value.trim() === '') {
+          return;
+        }
+        value = cleanArrayValue(value, f);
+        // Si la valeur n'est pas un array valide, ne pas l'inclure
+        if (value === null) {
+          return;
+        }
+      }
+      // Pour les autres champs texte, si c'est une chaîne vide, ne pas l'inclure
+      else if (typeof value === 'string' && value.trim() === '') {
+        return;
+      }
+      
+      cols.push(f);
+      values.push(value);
+      params.push(`$${values.length}`);
     });
+    
+    // S'assurer que reason a une valeur par défaut si elle n'est pas fournie
+    if (!cols.includes('reason')) {
+      cols.push('reason');
+      values.push(payload.reason || payload.motive_principal || 'Déclassement');
+      params.push(`$${values.length}`);
+    }
     
     // Définir le statut par défaut si non fourni
     if (!payload.status) {
@@ -15877,22 +16283,46 @@ app.post(
     values.push((req as AuthenticatedRequest).auth?.id || null);
     params.push(`$${values.length}`);
 
+    // Vérification finale : s'assurer qu'aucune valeur non-UUID n'est dans les champs _id
+    const validCols: string[] = [];
+    const validValues: any[] = [];
+    const validParams: string[] = [];
+    
+    cols.forEach((col, idx) => {
+      const val = values[idx];
+      if (col.endsWith('_id') && val != null) {
+        if (typeof val === 'string' && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)) {
+          console.error(`[POST /api/downgrades] ⚠️ ERREUR: Valeur non-UUID "${val}" pour le champ ${col}, champ ignoré`);
+          return; // Ignorer ce champ
+        }
+      }
+      validCols.push(col);
+      validValues.push(val);
+      validParams.push(`$${validValues.length}`);
+    });
+
     const insertSql = `
-      insert into downgrades (${cols.join(',')})
-      values (${params.join(',')})
+      insert into downgrades (${validCols.join(',')})
+      values (${validParams.join(',')})
       returning *
     `;
-    const [row] = await run(insertSql, values);
+    const [row] = await run(insertSql, validValues);
     res.status(201).json(row);
   })
 );
 
 app.patch(
   '/api/downgrades/:id',
-  requireAuth({ roles: ['admin', 'manager'] }),
+  requireAuth(), // Tous les utilisateurs authentifiés peuvent modifier leurs déclassements
   asyncHandler(async (req, res) => {
+    // Garantir que toutes les colonnes existent AVANT la modification
+    await ensureDowngradesColumns();
+    
     const { id } = req.params;
     const payload = req.body || {};
+    const userId = (req as AuthenticatedRequest).auth?.id;
+    const userRole = (req as AuthenticatedRequest).auth?.role;
+    const isManager = userRole === 'admin' || userRole === 'manager';
     
     // Vérifier que le déclassement existe
     const [existing] = await run('select * from downgrades where id = $1', [id]);
@@ -15900,9 +16330,51 @@ app.patch(
       return res.status(404).json({ message: 'Déclassement introuvable' });
     }
     
-    // Ne pas permettre la modification si déjà envoyé (sauf admin)
-    if (existing.status === 'sent' && (req as AuthenticatedRequest).auth?.role !== 'admin') {
+    // Définir les champs des parties 1-2 (terrain) vs parties 3-8 (dispo)
+    const fieldsParties12 = [
+      'lot_id', 'lot_origin_site_id', 'lot_origin_client_id', 'lot_origin_canton', 'lot_origin_commune',
+      'lot_entry_date', 'lot_entry_at', 'lot_veva_code', 'lot_internal_code', 'lot_filiere', 'lot_quality_grade',
+      'lot_quality_metrics', 'lot_weight_brut', 'lot_weight_tare', 'lot_weight_net',
+      'vehicle_plate', 'slip_number', 'declassed_material', 'declassed_material_code',
+      'motive_principal', 'motive_description', 'photos_avant', 'photos_apres', 'proof_photos',
+      'controller_name', 'controller_signature', 'incident_number',
+      'motive_ratio', 'sorting_time_minutes', 'machines_used',
+      'lot_origin_client_name', 'lot_origin_client_address'
+    ];
+    const fieldsParties38 = [
+      'new_category', 'new_veva_code', 'new_quality', 'poids_net_declasse', 'stockage_type', 'destination',
+      'veva_type', 'previous_producer', 'planned_transporter', 'veva_slip_number', 'swissid_signature',
+      'documents', 'omod_category', 'omod_dangerosity', 'omod_dismantling_required', 'ldtr_canton',
+      'canton_rules_applied', 'emplacement_actuel', 'nouvel_emplacement', 'mouvement_type',
+      'transport_number', 'driver_id', 'vehicle_id', 'weighbridge_id', 'poids_final_brut', 'poids_final_tare',
+      'poids_final_net', 'seal_number', 'valeur_avant', 'valeur_apres', 'perte_gain', 'responsable_validation',
+      'cause_economique', 'impact_marge', 'risques_identifies', 'epis_requis', 'procedure_suivie',
+      'anomalie_signalee', 'declaration_securite'
+    ];
+    
+    // Vérifier les permissions selon le statut
+    if (existing.status === 'sent' && userRole !== 'admin') {
       return res.status(403).json({ message: 'Déclassement déjà envoyé, modification non autorisée' });
+    }
+    
+    // Les utilisateurs terrain ne peuvent modifier que leurs propres déclassements (parties 1-2)
+    if (!isManager) {
+      // Vérifier que c'est leur propre déclassement
+      if (existing.performed_by !== userId) {
+        return res.status(403).json({ message: 'Vous ne pouvez modifier que vos propres déclassements' });
+      }
+      
+      // Vérifier qu'ils ne modifient que les parties 1-2
+      for (const field of fieldsParties38) {
+        if (payload[field] !== undefined) {
+          return res.status(403).json({ message: `Seuls les managers peuvent modifier le champ: ${field} (parties 3-8)` });
+        }
+      }
+      
+      // Ne pas permettre de changer le statut vers validated/sent
+      if (payload.status && ['validated', 'sent'].includes(payload.status)) {
+        return res.status(403).json({ message: 'Seuls les managers peuvent valider/envoyer un déclassement' });
+      }
     }
     
     const fields = [
@@ -15920,6 +16392,8 @@ app.patch(
       'lot_origin_site_id', 'lot_origin_client_id', 'lot_origin_canton', 'lot_origin_commune',
       'lot_entry_date', 'lot_entry_at', 'lot_veva_code', 'lot_internal_code', 'lot_filiere', 'lot_quality_grade',
       'lot_quality_metrics', 'lot_weight_brut', 'lot_weight_tare', 'lot_weight_net', 'declassed_material',
+      'declassed_material_code', 'vehicle_plate', 'slip_number', 'motive_ratio', 'sorting_time_minutes',
+      'machines_used', 'lot_origin_client_name', 'lot_origin_client_address',
       'status'
     ];
     
@@ -15927,12 +16401,62 @@ app.patch(
     const values: any[] = [];
     let paramIndex = 1;
     
+    // Définir les champs numeric
+    const numericFields = [
+      'adjusted_weight', 'adjusted_value', 'poids_net_declasse', 'poids_final_brut', 'poids_final_tare',
+      'poids_final_net', 'valeur_avant', 'valeur_apres', 'perte_gain', 'impact_marge',
+      'lot_weight_brut', 'lot_weight_tare', 'lot_weight_net'
+    ];
+    
+    // Définir les champs array
+    const arrayFields = [
+      'photos_avant', 'photos_apres', 'proof_photos', 'machines_used', 'risques_identifies', 'epis_requis'
+    ];
+    
     fields.forEach((f) => {
-      if (payload[f] !== undefined) {
-        updates.push(`${f} = $${paramIndex}`);
-        values.push(payload[f]);
-        paramIndex++;
+      // Ignorer les valeurs undefined, mais traiter null et chaînes vides
+      if (payload[f] === undefined) {
+        return;
       }
+      
+      let value = payload[f];
+      
+      // Nettoyer TOUS les champs qui se terminent par _id (UUID)
+      if (f.endsWith('_id')) {
+        value = cleanUuidValue(value, f);
+        // Si la valeur n'est pas un UUID valide, ne pas l'inclure
+        if (value === null) {
+          return;
+        }
+      }
+      // Nettoyer les valeurs numeric
+      else if (numericFields.includes(f)) {
+        value = cleanNumericValue(value, f);
+        // Si la valeur n'est pas un numeric valide, ne pas l'inclure
+        if (value === null) {
+          return;
+        }
+      }
+      // Nettoyer les valeurs array (AVANT de vérifier si c'est undefined)
+      else if (arrayFields.includes(f)) {
+        // Si c'est une chaîne vide, retourner null directement
+        if (typeof value === 'string' && value.trim() === '') {
+          return;
+        }
+        value = cleanArrayValue(value, f);
+        // Si la valeur n'est pas un array valide, ne pas l'inclure
+        if (value === null) {
+          return;
+        }
+      }
+      // Pour les autres champs texte, si c'est une chaîne vide, ne pas l'inclure
+      else if (typeof value === 'string' && value.trim() === '') {
+        return;
+      }
+      
+      updates.push(`${f} = $${paramIndex}`);
+      values.push(value);
+      paramIndex++;
     });
     
     // Gestion des changements de statut
@@ -16001,8 +16525,11 @@ app.post(
 
 app.post(
   '/api/downgrades/:id/pdf',
-  requireAuth({ roles: ['admin', 'manager'] }),
+  requireAuth(), // Tous les utilisateurs authentifiés peuvent générer et envoyer le PDF
   asyncHandler(async (req, res) => {
+    // Garantir que la table downgrade_archives existe
+    await ensureDowngradeArchivesTable();
+    
     const { id } = req.params;
     const { pdf_base64, pdf_filename, finalize } = req.body;
     const auth = (req as AuthenticatedRequest).auth;
@@ -16012,26 +16539,59 @@ app.post(
     
     // Si PDF fourni, l'archiver
     if (pdf_base64 && pdf_filename) {
-      const pdfBuffer = Buffer.from(pdf_base64, 'base64');
+      let archive: any = null;
       const filename = pdf_filename || `declassement_${id}_${Date.now()}.pdf`;
-      
-      // Archiver le PDF (rétention 10 ans)
-      const [archive] = await run(
-        `insert into downgrade_archives (downgrade_id, pdf_data, pdf_filename, pdf_size_bytes, retention_years, archived_by, metadata)
-         values ($1, $2, $3, $4, 10, $5, $6)
-         returning id, archived_at, expires_at`,
-        [
-          id,
-          pdfBuffer,
-          filename,
-          pdfBuffer.length,
-          auth?.id || null,
-          JSON.stringify({ 
-            status_at_archive: dg.status,
-            archived_by_name: auth?.email || null
-          })
-        ]
-      );
+      try {
+        const pdfBuffer = Buffer.from(pdf_base64, 'base64');
+        
+        // Archiver le PDF (rétention 10 ans)
+        [archive] = await run(
+          `insert into downgrade_archives (downgrade_id, pdf_data, pdf_filename, pdf_size_bytes, retention_years, archived_by, metadata)
+           values ($1, $2, $3, $4, 10, $5, $6)
+           returning id, archived_at, expires_at`,
+          [
+            id,
+            pdfBuffer,
+            filename,
+            pdfBuffer.length,
+            auth?.id || null,
+            JSON.stringify({ 
+              status_at_archive: dg.status,
+              archived_by_name: auth?.email || null
+            })
+          ]
+        );
+      } catch (archiveErr: any) {
+        console.error('[Downgrade PDF] Erreur lors de l\'archivage:', archiveErr);
+        // Si l'archivage échoue, continuer quand même pour l'envoi d'email
+        if (archiveErr.message?.includes('does not exist')) {
+          console.warn('[Downgrade PDF] Table downgrade_archives n\'existe pas encore, tentative de création...');
+          await ensureDowngradeArchivesTable();
+          // Réessayer une fois après création de la table
+          try {
+            const pdfBuffer = Buffer.from(pdf_base64, 'base64');
+            [archive] = await run(
+              `insert into downgrade_archives (downgrade_id, pdf_data, pdf_filename, pdf_size_bytes, retention_years, archived_by, metadata)
+               values ($1, $2, $3, $4, 10, $5, $6)
+               returning id, archived_at, expires_at`,
+              [
+                id,
+                pdfBuffer,
+                filename,
+                pdfBuffer.length,
+                auth?.id || null,
+                JSON.stringify({ 
+                  status_at_archive: dg.status,
+                  archived_by_name: auth?.email || null
+                })
+              ]
+            );
+          } catch (retryErr: any) {
+            console.error('[Downgrade PDF] Erreur lors de la réessai d\'archivage:', retryErr);
+            // Ne pas bloquer l'envoi d'email même si l'archivage échoue
+          }
+        }
+      }
       
       // Si finalize=true, mettre à jour le statut à 'validated'
       if (finalize === true) {
@@ -16043,50 +16603,70 @@ app.post(
         );
       }
 
-      // Envoi email aux destinataires configurés
-      try {
-        const recipients =
-          (process.env.DECLASSEMENT_RECIPIENTS || process.env.BREVO_SENDER_EMAIL || '')
-            .split(',')
-            .map((email) => email.trim())
-            .filter(Boolean);
-        if (recipients.length > 0) {
-          const customerName = dg.lot_origin_client_name || dg.lot_origin_client_id || 'Client inconnu';
-          const subject = `Déclassement matière - ${customerName}`;
-          const textBody = [
-            `Déclassement : ${id}`,
-            `Client : ${customerName}`,
-            `Matière annoncée : ${dg.lot_quality_grade || dg.lot_filiere || '—'}`,
-            `Matière déclassée : ${dg.declassed_material || dg.new_category || '—'}`,
-            `Statut : ${finalize === true ? 'validé' : dg.status || 'pending_completion'}`,
-            '',
-            'Le PDF est joint à cet e-mail.'
-          ].join('\n');
+      // Envoi email aux destinataires configurés (TOUJOURS si finalize=true)
+      let emailSent = false;
+      let emailError: string | null = null;
+      
+      if (finalize === true) {
+        try {
+          const recipients =
+            (process.env.DECLASSEMENT_RECIPIENTS || process.env.BREVO_SENDER_EMAIL || '')
+              .split(',')
+              .map((email) => email.trim())
+              .filter(Boolean);
+          
+          if (recipients.length === 0) {
+            console.warn(`[Downgrade PDF] ⚠️ Aucun destinataire configuré pour l'envoi d'email (DECLASSEMENT_RECIPIENTS ou BREVO_SENDER_EMAIL)`);
+            emailError = 'Aucun destinataire email configuré';
+          } else {
+            const customerName = dg.lot_origin_client_name || dg.lot_origin_client_id || 'Client inconnu';
+            const subject = `Déclassement matière - ${customerName}`;
+            const textBody = [
+              `Déclassement : ${id}`,
+              `Client : ${customerName}`,
+              `Matière annoncée : ${dg.lot_quality_grade || dg.lot_filiere || '—'}`,
+              `Matière déclassée : ${dg.declassed_material || dg.new_category || '—'}`,
+              `Statut : validé`,
+              '',
+              'Le PDF est joint à cet e-mail.'
+            ].join('\n');
 
-          await sendBrevoEmail({
-            to: recipients,
-            subject,
-            text: textBody,
-            attachments: [
-              {
-                name: filename,
-                content: pdf_base64,
-                type: 'application/pdf'
-              }
-            ]
-          });
+            console.log(`[Downgrade PDF] 📧 Envoi email à ${recipients.length} destinataire(s): ${recipients.join(', ')}`);
+            
+            await sendBrevoEmail({
+              to: recipients,
+              subject,
+              text: textBody,
+              attachments: [
+                {
+                  name: filename,
+                  content: pdf_base64,
+                  type: 'application/pdf'
+                }
+              ]
+            });
+            
+            emailSent = true;
+            console.log(`[Downgrade PDF] ✅ Email envoyé avec succès à ${recipients.length} destinataire(s) pour déclassement ${id}`);
+          }
+        } catch (err: any) {
+          console.error('[Downgrade PDF] ❌ Erreur envoi email déclassement:', err);
+          emailError = err?.message || 'Erreur inconnue lors de l\'envoi de l\'email';
         }
-      } catch (err) {
-        console.error('Erreur envoi email déclassement:', err);
-        // on n'échoue pas la requête API pour un problème d'email
       }
       
       return res.json({ 
         success: true,
-        archive_id: archive.id,
-        archived_at: archive.archived_at,
-        expires_at: archive.expires_at,
-        message: 'PDF archivé avec succès (rétention 10 ans)'
+        archive_id: archive?.id || null,
+        archived_at: archive?.archived_at || null,
+        expires_at: archive?.expires_at || null,
+        email_sent: emailSent,
+        email_error: emailError,
+        message: emailSent 
+          ? (archive ? 'PDF archivé et email envoyé avec succès (rétention 10 ans)' : 'Email envoyé avec succès (archivage échoué)')
+          : emailError
+            ? (archive ? `PDF archivé mais erreur email: ${emailError}` : `Erreur email: ${emailError} (archivage échoué)`)
+            : (archive ? 'PDF archivé avec succès (rétention 10 ans)' : 'PDF traité (archivage échoué)')
       });
     }
     
@@ -19862,6 +20442,30 @@ app.post(
       })),
       parent: parentId ? { id: parentId, label: parentId } : undefined
     });
+  })
+);
+
+// Endpoint de migration manuel pour forcer la création des colonnes manquantes
+app.post(
+  '/api/migrate/downgrades-columns',
+  requireAuth({ roles: ['admin'] }),
+  asyncHandler(async (_req, res) => {
+    try {
+      await run('alter table downgrades add column if not exists motive_principal text');
+      await run('alter table downgrades add column if not exists motive_description text');
+      await run('alter table downgrades add column if not exists declassed_material_code text');
+      await run('alter table downgrades add column if not exists vehicle_plate text');
+      await run('alter table downgrades add column if not exists slip_number text');
+      await run('alter table downgrades add column if not exists motive_ratio text');
+      await run('alter table downgrades add column if not exists sorting_time_minutes text');
+      await run('alter table downgrades add column if not exists machines_used text[]');
+      await run('alter table downgrades add column if not exists lot_origin_client_name text');
+      await run('alter table downgrades add column if not exists lot_origin_client_address text');
+      res.json({ message: 'Colonnes créées avec succès' });
+    } catch (error: any) {
+      console.error('Erreur migration colonnes downgrades:', error);
+      res.status(500).json({ message: 'Erreur migration', detail: error.message });
+    }
   })
 );
 

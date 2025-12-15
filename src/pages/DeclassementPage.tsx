@@ -266,11 +266,22 @@ const DeclassementPage = () => {
       risques_identifies: hse.risques_identifies ? hse.risques_identifies.split(',').map((s) => s.trim()) : null,
       epis_requis: hse.epis_requis ? hse.epis_requis.split(',').map((s) => s.trim()) : null
     };
-    const photos = await filesToBase64(motif.photos);
-    payload.photos_avant = photos;
-    payload.photos_apres = photos;
-    if (legal.proof_photos) {
-      payload.proof_photos = photos;
+    
+    // Si c'est un draft ou si motive_principal est vide, mettre une valeur par défaut
+    if (isDraft && (!payload.motive_principal || payload.motive_principal.trim() === '')) {
+      payload.motive_principal = 'À compléter';
+    }
+    // Photos : convertir en base64 si présentes, sinon tableau vide
+    if (motif.photos.length > 0) {
+      const photos = await filesToBase64(motif.photos);
+      payload.photos_avant = photos;
+      payload.photos_apres = photos;
+      if (legal.proof_photos) {
+        payload.proof_photos = photos;
+      }
+    } else {
+      payload.photos_avant = [];
+      payload.photos_apres = [];
     }
     return payload;
   };
@@ -299,23 +310,50 @@ const DeclassementPage = () => {
   };
 
   const handleSave = async (withPdf = false) => {
-    const payload = await buildPayload(false);
+    // Utiliser les mêmes validations que la prévisualisation (permissif)
+    const payload = await buildPayload(true);
     if (!payload) return;
+    
     setLoading(true);
     try {
       let result;
       if (lastCreatedId) {
-        // Mise à jour d'un brouillon existant avec toutes les données
+        // Mise à jour d'un déclassement existant
         result = await Api.updateDowngrade(lastCreatedId, { ...payload, status: 'pending_completion' });
         toast.success('Déclassement mis à jour');
       } else {
-        // Création d'un nouveau déclassement complet
+        // Création d'un nouveau déclassement
         result = await Api.createDowngrade({ ...payload, status: 'pending_completion' });
         setLastCreatedId(result.id);
         toast.success('Déclassement enregistré');
       }
-      if (withPdf) {
-        await handlePreview();
+      
+      if (withPdf && result?.id) {
+        // Générer le PDF avec les mêmes données que la prévisualisation
+        try {
+          const doc = await buildTemplatePdf(templateConfig, payload);
+          
+          // Obtenir directement le base64 compressé (comme dans DestructionPage)
+          const pdfBase64 = doc.output('datauristring').split(',')[1] || '';
+          
+          // Envoyer au backend pour archivage et envoi par email
+          const pdfResponse = await Api.generateDowngradePdf(result.id, {
+            pdf_base64: pdfBase64,
+            pdf_filename: `declassement_${result.id}_${Date.now()}.pdf`,
+            finalize: true
+          });
+          
+          if (pdfResponse.email_sent) {
+            toast.success('PDF généré, archivé et envoyé par email');
+          } else if (pdfResponse.email_error) {
+            toast.error(`PDF généré et archivé, mais erreur email: ${pdfResponse.email_error}`);
+          } else {
+            toast.success('PDF généré et archivé');
+          }
+        } catch (err: any) {
+          console.error('Erreur génération/envoi PDF:', err);
+          toast.error('Erreur lors de la génération/envoi du PDF: ' + (err?.message || 'Erreur inconnue'));
+        }
       }
     } catch (error: any) {
       console.error(error);
@@ -326,7 +364,8 @@ const DeclassementPage = () => {
   };
 
   const handlePreview = async () => {
-    const payload = await buildPayload();
+    // Utiliser les mêmes validations permissives que l'enregistrement
+    const payload = await buildPayload(true);
     if (!payload) return;
     if (templateLoading) {
       toast.error('Template PDF en cours de chargement...');
@@ -409,15 +448,17 @@ const DeclassementPage = () => {
           <div className="input-with-suggestions">
             <Input
               label="Client (nom ou ID)"
-              value={customerQuery || lotInfo.lot_origin_client_name || lotInfo.lot_origin_client_id}
+              value={customerQuery || lotInfo.lot_origin_client_name}
               onChange={(val) => {
+                // Côté terrain on ne gère que le NOM + ADRESSE.
+                // On évite d'envoyer des codes numériques dans un champ *_id (UUID) côté backend.
                 setCustomerQuery(val);
                 setLotInfo({
                   ...lotInfo,
-                  lot_origin_client_id: val,
-                  lot_origin_client_name: val
+                  lot_origin_client_name: val,
+                  // Laisser l'ID interne vide pour ne pas provoquer d'erreur UUID
+                  lot_origin_client_id: ''
                 });
-                setCustomerQuery(val);
               }}
               placeholder="Saisir nom client, auto-complétion"
             />
@@ -428,11 +469,13 @@ const DeclassementPage = () => {
                     key={c.id}
                     type="button"
                     onClick={() => {
+                      // On ne stocke que le nom + adresse dans le déclassement,
+                      // l'ID interne client reste géré côté ERP si nécessaire.
                       setLotInfo({
                         ...lotInfo,
-                        lot_origin_client_id: c.id,
-                        lot_origin_client_name: c.name || c.id,
-                        lot_origin_client_address: c.address || ''
+                        lot_origin_client_name: c.name || '',
+                        lot_origin_client_address: c.address || '',
+                        lot_origin_client_id: ''
                       });
                       setCustomerQuery(c.name || '');
                       setCustomerSuggestions([]);
@@ -785,12 +828,34 @@ const Chips = ({ files }: { files: FileWithPreview[] }) => (
   </div>
 );
 
+// Fonction pour compresser une image base64 avant de l'ajouter au PDF
+const compressImageBase64 = async (base64Data: string, maxWidth = 1400, quality = 0.75): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new window.Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxWidth / img.width);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(base64Data);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve(base64Data);
+    img.src = base64Data.startsWith('data:') ? base64Data : `data:image/jpeg;base64,${base64Data}`;
+  });
+};
+
 const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: any) => {
   if (!templateConfig) {
     throw new Error('Template PDF introuvable.');
   }
 
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4', compress: true });
   const margin = 36;
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -881,17 +946,25 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
   y += 10;
   const sectionPadding = 12;
 
-  // Préparer les lignes client
+  // Préparer les lignes client (UNIQUEMENT les infos essentielles)
   const clientLines: string[] = [];
   const clientName = data.lot_origin_client_name || data.lot_origin_client_id || '—';
-  clientLines.push(`Nom de l'entreprise : ${clientName}`);
-  if (data.lot_origin_client_address) {
+  if (clientName && clientName !== '—') {
+    clientLines.push(`Nom de l'entreprise : ${clientName}`);
+  }
+  if (data.lot_origin_client_address && data.lot_origin_client_address.trim() !== '') {
     clientLines.push(`Adresse : ${data.lot_origin_client_address}`);
   }
-  const descEntreeClient = data.lot_quality_grade || data.lot_filiere || '—';
-  clientLines.push(`Matière annoncée : ${descEntreeClient}`);
-  clientLines.push(`Plaque véhicule : ${data.vehicle_plate || '—'}`);
-  clientLines.push(`Bon / Référence : ${data.slip_number || '—'}`);
+  // Vérifier vehicle_plate avec différentes variantes possibles
+  const vehiclePlate = data.vehicle_plate || data.vehiclePlate || '';
+  if (vehiclePlate && String(vehiclePlate).trim() !== '') {
+    clientLines.push(`Plaque véhicule : ${String(vehiclePlate).trim()}`);
+  }
+  // Ajouter aussi le n° de bon (slip_number)
+  const slipNumber = data.slip_number || data.slipNumber || '';
+  if (slipNumber && String(slipNumber).trim() !== '') {
+    clientLines.push(`N° de bon : ${String(slipNumber).trim()}`);
+  }
 
   const clientLineHeight = 14;
   const clientCardHeight = sectionPadding * 2 + clientLines.length * clientLineHeight + 14; // +14 pour le titre
@@ -932,13 +1005,13 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
   ];
   const headers = ['Code matières', 'Description matières', 'Matières en %'];
 
-  // Ligne 1 : matières annoncées
-  const codeEntree = data.lot_id || '—';
+  // Ligne 1 : matières entrante (annoncée)
+  const codeEntree = data.lot_id || data.lot_internal_code || '—';
   const descEntree = data.lot_quality_grade || data.lot_filiere || '—';
 
-  // Ligne 2 : matières déclassées (code/desc)
+  // Ligne 2 : matières déclassée
   const codeDecl = data.declassed_material_code || '—';
-  const descDecl = data.declassed_material || data.new_category || '—';
+  const descDecl = data.declassed_material || '—';
 
   // % déclassé / % bon
   const ratioNum = parseFloat((data.motive_ratio || '').toString().replace('%', '').trim());
@@ -993,47 +1066,6 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
 
   y += sectionHeightMat + 8;
 
-  // ========== SECTION MOTIF (encadré auto-ajusté) ==========
-  y += 10;
-  const motifLines: Array<{ label: string; value: string }> = [
-    { label: 'Motif principal', value: data.motive_principal || '—' },
-    { label: 'Description', value: data.motive_description || '—' },
-    { label: 'Temps de tri (min)', value: data.sorting_time_minutes ? `${data.sorting_time_minutes} min` : '—' },
-    { label: 'Machines utilisées', value: (data.machines_used || []).join(', ') || '—' }
-  ];
-  const motifLineH = 14;
-  const motifTextWidth = safeWidth - sectionPadding * 2;
-  const motifHeight =
-    sectionPadding * 2 +
-    14 + // titre
-    motifLines.reduce((acc, line) => {
-      const wrapped = doc.splitTextToSize(`${line.label} : ${line.value}`, motifTextWidth);
-      return acc + Math.max(motifLineH, wrapped.length * motifLineH);
-    }, 0) +
-    6;
-
-  applyFillColor(highlightBg);
-  doc.setDrawColor(highlightTextColor[0], highlightTextColor[1], highlightTextColor[2]);
-  doc.setLineWidth(0.6);
-  doc.roundedRect(margin, y, safeWidth, motifHeight, 6, 6, 'FD');
-
-  applyColor(bodyPalette.title);
-  doc.setFontSize(14);
-  doc.setFont('helvetica', 'bold');
-  doc.text('Motif & tri', margin + sectionPadding, y + 20);
-
-  applyColor(highlightTextColor);
-  doc.setFontSize(11);
-  doc.setFont('helvetica', 'normal');
-  let motifY = y + 34;
-  motifLines.forEach((line) => {
-    const wrapped = doc.splitTextToSize(`${line.label} : ${line.value}`, motifTextWidth);
-    doc.text(wrapped, margin + sectionPadding, motifY);
-    motifY += Math.max(motifLineH, wrapped.length * motifLineH);
-  });
-
-  y += motifHeight + 8;
-
   // ========== SECTION PHOTOS ==========
   y += 10;
   const photos = (data.photos_avant || data.photos_apres || data.photos || []).map((p: any, idx: number) => ({
@@ -1070,8 +1102,11 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
     const currentY = photoY + row * (photoHeight + 30);
 
     try {
-      const imgData = await resolveTemplateImage(photos[i].src);
+      let imgData = await resolveTemplateImage(photos[i].src);
       if (imgData) {
+        // Compresser l'image avant de l'ajouter au PDF pour réduire la taille
+        imgData = await compressImageBase64(imgData, 1400, 0.75);
+        
         const imgProps = (doc as any).getImageProperties(imgData);
         const aspectRatio = imgProps.width / imgProps.height;
         let w = photoWidth;
