@@ -237,21 +237,9 @@ const DeclassementPage = () => {
   };
 
   const buildPayload = async (isDraft = false) => {
-    if (!isDraft) {
-      // Validation complète pour enregistrement final
-      if (!lotInfo.lot_id && !lotInfo.lot_internal_code) {
-        toast.error('ID lot ou code interne requis');
-        return null;
-      }
-      if (!motif.motive_principal) {
-        toast.error('Motif principal requis');
-        return null;
-      }
-      if (motif.photos.length === 0) {
-        toast.error('Au moins une photo est obligatoire (max 10)');
-        return null;
-      }
-    }
+    // Mode toujours permissif : permettre la génération PDF même avec des champs vides
+    // Seuls nom client, matière et photos sont vraiment importants mais même ceux-ci peuvent être optionnels
+    // pour permettre la génération d'un PDF minimal
 
     const payload: any = {
       ...lotInfo,
@@ -310,9 +298,12 @@ const DeclassementPage = () => {
   };
 
   const handleSave = async (withPdf = false) => {
-    // Utiliser les mêmes validations que la prévisualisation (permissif)
+    // Toujours utiliser le mode permissif pour permettre la génération PDF même avec des champs vides
     const payload = await buildPayload(true);
-    if (!payload) return;
+    if (!payload) {
+      toast.error('Erreur lors de la préparation des données');
+      return;
+    }
     
     setLoading(true);
     try {
@@ -331,10 +322,33 @@ const DeclassementPage = () => {
       if (withPdf && result?.id) {
         // Générer le PDF avec les mêmes données que la prévisualisation
         try {
+          console.log('Début génération PDF avec payload:', {
+            client_name: payload.lot_origin_client_name,
+            material: payload.lot_id || payload.declassed_material,
+            photos_count: payload.photos_avant?.length || 0
+          });
+          
+          if (!templateConfig) {
+            toast.error('Template PDF non disponible, génération impossible');
+            return;
+          }
+          
           const doc = await buildTemplatePdf(templateConfig, payload);
+          
+          if (!doc) {
+            toast.error('Erreur: PDF non généré');
+            return;
+          }
           
           // Obtenir directement le base64 compressé (comme dans DestructionPage)
           const pdfBase64 = doc.output('datauristring').split(',')[1] || '';
+          
+          if (!pdfBase64 || pdfBase64.length < 100) {
+            toast.error('Erreur: PDF généré mais base64 vide ou trop court');
+            return;
+          }
+          
+          console.log('PDF généré avec succès, taille base64:', pdfBase64.length);
           
           // Envoyer au backend pour archivage et envoi par email
           const pdfResponse = await Api.generateDowngradePdf(result.id, {
@@ -352,6 +366,7 @@ const DeclassementPage = () => {
           }
         } catch (err: any) {
           console.error('Erreur génération/envoi PDF:', err);
+          console.error('Stack trace:', err?.stack);
           toast.error('Erreur lors de la génération/envoi du PDF: ' + (err?.message || 'Erreur inconnue'));
         }
       }
@@ -829,24 +844,86 @@ const Chips = ({ files }: { files: FileWithPreview[] }) => (
 );
 
 // Fonction pour compresser une image base64 avant de l'ajouter au PDF
+// Améliorée pour gérer Samsung, Oppo et autres appareils Android
 const compressImageBase64 = async (base64Data: string, maxWidth = 1400, quality = 0.75): Promise<string> => {
-  return new Promise((resolve) => {
-    const img = new window.Image();
-    img.onload = () => {
-      const scale = Math.min(1, maxWidth / img.width);
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width * scale;
-      canvas.height = img.height * scale;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        resolve(base64Data);
-        return;
+  return new Promise((resolve, reject) => {
+    // Normaliser le format base64 (supprimer les espaces, retours à la ligne, etc.)
+    let normalizedBase64 = base64Data.trim();
+    
+    // Si ce n'est pas une data URL, essayer de la créer
+    if (!normalizedBase64.startsWith('data:')) {
+      // Essayer différents formats MIME courants pour Android
+      const possibleFormats = ['image/jpeg', 'image/png', 'image/webp'];
+      let found = false;
+      for (const format of possibleFormats) {
+        try {
+          const testData = `data:${format};base64,${normalizedBase64}`;
+          const testImg = new window.Image();
+          testImg.onload = () => {
+            found = true;
+            normalizedBase64 = testData;
+          };
+          testImg.onerror = () => {};
+          testImg.src = testData;
+        } catch {}
       }
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', quality));
+      // Par défaut, utiliser JPEG
+      if (!found) {
+        normalizedBase64 = `data:image/jpeg;base64,${normalizedBase64}`;
+      }
+    }
+    
+    const img = new window.Image();
+    img.crossOrigin = 'anonymous'; // Important pour certains navigateurs Android
+    
+    // Timeout de sécurité (5 secondes)
+    const timeout = setTimeout(() => {
+      console.warn('Timeout compression image');
+      resolve(normalizedBase64);
+    }, 5000);
+    
+    img.onload = () => {
+      clearTimeout(timeout);
+      try {
+        const scale = Math.min(1, maxWidth / img.width);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        const ctx = canvas.getContext('2d');
+        
+        if (!ctx) {
+          console.warn('Impossible d\'obtenir le contexte canvas');
+          resolve(normalizedBase64);
+          return;
+        }
+        
+        // Corriger l'orientation si nécessaire (pour Samsung/Oppo)
+        ctx.save();
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        ctx.restore();
+        
+        // Toujours convertir en JPEG pour compatibilité maximale
+        const result = canvas.toDataURL('image/jpeg', quality);
+        if (result && result.length > 100) {
+          resolve(result);
+        } else {
+          console.warn('Compression échouée, utilisation de l\'image originale');
+          resolve(normalizedBase64);
+        }
+      } catch (err) {
+        console.warn('Erreur lors de la compression:', err);
+        resolve(normalizedBase64);
+      }
     };
-    img.onerror = () => resolve(base64Data);
-    img.src = base64Data.startsWith('data:') ? base64Data : `data:image/jpeg;base64,${base64Data}`;
+    
+    img.onerror = (err) => {
+      clearTimeout(timeout);
+      console.warn('Erreur chargement image pour compression:', err, normalizedBase64.substring(0, 100));
+      // Essayer quand même avec l'image originale
+      resolve(normalizedBase64);
+    };
+    
+    img.src = normalizedBase64;
   });
 };
 
@@ -1207,7 +1284,33 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
     const currentY = photoY + row * (photoHeight + 30);
 
     try {
-      let imgData = await resolveTemplateImage(photos[i].src);
+      let imgData: string | null = null;
+      const photoSrc = photos[i].src;
+      
+      // Normaliser la source de la photo (supprimer espaces, retours à la ligne)
+      const normalizedSrc = typeof photoSrc === 'string' ? photoSrc.trim().replace(/\s+/g, '') : photoSrc;
+      
+      // Si c'est déjà une data URL base64, l'utiliser directement
+      if (typeof normalizedSrc === 'string' && normalizedSrc.startsWith('data:image/')) {
+        imgData = normalizedSrc;
+      } else if (typeof normalizedSrc === 'string' && normalizedSrc.length > 100) {
+        // Essayer de détecter si c'est du base64 pur (sans préfixe data:)
+        const base64Pattern = /^[A-Za-z0-9+/=]+$/;
+        const withoutPrefix = normalizedSrc.replace(/^data:image\/[a-z]+;base64,/, '');
+        
+        if (base64Pattern.test(withoutPrefix) && withoutPrefix.length > 50) {
+          // C'est probablement du base64, utiliser JPEG par défaut (le plus compatible avec Android)
+          // La fonction compressImageBase64 essaiera automatiquement différents formats si nécessaire
+          imgData = `data:image/jpeg;base64,${withoutPrefix}`;
+        } else {
+          // Sinon, essayer resolveTemplateImage
+          imgData = await resolveTemplateImage(normalizedSrc);
+        }
+      } else {
+        // Essayer resolveTemplateImage
+        imgData = await resolveTemplateImage(normalizedSrc);
+      }
+      
       if (imgData) {
         // Compresser l'image avant de l'ajouter au PDF pour réduire la taille
         imgData = await compressImageBase64(imgData, 1400, 0.75);
@@ -1223,7 +1326,9 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
         }
         
         const centerX = x + (photoWidth - w) / 2;
-        doc.addImage(imgData, 'JPEG', centerX, currentY, w, h);
+        // Déterminer le format d'image (JPEG, PNG, etc.)
+        const imageFormat = imgData.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+        doc.addImage(imgData, imageFormat, centerX, currentY, w, h);
         
         // Label sous la photo
         const bodyTextColor = rgbToArray(bodyPalette.text);
@@ -1231,13 +1336,21 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
         doc.text(photos[i].label, x + photoWidth / 2 - doc.getTextWidth(photos[i].label) / 2, currentY + h + 12);
+      } else {
+        // Aucune image trouvée
+        const bodyTextColor = rgbToArray(bodyPalette.text);
+        applyColor(bodyTextColor);
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`${photos[i].label} (image non disponible)`, x, currentY + 14);
       }
     } catch (err) {
-      console.warn('Erreur chargement photo:', err);
+      console.warn('Erreur chargement photo:', err, photos[i].src);
       const bodyTextColor = rgbToArray(bodyPalette.text);
       applyColor(bodyTextColor);
       doc.setFontSize(10);
-      doc.text(`${photos[i].label} (image non lisible)`, x, currentY + 14);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`${photos[i].label} (erreur: ${err instanceof Error ? err.message : 'inconnue'})`, x, currentY + 14);
     }
   }
 

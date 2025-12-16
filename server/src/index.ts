@@ -16119,7 +16119,32 @@ app.get(
     const lotId = req.query.lot_id as string | undefined;
     const status = req.query.status as string | undefined;
     const params: any[] = [];
-    let sql = 'select * from downgrades where 1=1';
+    
+    // Exclure les colonnes de photos volumineuses pour éviter les erreurs "response too large"
+    // Les photos seront disponibles via GET /api/downgrades/:id si nécessaire
+    let sql = `select 
+      id, lot_id, from_quality_id, from_quality, to_quality_id, to_quality, reason,
+      adjusted_weight, adjusted_value, performed_at, performed_by,
+      motive_principal, motive_description, declassed_material_code, vehicle_plate, slip_number,
+      motive_ratio, sorting_time_minutes, machines_used, lot_origin_client_name, lot_origin_client_address,
+      controller_name, controller_signature, incident_number,
+      new_category, new_veva_code, new_quality, poids_net_declasse, stockage_type, destination,
+      veva_type, previous_producer, planned_transporter, veva_slip_number, swissid_signature,
+      documents, omod_category, omod_dangerosity, omod_dismantling_required, ldtr_canton,
+      canton_rules_applied, emplacement_actuel, nouvel_emplacement, mouvement_type,
+      transport_number, poids_final_brut, poids_final_tare, poids_final_net, seal_number,
+      valeur_avant, valeur_apres, perte_gain, responsable_validation, cause_economique,
+      impact_marge, risques_identifies, epis_requis, procedure_suivie, anomalie_signalee,
+      declaration_securite, lot_origin_site_id, lot_origin_client_id, lot_origin_canton,
+      lot_origin_commune, lot_entry_date, lot_entry_at, lot_veva_code, lot_internal_code,
+      lot_filiere, lot_quality_grade, lot_quality_metrics, lot_weight_brut, lot_weight_tare,
+      lot_weight_net, declassed_material, driver_id, vehicle_id, weighbridge_id,
+      status, validated_at, validated_by, sent_at, sent_by,
+      -- Indicateur que les photos existent (sans les charger)
+      case when photos_avant is not null and array_length(photos_avant, 1) > 0 then true else false end as has_photos_avant,
+      case when photos_apres is not null and array_length(photos_apres, 1) > 0 then true else false end as has_photos_apres,
+      case when proof_photos is not null and array_length(proof_photos, 1) > 0 then true else false end as has_proof_photos
+    from downgrades where 1=1`;
     let paramIndex = 1;
     
     if (lotId) {
@@ -16144,8 +16169,31 @@ app.get(
   '/api/downgrades/pending',
   requireAuth({ roles: ['admin', 'manager'] }),
   asyncHandler(async (req, res) => {
+    // Exclure les colonnes de photos volumineuses pour éviter les erreurs "response too large"
     const rows = await run(
-      `select * from downgrades 
+      `select 
+        id, lot_id, from_quality_id, from_quality, to_quality_id, to_quality, reason,
+        adjusted_weight, adjusted_value, performed_at, performed_by,
+        motive_principal, motive_description, declassed_material_code, vehicle_plate, slip_number,
+        motive_ratio, sorting_time_minutes, machines_used, lot_origin_client_name, lot_origin_client_address,
+        controller_name, controller_signature, incident_number,
+        new_category, new_veva_code, new_quality, poids_net_declasse, stockage_type, destination,
+        veva_type, previous_producer, planned_transporter, veva_slip_number, swissid_signature,
+        documents, omod_category, omod_dangerosity, omod_dismantling_required, ldtr_canton,
+        canton_rules_applied, emplacement_actuel, nouvel_emplacement, mouvement_type,
+        transport_number, poids_final_brut, poids_final_tare, poids_final_net, seal_number,
+        valeur_avant, valeur_apres, perte_gain, responsable_validation, cause_economique,
+        impact_marge, risques_identifies, epis_requis, procedure_suivie, anomalie_signalee,
+        declaration_securite, lot_origin_site_id, lot_origin_client_id, lot_origin_canton,
+        lot_origin_commune, lot_entry_date, lot_entry_at, lot_veva_code, lot_internal_code,
+        lot_filiere, lot_quality_grade, lot_quality_metrics, lot_weight_brut, lot_weight_tare,
+        lot_weight_net, declassed_material, driver_id, vehicle_id, weighbridge_id,
+        status, validated_at, validated_by, sent_at, sent_by,
+        -- Indicateur que les photos existent (sans les charger)
+        case when photos_avant is not null and array_length(photos_avant, 1) > 0 then true else false end as has_photos_avant,
+        case when photos_apres is not null and array_length(photos_apres, 1) > 0 then true else false end as has_photos_apres,
+        case when proof_photos is not null and array_length(proof_photos, 1) > 0 then true else false end as has_proof_photos
+      from downgrades 
        where status = 'pending_completion' 
        order by performed_at desc`
     );
@@ -16681,7 +16729,26 @@ app.get(
   requireAuth({ roles: ['admin', 'manager'] }),
   asyncHandler(async (req, res) => {
     const format = (req.query.format as string) || 'excel';
-    const rows = await run('select * from downgrades order by performed_at desc limit 1000');
+    // Exclure les colonnes de photos volumineuses pour éviter les erreurs "response too large"
+    const rows = await run(`select 
+      id, lot_id, from_quality_id, from_quality, to_quality_id, to_quality, reason,
+      adjusted_weight, adjusted_value, performed_at, performed_by,
+      motive_principal, motive_description, declassed_material_code, vehicle_plate, slip_number,
+      motive_ratio, sorting_time_minutes, machines_used, lot_origin_client_name, lot_origin_client_address,
+      controller_name, controller_signature, incident_number,
+      new_category, new_veva_code, new_quality, poids_net_declasse, stockage_type, destination,
+      veva_type, previous_producer, planned_transporter, veva_slip_number, swissid_signature,
+      documents, omod_category, omod_dangerosity, omod_dismantling_required, ldtr_canton,
+      canton_rules_applied, emplacement_actuel, nouvel_emplacement, mouvement_type,
+      transport_number, poids_final_brut, poids_final_tare, poids_final_net, seal_number,
+      valeur_avant, valeur_apres, perte_gain, responsable_validation, cause_economique,
+      impact_marge, risques_identifies, epis_requis, procedure_suivie, anomalie_signalee,
+      declaration_securite, lot_origin_site_id, lot_origin_client_id, lot_origin_canton,
+      lot_origin_commune, lot_entry_date, lot_entry_at, lot_veva_code, lot_internal_code,
+      lot_filiere, lot_quality_grade, lot_quality_metrics, lot_weight_brut, lot_weight_tare,
+      lot_weight_net, declassed_material, driver_id, vehicle_id, weighbridge_id,
+      status, validated_at, validated_by, sent_at, sent_by
+    from downgrades order by performed_at desc limit 1000`);
     res.json({ format, rows });
   })
 );
