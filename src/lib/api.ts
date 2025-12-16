@@ -2284,6 +2284,18 @@ export const Api = {
       method: 'POST',
       body: JSON.stringify(payload || {})
     }),
+  sendDowngradePdf: (payload: { 
+    pdf_base64: string; 
+    pdf_filename: string; 
+    client_name?: string; 
+    material?: string; 
+    declassed_material?: string; 
+    motive_principal?: string;
+  }) =>
+    request<any>('/downgrades/send-pdf', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
   createDowngradeVevaSlip: (id: string) =>
     request<any>(`/downgrades/${id}/veva-slip`, {
       method: 'POST'

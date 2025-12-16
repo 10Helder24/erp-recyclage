@@ -275,23 +275,68 @@ const DeclassementPage = () => {
   };
 
   const handleSaveDraft = async () => {
-    const payload = await buildDraftPayload();
+    // Générer le PDF et l'envoyer directement par email sans sauvegarder en base
+    const payload = await buildPayload(true);
+    if (!payload) {
+      toast.error('Erreur lors de la préparation des données');
+      return;
+    }
+    
     setLoading(true);
     try {
-      let result;
-      if (lastCreatedId) {
-        // Mise à jour d'un déclassement existant (parties 1-2)
-        result = await Api.updateDowngrade(lastCreatedId, { ...payload, status: 'pending_completion' });
-        toast.success('Déclassement mis à jour et envoyé à la disposition');
+      // Validation minimale : au moins nom client ou matière
+      const hasClientName = payload.lot_origin_client_name && payload.lot_origin_client_name.trim() !== '';
+      const hasMaterial = (payload.lot_id && payload.lot_id.trim() !== '') || 
+                          (payload.declassed_material && payload.declassed_material.trim() !== '');
+      
+      if (!hasClientName && !hasMaterial) {
+        toast.error('Veuillez remplir au moins le nom du client ou une matière');
+        setLoading(false);
+        return;
+      }
+      
+      if (!templateConfig) {
+        toast.error('Template PDF non disponible');
+        setLoading(false);
+        return;
+      }
+      
+      // Générer le PDF
+      const doc = await buildTemplatePdf(templateConfig, payload);
+      if (!doc) {
+        toast.error('Erreur: PDF non généré');
+        setLoading(false);
+        return;
+      }
+      
+      // Obtenir le base64 compressé
+      const pdfBase64 = doc.output('datauristring').split(',')[1] || '';
+      if (!pdfBase64 || pdfBase64.length < 100) {
+        toast.error('Erreur: PDF généré mais base64 vide ou trop court');
+        setLoading(false);
+        return;
+      }
+      
+      // Envoyer le PDF directement par email
+      const pdfResponse = await Api.sendDowngradePdf({
+        pdf_base64: pdfBase64,
+        pdf_filename: `declassement_${Date.now()}.pdf`,
+        client_name: payload.lot_origin_client_name || '',
+        material: payload.lot_id || payload.lot_quality_grade || '',
+        declassed_material: payload.declassed_material || '',
+        motive_principal: payload.motive_principal || ''
+      });
+      
+      if (pdfResponse.email_sent) {
+        toast.success('PDF généré et envoyé par email avec succès');
+      } else if (pdfResponse.email_error) {
+        toast.error(`PDF généré mais erreur email: ${pdfResponse.email_error}`);
       } else {
-        // Création d'un nouveau déclassement (parties 1-2) → envoi à dispo
-        result = await Api.createDowngrade({ ...payload, status: 'pending_completion' });
-        setLastCreatedId(result.id);
-        toast.success('Déclassement enregistré et envoyé à la disposition (parties 1-2)');
+        toast.success('PDF généré et envoyé');
       }
     } catch (error: any) {
-      console.error(error);
-      toast.error(error?.message || 'Erreur lors de l\'enregistrement');
+      console.error('Erreur génération/envoi PDF:', error);
+      toast.error(error?.message || 'Erreur lors de la génération/envoi du PDF');
     } finally {
       setLoading(false);
     }

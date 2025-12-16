@@ -16594,6 +16594,74 @@ app.post(
   })
 );
 
+// Endpoint pour envoyer le PDF directement par email sans sauvegarder en base
+app.post(
+  '/api/downgrades/send-pdf',
+  requireAuth(), // Tous les utilisateurs authentifiés peuvent envoyer le PDF
+  asyncHandler(async (req, res) => {
+    const { pdf_base64, pdf_filename, client_name, material, declassed_material, motive_principal } = req.body;
+    
+    if (!pdf_base64) {
+      return res.status(400).json({ message: 'PDF manquant' });
+    }
+    
+    const recipients =
+      (process.env.DECLASSEMENT_RECIPIENTS || process.env.BREVO_SENDER_EMAIL || '')
+        .split(',')
+        .map((email) => email.trim())
+        .filter(Boolean);
+    
+    if (recipients.length === 0) {
+      return res.status(500).json({ message: 'Aucun destinataire configuré (DECLASSEMENT_RECIPIENTS)' });
+    }
+    
+    try {
+      const customerName = client_name || 'Client inconnu';
+      const subject = `Déclassement matière - ${customerName}`;
+      const textBody = [
+        `Déclassement généré le : ${new Date().toLocaleString('fr-CH')}`,
+        `Client : ${customerName}`,
+        `Matière annoncée : ${material || '—'}`,
+        `Matière déclassée : ${declassed_material || '—'}`,
+        `Motif principal : ${motive_principal || '—'}`,
+        '',
+        'Le PDF de déclassement (incluant les photos) est joint à cet e-mail.'
+      ].join('\n');
+      
+      console.log(`[Downgrade Send PDF] 📧 Envoi email à ${recipients.length} destinataire(s): ${recipients.join(', ')}`);
+      
+      await sendBrevoEmail({
+        to: recipients,
+        subject,
+        text: textBody,
+        attachments: [
+          {
+            name: pdf_filename || `declassement_${Date.now()}.pdf`,
+            content: pdf_base64,
+            type: 'application/pdf'
+          }
+        ]
+      });
+      
+      console.log(`[Downgrade Send PDF] ✅ Email envoyé avec succès à ${recipients.length} destinataire(s)`);
+      
+      res.json({ 
+        success: true,
+        email_sent: true,
+        message: `PDF envoyé par email à ${recipients.length} destinataire(s)`
+      });
+    } catch (err: any) {
+      console.error('[Downgrade Send PDF] Erreur lors de l\'envoi email:', err);
+      return res.status(500).json({ 
+        success: false,
+        email_sent: false,
+        email_error: err?.message || 'Erreur inconnue lors de l\'envoi de l\'email',
+        message: `Erreur lors de l'envoi de l'email: ${err?.message || 'Erreur inconnue'}`
+      });
+    }
+  })
+);
+
 app.post(
   '/api/downgrades/:id/pdf',
   requireAuth(), // Tous les utilisateurs authentifiés peuvent générer et envoyer le PDF
