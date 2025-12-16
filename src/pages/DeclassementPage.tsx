@@ -194,16 +194,62 @@ const DeclassementPage = () => {
   };
 
   const filesToBase64 = async (files: FileWithPreview[]) => {
-    const convert = (file: File) =>
-      new Promise<string>((resolve, reject) => {
+    const convert = async (file: File): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        // Détecter le type de fichier Samsung (HEIC, HEIF, etc.)
+        const fileType = file.type.toLowerCase();
+        const fileName = file.name.toLowerCase();
+        const isSamsungFormat = fileType.includes('heic') || fileType.includes('heif') || 
+                                fileName.endsWith('.heic') || fileName.endsWith('.heif');
+        
+        console.log('[Samsung] Conversion fichier:', {
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          isSamsungFormat
+        });
+        
         const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(reader.error);
+        
+        reader.onload = () => {
+          const result = String(reader.result);
+          // Si c'est un format Samsung non supporté, essayer de forcer JPEG
+          if (isSamsungFormat && !result.includes('image/jpeg')) {
+            console.warn('[Samsung] Format HEIC/HEIF détecté, conversion forcée en JPEG');
+            // Le navigateur devrait automatiquement convertir, mais on force JPEG
+            const base64Match = result.match(/base64,(.+)$/);
+            if (base64Match) {
+              resolve(`data:image/jpeg;base64,${base64Match[1]}`);
+            } else {
+              resolve(result);
+            }
+          } else {
+            resolve(result);
+          }
+        };
+        
+        reader.onerror = (err) => {
+          console.error('[Samsung] Erreur lecture fichier:', err);
+          reject(reader.error || new Error('Erreur lecture fichier'));
+        };
+        
+        // Lire le fichier comme data URL
         reader.readAsDataURL(file);
       });
+    };
+    
     const out: string[] = [];
     for (const f of files) {
-      out.push(await convert(f));
+      try {
+        const converted = await convert(f);
+        out.push(converted);
+      } catch (err) {
+        console.error('[Samsung] Erreur conversion fichier:', f.name, err);
+        // Essayer quand même avec une conversion de base
+        const reader = new FileReader();
+        reader.onload = () => out.push(String(reader.result));
+        reader.readAsDataURL(f);
+      }
     }
     return out;
   };
@@ -906,43 +952,49 @@ const Chips = ({ files }: { files: FileWithPreview[] }) => (
 );
 
 // Fonction pour compresser une image base64 avant de l'ajouter au PDF
-// Améliorée pour gérer Samsung, Oppo et autres appareils Android
+// Améliorée pour gérer Samsung, Oppo et autres appareils Android (y compris HEIC/HEIF)
 const compressImageBase64 = async (base64Data: string, maxWidth = 1400, quality = 0.75): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    // Normaliser le format base64 (supprimer les espaces, retours à la ligne, etc.)
-    let normalizedBase64 = base64Data.trim();
-    
-    // Si ce n'est pas une data URL, essayer de la créer
-    if (!normalizedBase64.startsWith('data:')) {
-      // Essayer différents formats MIME courants pour Android
-      const possibleFormats = ['image/jpeg', 'image/png', 'image/webp'];
-      let found = false;
-      for (const format of possibleFormats) {
-        try {
-          const testData = `data:${format};base64,${normalizedBase64}`;
-          const testImg = new window.Image();
-          testImg.onload = () => {
-            found = true;
-            normalizedBase64 = testData;
-          };
-          testImg.onerror = () => {};
-          testImg.src = testData;
-        } catch {}
-      }
-      // Par défaut, utiliser JPEG
-      if (!found) {
-        normalizedBase64 = `data:image/jpeg;base64,${normalizedBase64}`;
-      }
+  // Normaliser le format base64 (supprimer les espaces, retours à la ligne, etc.)
+  let normalizedBase64 = base64Data.trim().replace(/\s+/g, '');
+  
+  // Extraire le type MIME si présent
+  let mimeType = 'image/jpeg'; // Par défaut
+  let base64Only = normalizedBase64;
+  
+  if (normalizedBase64.startsWith('data:')) {
+    const mimeMatch = normalizedBase64.match(/data:([^;]+)/);
+    if (mimeMatch) {
+      mimeType = mimeMatch[1];
     }
-    
+    // Extraire le base64 pur
+    const base64Match = normalizedBase64.match(/base64,(.+)$/);
+    if (base64Match) {
+      base64Only = base64Match[1];
+    }
+  }
+  
+  // Détecter les formats Samsung non supportés (HEIC, HEIF, etc.)
+  const unsupportedFormats = ['heic', 'heif', 'hevc'];
+  const isUnsupportedFormat = unsupportedFormats.some(fmt => mimeType.toLowerCase().includes(fmt));
+  
+  // Si c'est un format non supporté, forcer JPEG
+  if (isUnsupportedFormat) {
+    console.warn('[Samsung] Format non supporté détecté:', mimeType, '- Conversion forcée en JPEG');
+    normalizedBase64 = `data:image/jpeg;base64,${base64Only}`;
+  } else if (!normalizedBase64.startsWith('data:')) {
+    // Si ce n'est pas une data URL, créer une data URL JPEG
+    normalizedBase64 = `data:image/jpeg;base64,${base64Only}`;
+  }
+  
+  return new Promise((resolve) => {
     const img = new window.Image();
     img.crossOrigin = 'anonymous'; // Important pour certains navigateurs Android
     
-    // Timeout de sécurité (5 secondes)
+    // Timeout de sécurité (10 secondes pour Samsung)
     const timeout = setTimeout(() => {
-      console.warn('Timeout compression image');
+      console.warn('[Samsung] Timeout compression image, utilisation originale');
       resolve(normalizedBase64);
-    }, 5000);
+    }, 10000);
     
     img.onload = () => {
       clearTimeout(timeout);
@@ -951,38 +1003,84 @@ const compressImageBase64 = async (base64Data: string, maxWidth = 1400, quality 
         const canvas = document.createElement('canvas');
         canvas.width = img.width * scale;
         canvas.height = img.height * scale;
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext('2d', { 
+          willReadFrequently: true,
+          alpha: false // Désactiver alpha pour JPEG
+        });
         
         if (!ctx) {
-          console.warn('Impossible d\'obtenir le contexte canvas');
+          console.warn('[Samsung] Impossible d\'obtenir le contexte canvas');
           resolve(normalizedBase64);
           return;
         }
         
         // Corriger l'orientation si nécessaire (pour Samsung/Oppo)
         ctx.save();
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         ctx.restore();
         
-        // Toujours convertir en JPEG pour compatibilité maximale
+        // Toujours convertir en JPEG pour compatibilité maximale avec PDF
         const result = canvas.toDataURL('image/jpeg', quality);
-        if (result && result.length > 100) {
+        if (result && result.length > 100 && result.startsWith('data:image/jpeg')) {
+          console.log('[Samsung] Image compressée avec succès');
           resolve(result);
         } else {
-          console.warn('Compression échouée, utilisation de l\'image originale');
+          console.warn('[Samsung] Compression échouée, utilisation de l\'image originale');
           resolve(normalizedBase64);
         }
       } catch (err) {
-        console.warn('Erreur lors de la compression:', err);
+        console.warn('[Samsung] Erreur lors de la compression:', err);
         resolve(normalizedBase64);
       }
     };
     
     img.onerror = (err) => {
       clearTimeout(timeout);
-      console.warn('Erreur chargement image pour compression:', err, normalizedBase64.substring(0, 100));
-      // Essayer quand même avec l'image originale
-      resolve(normalizedBase64);
+      console.warn('[Samsung] Erreur chargement image pour compression:', err);
+      console.warn('[Samsung] Format détecté:', mimeType);
+      console.warn('[Samsung] Base64 preview:', normalizedBase64.substring(0, 100));
+      
+      // Si l'image ne peut pas être chargée, essayer de forcer la conversion via Blob
+      try {
+        const base64Only = normalizedBase64.replace(/^data:[^;]+;base64,/, '');
+        const binaryString = atob(base64Only);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        
+        // Créer un Blob et essayer de le convertir
+        const blob = new Blob([bytes], { type: 'image/jpeg' });
+        const blobUrl = URL.createObjectURL(blob);
+        
+        const img2 = new window.Image();
+        img2.onload = () => {
+          URL.revokeObjectURL(blobUrl);
+          const canvas = document.createElement('canvas');
+          canvas.width = img2.width;
+          canvas.height = img2.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img2, 0, 0);
+            const result = canvas.toDataURL('image/jpeg', quality);
+            if (result && result.length > 100) {
+              resolve(result);
+              return;
+            }
+          }
+          resolve(normalizedBase64);
+        };
+        img2.onerror = () => {
+          URL.revokeObjectURL(blobUrl);
+          resolve(normalizedBase64);
+        };
+        img2.src = blobUrl;
+      } catch (blobErr) {
+        console.warn('[Samsung] Erreur conversion Blob:', blobErr);
+        resolve(normalizedBase64);
+      }
     };
     
     img.src = normalizedBase64;
@@ -1085,7 +1183,7 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
   const highlightTitleColor = rgbToArray(highlightPalette.title);
   const highlightTextColor = rgbToArray(highlightPalette.text);
 
-  y += 10;
+  y += 5; // Espace réduit avant la section client
   const sectionPadding = 12;
 
   // Préparer les lignes client (UNIQUEMENT les infos essentielles)
@@ -1118,8 +1216,8 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
     clientLines.push(`N° de bon : ${String(slipNumber).trim()}`);
   }
 
-  const clientLineHeight = 14;
-  const clientCardHeight = sectionPadding * 2 + clientLines.length * clientLineHeight + 14; // +14 pour le titre
+  const clientLineHeight = 13; // Réduit de 14 à 13
+  const clientCardHeight = sectionPadding * 2 + clientLines.length * clientLineHeight + 18; // +18 pour le titre (légèrement réduit)
 
   // Fond et cadre
   applyFillColor(highlightBg);
@@ -1144,10 +1242,10 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
     infoY += clientLineHeight;
   });
 
-  y += clientCardHeight + 6;
+  y += clientCardHeight + 3; // Espace réduit après la section client
 
   // ========== SECTION MATIÈRES DÉCLARÉES (Zone highlight) ==========
-  y += 10;
+  y += 5; // Espace réduit avant la section matières
   
   // Fond bleu clair pour section Matières (encadré auto-ajusté)
   const colX = [
@@ -1172,13 +1270,13 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
   const descDecl = data.declassed_material || '—';
 
   // Calcul hauteur dynamique avec wrapping
-  const lineH = 14;
+  const lineH = 13; // Réduit de 14 à 13
   const descEntreeWrapped = doc.splitTextToSize(descEntree, colX[2] - colX[1] - 6);
   const descDeclWrapped = doc.splitTextToSize(descDecl, colX[2] - colX[1] - 6);
   const headerH = lineH;
   const row1H = Math.max(lineH, descEntreeWrapped.length * lineH);
   const row2H = Math.max(lineH, descDeclWrapped.length * lineH);
-  const sectionHeightMat = sectionPadding * 2 + headerH + row1H + row2H + 8; // marge interne
+  const sectionHeightMat = sectionPadding * 2 + headerH + row1H + row2H + 4; // marge interne réduite de 8 à 4
 
   applyFillColor(highlightBg);
   doc.setDrawColor(highlightTextColor[0], highlightTextColor[1], highlightTextColor[2]);
@@ -1216,10 +1314,10 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
   doc.text(descDeclWrapped, colX[1], infoY);
   doc.text(pctDeclasse, colX[2], infoY, { align: 'right' });
 
-  y += sectionHeightMat + 8;
+    y += sectionHeightMat + 3; // Espace réduit après la section matières
 
   // ========== SECTION DÉCLASSEMENT MATIÈRES (Zone 2: Motif & preuves) ==========
-  y += 10;
+  y += 5; // Espace réduit avant la section déclassement
   
   // Collecter les données de la zone 2 qui sont renseignées
   const motifData: Array<{ label: string; value: string }> = [];
@@ -1277,8 +1375,8 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
       margin + sectionPadding,
       margin + sectionPadding + 200
     ];
-    const motifLineH = 14;
-    const motifTitleH = 20;
+    const motifLineH = 13; // Réduit de 14 à 13
+    const motifTitleH = 18; // Réduit de 20 à 18
     
     // Calculer la hauteur dynamique avec wrapping pour les valeurs
     let motifSectionHeight = sectionPadding * 2 + motifTitleH;
@@ -1303,7 +1401,7 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
     applyColor(highlightTextColor);
     doc.setFontSize(11);
     doc.setFont('helvetica', 'normal');
-    let motifY = y + motifTitleH + 12; // Augmenté de 8 à 12 pour plus d'espace
+    let motifY = y + motifTitleH + 14; // Espace augmenté entre le titre et le contenu
     
     motifData.forEach((item) => {
       // Label en gras
@@ -1318,11 +1416,11 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
       motifY += Math.max(motifLineH, wrapped.length * motifLineH) + 4;
     });
     
-    y += motifSectionHeight + 8;
+    y += motifSectionHeight + 3; // Espace réduit après la section déclassement
   }
 
   // ========== SECTION PHOTOS ==========
-  y += 10;
+  y += 5; // Espace réduit avant la section photos
   const photos = (data.photos_avant || data.photos_apres || data.photos || []).map((p: any, idx: number) => ({
     src: p,
     label: `Photo ${idx + 1}`
@@ -1330,28 +1428,167 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
   
   if (photos.length > 0) {
     const photoWidth = (safeWidth - 20) / 2;
-    const photoHeight = 90;
-    const sectionPaddingPhotos = 12;
+    const photoHeight = 100; // Légèrement augmenté pour mieux utiliser l'espace
+    const sectionPaddingPhotos = 10; // Réduit de 12 à 10
     const photosPerPage = 4; // 2 colonnes x 2 lignes par page
-    const titleBlockH = 24;
-    const photoSpacing = 30;
+    const titleBlockH = 20; // Réduit de 24 à 20
+    const photoSpacing = 25; // Réduit de 30 à 25
     
     let photoIndex = 0;
     let currentPageStartY = y;
     
     while (photoIndex < photos.length) {
-      // Vérifier si on a besoin d'une nouvelle page
+      // Calculer combien de photos peuvent tenir sur la page actuelle
+      const availableHeight = pageHeight - y - 70; // 70px pour le footer
       const photosOnThisPage = Math.min(photosPerPage, photos.length - photoIndex);
       const rows = Math.ceil(photosOnThisPage / 2);
       const photosBlockH = rows * (photoHeight + photoSpacing);
       const sectionHeightPhotos = sectionPaddingPhotos * 2 + titleBlockH + photosBlockH;
       
-      // Vérifier si on dépasse la page actuelle
-      if (y + sectionHeightPhotos > pageHeight - 100) {
-        // Ajouter une nouvelle page
+      // Vérifier si on dépasse la page actuelle (marge réduite pour optimiser l'espace)
+      // On laisse 70px pour le footer
+      // Si c'est la première page de photos (photoIndex === 0), on essaie de les mettre sur la page actuelle
+      if (sectionHeightPhotos > availableHeight && photoIndex > 0) {
+        // Ajouter une nouvelle page seulement si vraiment nécessaire ET si on a déjà des photos
         doc.addPage();
         y = margin;
         currentPageStartY = y;
+        // Recalculer la hauteur disponible après création de la nouvelle page
+        const newAvailableHeight = pageHeight - y - 70;
+        // Si même sur une nouvelle page ça ne rentre pas, ajuster
+        if (sectionHeightPhotos > newAvailableHeight) {
+          // Calculer combien de photos peuvent vraiment tenir
+          const maxRows = Math.floor((newAvailableHeight - sectionPaddingPhotos * 2 - titleBlockH) / (photoHeight + photoSpacing));
+          const maxPhotos = Math.min(photosOnThisPage, Math.max(1, maxRows * 2));
+          // Ajuster les calculs pour cette page
+          const adjustedRows = Math.ceil(maxPhotos / 2);
+          const adjustedPhotosBlockH = adjustedRows * (photoHeight + photoSpacing);
+          const adjustedSectionHeightPhotos = sectionPaddingPhotos * 2 + titleBlockH + adjustedPhotosBlockH;
+          // Utiliser les valeurs ajustées
+          const actualPhotosOnThisPage = maxPhotos;
+          const actualSectionHeightPhotos = adjustedSectionHeightPhotos;
+          
+          // Cadre photos pour cette page avec hauteur ajustée
+          applyFillColor(highlightBg);
+          doc.setDrawColor(highlightTextColor[0], highlightTextColor[1], highlightTextColor[2]);
+          doc.setLineWidth(0.6);
+          doc.roundedRect(margin, currentPageStartY, safeWidth, actualSectionHeightPhotos, 6, 6, 'FD');
+
+          // Titre "Photos" - en bleu
+          applyColor(bodyTitleColor);
+          doc.setFontSize(14);
+          doc.setFont('helvetica', 'bold');
+          doc.text(`Photos (suite - ${photoIndex + 1} à ${Math.min(photoIndex + actualPhotosOnThisPage, photos.length)})`, margin + sectionPaddingPhotos, currentPageStartY + 18);
+
+          // Grille photos
+          let photoY = currentPageStartY + sectionPaddingPhotos + titleBlockH;
+          
+          for (let i = 0; i < actualPhotosOnThisPage && photoIndex < photos.length; i++) {
+            const col = i % 2;
+            const row = Math.floor(i / 2);
+            const x = margin + sectionPaddingPhotos + col * (photoWidth + 20);
+            const currentY = photoY + row * (photoHeight + photoSpacing);
+
+            try {
+              let imgData: string | null = null;
+              const photoSrc = photos[photoIndex].src;
+              
+              console.log(`[Samsung] Traitement photo ${photoIndex + 1}:`, {
+                type: typeof photoSrc,
+                preview: typeof photoSrc === 'string' ? photoSrc.substring(0, 100) : 'non-string'
+              });
+              
+              const normalizedSrc = typeof photoSrc === 'string' ? photoSrc.trim().replace(/\s+/g, '') : photoSrc;
+              
+              if (typeof normalizedSrc === 'string' && normalizedSrc.startsWith('data:image/')) {
+                // Vérifier si c'est un format non supporté (HEIC, HEIF)
+                if (normalizedSrc.includes('heic') || normalizedSrc.includes('heif')) {
+                  console.warn('[Samsung] Format HEIC/HEIF détecté dans data URL');
+                  // Extraire le base64 et forcer JPEG
+                  const base64Match = normalizedSrc.match(/base64,(.+)$/);
+                  if (base64Match) {
+                    imgData = `data:image/jpeg;base64,${base64Match[1]}`;
+                  } else {
+                    imgData = normalizedSrc;
+                  }
+                } else {
+                  imgData = normalizedSrc;
+                }
+              } else if (typeof normalizedSrc === 'string' && normalizedSrc.length > 100) {
+                const base64Pattern = /^[A-Za-z0-9+/=]+$/;
+                const withoutPrefix = normalizedSrc.replace(/^data:image\/[a-z]+;base64,/, '');
+                
+                if (base64Pattern.test(withoutPrefix) && withoutPrefix.length > 50) {
+                  // Forcer JPEG pour compatibilité Samsung
+                  imgData = `data:image/jpeg;base64,${withoutPrefix}`;
+                } else {
+                  imgData = await resolveTemplateImage(normalizedSrc);
+                }
+              } else {
+                imgData = await resolveTemplateImage(normalizedSrc);
+              }
+              
+              if (imgData) {
+                console.log(`[Samsung] Compression photo ${photoIndex + 1}...`);
+                imgData = await compressImageBase64(imgData, 1200, 0.65);
+                
+                // Vérifier que l'image est valide avant d'ajouter au PDF
+                if (!imgData || !imgData.startsWith('data:image/')) {
+                  throw new Error('Format d\'image invalide après compression');
+                }
+                
+                const imgProps = (doc as any).getImageProperties(imgData);
+                if (!imgProps || !imgProps.width || !imgProps.height) {
+                  throw new Error('Propriétés d\'image invalides');
+                }
+                
+                const aspectRatio = imgProps.width / imgProps.height;
+                let w = photoWidth;
+                let h = photoWidth / aspectRatio;
+                
+                if (h > photoHeight) {
+                  h = photoHeight;
+                  w = photoHeight * aspectRatio;
+                }
+                
+                const centerX = x + (photoWidth - w) / 2;
+                const imageFormat = 'JPEG'; // Toujours JPEG pour compatibilité
+                
+                // Ajouter l'image au PDF
+                doc.addImage(imgData, imageFormat, centerX, currentY, w, h);
+                
+                console.log(`[Samsung] Photo ${photoIndex + 1} ajoutée avec succès`);
+                
+                const bodyTextColor = rgbToArray(bodyPalette.text);
+                applyColor(bodyTextColor);
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'normal');
+                doc.text(photos[photoIndex].label, x + photoWidth / 2 - doc.getTextWidth(photos[photoIndex].label) / 2, currentY + h + 12);
+              } else {
+                console.warn(`[Samsung] Photo ${photoIndex + 1}: image non disponible`);
+                const bodyTextColor = rgbToArray(bodyPalette.text);
+                applyColor(bodyTextColor);
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'normal');
+                doc.text(`${photos[photoIndex].label} (image non disponible)`, x, currentY + 14);
+              }
+            } catch (err) {
+              console.error(`[Samsung] Erreur chargement photo ${photoIndex + 1}:`, err);
+              console.error('[Samsung] Source photo:', photos[photoIndex].src);
+              const bodyTextColor = rgbToArray(bodyPalette.text);
+              applyColor(bodyTextColor);
+              doc.setFontSize(10);
+              doc.setFont('helvetica', 'normal');
+              const errorMsg = err instanceof Error ? err.message : 'Format non supporté (Samsung?)';
+              doc.text(`${photos[photoIndex].label} (erreur: ${errorMsg})`, x, currentY + 14);
+            }
+            
+            photoIndex++;
+          }
+          
+          y = currentPageStartY + actualSectionHeightPhotos + 3;
+          continue; // Passer à la prochaine itération
+        }
       }
       
       // Cadre photos pour cette page
@@ -1457,7 +1694,7 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
       }
       
       // Mettre à jour y pour la prochaine section
-      y = currentPageStartY + sectionHeightPhotos + 8;
+      y = currentPageStartY + sectionHeightPhotos + 3; // Espace réduit
     }
   }
 
