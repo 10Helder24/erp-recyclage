@@ -3609,6 +3609,8 @@ const ensureSchema = async () => {
   await run('create index if not exists downgrades_status_idx on downgrades(status, performed_at desc)');
   
   // Archivage des PDF de déclassements (rétention 10 ans)
+  // Note: expires_at n'est plus une colonne générée car elle utilise now() qui n'est pas immutable
+  // On calcule expires_at dans l'application lors de l'insertion
   await run(`
     create table if not exists downgrade_archives (
       id uuid primary key default gen_random_uuid(),
@@ -3619,7 +3621,7 @@ const ensureSchema = async () => {
       retention_years integer not null default 10,
       archived_at timestamptz not null default now(),
       archived_by uuid references users(id) on delete set null,
-      expires_at timestamptz generated always as (archived_at + (retention_years || ' years')::interval) stored,
+      expires_at timestamptz,
       metadata jsonb,
       created_at timestamptz not null default now()
     )
@@ -15924,6 +15926,7 @@ app.post(
 // Fonction helper pour garantir que la table downgrade_archives existe
 const ensureDowngradeArchivesTable = async () => {
   try {
+    // Créer la table sans colonne générée (pour éviter l'erreur "generation expression is not immutable")
     await run(`
       create table if not exists downgrade_archives (
         id uuid primary key default gen_random_uuid(),
@@ -15934,11 +15937,31 @@ const ensureDowngradeArchivesTable = async () => {
         retention_years integer not null default 10,
         archived_at timestamptz not null default now(),
         archived_by uuid references users(id) on delete set null,
-        expires_at timestamptz generated always as (archived_at + (retention_years || ' years')::interval) stored,
+        expires_at timestamptz,
         metadata jsonb,
         created_at timestamptz not null default now()
       )
     `);
+    
+    // Migration : si expires_at est une colonne générée, la supprimer et la recréer comme colonne normale
+    try {
+      const [colInfo] = await run(`
+        select column_name, is_generated, generation_expression
+        from information_schema.columns
+        where table_name = 'downgrade_archives' and column_name = 'expires_at'
+      `);
+      if (colInfo && colInfo.is_generated === 'ALWAYS') {
+        // Supprimer la colonne générée
+        await run('alter table downgrade_archives drop column expires_at');
+        // Recréer comme colonne normale
+        await run('alter table downgrade_archives add column expires_at timestamptz');
+      }
+    } catch (migrationErr: any) {
+      // Si la colonne n'existe pas ou erreur, l'ajouter normalement
+      if (migrationErr.message?.includes('does not exist')) {
+        await run('alter table downgrade_archives add column if not exists expires_at timestamptz');
+      }
+    }
     await run('create index if not exists downgrade_archives_downgrade_idx on downgrade_archives(downgrade_id)');
     await run('create index if not exists downgrade_archives_expires_idx on downgrade_archives(expires_at)');
   } catch (err: any) {
@@ -16593,15 +16616,18 @@ app.post(
         const pdfBuffer = Buffer.from(pdf_base64, 'base64');
         
         // Archiver le PDF (rétention 10 ans)
+        // Calculer expires_at dans l'application (archived_at + retention_years années)
+        const retentionYears = 10;
         [archive] = await run(
-          `insert into downgrade_archives (downgrade_id, pdf_data, pdf_filename, pdf_size_bytes, retention_years, archived_by, metadata)
-           values ($1, $2, $3, $4, 10, $5, $6)
+          `insert into downgrade_archives (downgrade_id, pdf_data, pdf_filename, pdf_size_bytes, retention_years, archived_by, expires_at, metadata)
+           values ($1, $2, $3, $4, $5, $6, (now() + ($5 || ' years')::interval), $7)
            returning id, archived_at, expires_at`,
           [
             id,
             pdfBuffer,
             filename,
             pdfBuffer.length,
+            retentionYears,
             auth?.id || null,
             JSON.stringify({ 
               status_at_archive: dg.status,
@@ -16618,15 +16644,17 @@ app.post(
           // Réessayer une fois après création de la table
           try {
             const pdfBuffer = Buffer.from(pdf_base64, 'base64');
+            const retentionYears = 10;
             [archive] = await run(
-              `insert into downgrade_archives (downgrade_id, pdf_data, pdf_filename, pdf_size_bytes, retention_years, archived_by, metadata)
-               values ($1, $2, $3, $4, 10, $5, $6)
+              `insert into downgrade_archives (downgrade_id, pdf_data, pdf_filename, pdf_size_bytes, retention_years, archived_by, expires_at, metadata)
+               values ($1, $2, $3, $4, $5, $6, (now() + ($5 || ' years')::interval), $7)
                returning id, archived_at, expires_at`,
               [
                 id,
                 pdfBuffer,
                 filename,
                 pdfBuffer.length,
+                retentionYears,
                 auth?.id || null,
                 JSON.stringify({ 
                   status_at_archive: dg.status,
