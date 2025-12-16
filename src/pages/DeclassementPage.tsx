@@ -301,6 +301,14 @@ const DeclassementPage = () => {
         return;
       }
       
+      // Log pour déboguer les données passées au PDF
+      console.log('[PDF Génération] Données client:', {
+        lot_origin_client_name: payload.lot_origin_client_name,
+        client_name: payload.client_name,
+        lot_origin_client_id: payload.lot_origin_client_id,
+        photos_count: payload.photos_avant?.length || payload.photos_apres?.length || payload.photos?.length || 0
+      });
+      
       // Générer le PDF
       const doc = await buildTemplatePdf(templateConfig, payload);
       if (!doc) {
@@ -315,6 +323,15 @@ const DeclassementPage = () => {
         toast.error('Erreur: PDF généré mais base64 vide ou trop court');
         setLoading(false);
         return;
+      }
+      
+      // Vérifier la taille du PDF (33 MB = ~34,603,008 bytes en base64, mais base64 est ~33% plus grand)
+      // Donc ~26 MB en binaire = ~34.6 MB en base64
+      const pdfSizeMB = (pdfBase64.length * 3) / 4 / 1024 / 1024;
+      console.log(`[PDF Génération] Taille PDF: ${pdfSizeMB.toFixed(2)} MB`);
+      
+      if (pdfSizeMB > 33) {
+        toast.error(`PDF volumineux (${pdfSizeMB.toFixed(2)} MB). Compression supplémentaire nécessaire.`);
       }
       
       // Envoyer le PDF directement par email
@@ -1073,9 +1090,19 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
 
   // Préparer les lignes client (UNIQUEMENT les infos essentielles)
   const clientLines: string[] = [];
-  const clientName = data.lot_origin_client_name || data.lot_origin_client_id || '—';
-  if (clientName && clientName !== '—') {
-    clientLines.push(`Nom de l'entreprise : ${clientName}`);
+  // Vérifier plusieurs sources pour le nom du client (dans l'ordre de priorité)
+  const clientName = data.lot_origin_client_name || data.client_name || data.lot_origin_client_id || '';
+  console.log('[PDF Build] Nom client trouvé:', { 
+    lot_origin_client_name: data.lot_origin_client_name,
+    client_name: data.client_name,
+    lot_origin_client_id: data.lot_origin_client_id,
+    final: clientName
+  });
+  if (clientName && String(clientName).trim() !== '' && String(clientName).trim() !== '—') {
+    clientLines.push(`Nom de l'entreprise : ${String(clientName).trim()}`);
+  } else {
+    // Si aucun nom trouvé, ajouter quand même une ligne pour indiquer qu'il manque
+    clientLines.push(`Nom de l'entreprise : Non renseigné`);
   }
   if (data.lot_origin_client_address && data.lot_origin_client_address.trim() !== '') {
     clientLines.push(`Adresse : ${data.lot_origin_client_address}`);
@@ -1300,146 +1327,189 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
     src: p,
     label: `Photo ${idx + 1}`
   }));
-  const photoWidth = (safeWidth - 20) / 2;
-  const photoHeight = 90;
-  const sectionPaddingPhotos = 12;
-  const rows = Math.max(1, Math.ceil(Math.min(photos.length, 4) / 2));
-  const titleBlockH = 24;
-  const photosBlockH = rows * (photoHeight + 30);
-  const sectionHeightPhotos = sectionPaddingPhotos * 2 + titleBlockH + photosBlockH;
-
-  // Cadre photos
-  applyFillColor(highlightBg);
-  doc.setDrawColor(highlightTextColor[0], highlightTextColor[1], highlightTextColor[2]);
-  doc.setLineWidth(0.6);
-  doc.roundedRect(margin, y, safeWidth, sectionHeightPhotos, 6, 6, 'FD');
-
-  // Titre "Photos" - en bleu
-  applyColor(bodyTitleColor);
-  doc.setFontSize(14);
-  doc.setFont('helvetica', 'bold');
-  doc.text('Photos', margin + sectionPaddingPhotos, y + 18);
-
-  // Grille photos à l'intérieur du cadre
-  let photoY = y + sectionPaddingPhotos + titleBlockH;
-  for (let i = 0; i < Math.min(photos.length, 4); i++) {
-    const col = i % 2;
-    const row = Math.floor(i / 2);
-    const x = margin + sectionPaddingPhotos + col * (photoWidth + 20);
-    const currentY = photoY + row * (photoHeight + 30);
-
-    try {
-      let imgData: string | null = null;
-      const photoSrc = photos[i].src;
+  
+  if (photos.length > 0) {
+    const photoWidth = (safeWidth - 20) / 2;
+    const photoHeight = 90;
+    const sectionPaddingPhotos = 12;
+    const photosPerPage = 4; // 2 colonnes x 2 lignes par page
+    const titleBlockH = 24;
+    const photoSpacing = 30;
+    
+    let photoIndex = 0;
+    let currentPageStartY = y;
+    
+    while (photoIndex < photos.length) {
+      // Vérifier si on a besoin d'une nouvelle page
+      const photosOnThisPage = Math.min(photosPerPage, photos.length - photoIndex);
+      const rows = Math.ceil(photosOnThisPage / 2);
+      const photosBlockH = rows * (photoHeight + photoSpacing);
+      const sectionHeightPhotos = sectionPaddingPhotos * 2 + titleBlockH + photosBlockH;
       
-      // Normaliser la source de la photo (supprimer espaces, retours à la ligne)
-      const normalizedSrc = typeof photoSrc === 'string' ? photoSrc.trim().replace(/\s+/g, '') : photoSrc;
-      
-      // Si c'est déjà une data URL base64, l'utiliser directement
-      if (typeof normalizedSrc === 'string' && normalizedSrc.startsWith('data:image/')) {
-        imgData = normalizedSrc;
-      } else if (typeof normalizedSrc === 'string' && normalizedSrc.length > 100) {
-        // Essayer de détecter si c'est du base64 pur (sans préfixe data:)
-        const base64Pattern = /^[A-Za-z0-9+/=]+$/;
-        const withoutPrefix = normalizedSrc.replace(/^data:image\/[a-z]+;base64,/, '');
-        
-        if (base64Pattern.test(withoutPrefix) && withoutPrefix.length > 50) {
-          // C'est probablement du base64, utiliser JPEG par défaut (le plus compatible avec Android)
-          // La fonction compressImageBase64 essaiera automatiquement différents formats si nécessaire
-          imgData = `data:image/jpeg;base64,${withoutPrefix}`;
-        } else {
-          // Sinon, essayer resolveTemplateImage
-          imgData = await resolveTemplateImage(normalizedSrc);
-        }
-      } else {
-        // Essayer resolveTemplateImage
-        imgData = await resolveTemplateImage(normalizedSrc);
+      // Vérifier si on dépasse la page actuelle
+      if (y + sectionHeightPhotos > pageHeight - 100) {
+        // Ajouter une nouvelle page
+        doc.addPage();
+        y = margin;
+        currentPageStartY = y;
       }
       
-      if (imgData) {
-        // Compresser l'image avant de l'ajouter au PDF pour réduire la taille
-        imgData = await compressImageBase64(imgData, 1400, 0.75);
-        
-        const imgProps = (doc as any).getImageProperties(imgData);
-        const aspectRatio = imgProps.width / imgProps.height;
-        let w = photoWidth;
-        let h = photoWidth / aspectRatio;
-        
-        if (h > photoHeight) {
-          h = photoHeight;
-          w = photoHeight * aspectRatio;
+      // Cadre photos pour cette page
+      applyFillColor(highlightBg);
+      doc.setDrawColor(highlightTextColor[0], highlightTextColor[1], highlightTextColor[2]);
+      doc.setLineWidth(0.6);
+      doc.roundedRect(margin, currentPageStartY, safeWidth, sectionHeightPhotos, 6, 6, 'FD');
+
+      // Titre "Photos" - en bleu (seulement sur la première page de photos)
+      if (photoIndex === 0) {
+        applyColor(bodyTitleColor);
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Photos', margin + sectionPaddingPhotos, currentPageStartY + 18);
+      } else {
+        // Sur les pages suivantes, indiquer la suite
+        applyColor(bodyTitleColor);
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`Photos (suite - ${photoIndex + 1} à ${Math.min(photoIndex + photosPerPage, photos.length)})`, margin + sectionPaddingPhotos, currentPageStartY + 18);
+      }
+
+      // Grille photos à l'intérieur du cadre
+      let photoY = currentPageStartY + sectionPaddingPhotos + titleBlockH;
+      
+      for (let i = 0; i < photosOnThisPage && photoIndex < photos.length; i++) {
+        const col = i % 2;
+        const row = Math.floor(i / 2);
+        const x = margin + sectionPaddingPhotos + col * (photoWidth + 20);
+        const currentY = photoY + row * (photoHeight + photoSpacing);
+
+        try {
+          let imgData: string | null = null;
+          const photoSrc = photos[photoIndex].src;
+          
+          // Normaliser la source de la photo (supprimer espaces, retours à la ligne)
+          const normalizedSrc = typeof photoSrc === 'string' ? photoSrc.trim().replace(/\s+/g, '') : photoSrc;
+          
+          // Si c'est déjà une data URL base64, l'utiliser directement
+          if (typeof normalizedSrc === 'string' && normalizedSrc.startsWith('data:image/')) {
+            imgData = normalizedSrc;
+          } else if (typeof normalizedSrc === 'string' && normalizedSrc.length > 100) {
+            // Essayer de détecter si c'est du base64 pur (sans préfixe data:)
+            const base64Pattern = /^[A-Za-z0-9+/=]+$/;
+            const withoutPrefix = normalizedSrc.replace(/^data:image\/[a-z]+;base64,/, '');
+            
+            if (base64Pattern.test(withoutPrefix) && withoutPrefix.length > 50) {
+              // C'est probablement du base64, utiliser JPEG par défaut (le plus compatible avec Android)
+              // La fonction compressImageBase64 essaiera automatiquement différents formats si nécessaire
+              imgData = `data:image/jpeg;base64,${withoutPrefix}`;
+            } else {
+              // Sinon, essayer resolveTemplateImage
+              imgData = await resolveTemplateImage(normalizedSrc);
+            }
+          } else {
+            // Essayer resolveTemplateImage
+            imgData = await resolveTemplateImage(normalizedSrc);
+          }
+          
+          if (imgData) {
+            // Compresser l'image avant de l'ajouter au PDF pour réduire la taille (qualité réduite pour rester sous 33 MB)
+            imgData = await compressImageBase64(imgData, 1200, 0.65);
+            
+            const imgProps = (doc as any).getImageProperties(imgData);
+            const aspectRatio = imgProps.width / imgProps.height;
+            let w = photoWidth;
+            let h = photoWidth / aspectRatio;
+            
+            if (h > photoHeight) {
+              h = photoHeight;
+              w = photoHeight * aspectRatio;
+            }
+            
+            const centerX = x + (photoWidth - w) / 2;
+            // Toujours utiliser JPEG pour meilleure compression
+            const imageFormat = 'JPEG';
+            doc.addImage(imgData, imageFormat, centerX, currentY, w, h);
+            
+            // Label sous la photo
+            const bodyTextColor = rgbToArray(bodyPalette.text);
+            applyColor(bodyTextColor);
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.text(photos[photoIndex].label, x + photoWidth / 2 - doc.getTextWidth(photos[photoIndex].label) / 2, currentY + h + 12);
+          } else {
+            // Aucune image trouvée
+            const bodyTextColor = rgbToArray(bodyPalette.text);
+            applyColor(bodyTextColor);
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.text(`${photos[photoIndex].label} (image non disponible)`, x, currentY + 14);
+          }
+        } catch (err) {
+          console.warn('Erreur chargement photo:', err, photos[photoIndex].src);
+          const bodyTextColor = rgbToArray(bodyPalette.text);
+          applyColor(bodyTextColor);
+          doc.setFontSize(10);
+          doc.setFont('helvetica', 'normal');
+          doc.text(`${photos[photoIndex].label} (erreur: ${err instanceof Error ? err.message : 'inconnue'})`, x, currentY + 14);
         }
         
-        const centerX = x + (photoWidth - w) / 2;
-        // Déterminer le format d'image (JPEG, PNG, etc.)
-        const imageFormat = imgData.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-        doc.addImage(imgData, imageFormat, centerX, currentY, w, h);
-        
-        // Label sous la photo
-        const bodyTextColor = rgbToArray(bodyPalette.text);
-        applyColor(bodyTextColor);
-        doc.setFontSize(10);
-        doc.setFont('helvetica', 'normal');
-        doc.text(photos[i].label, x + photoWidth / 2 - doc.getTextWidth(photos[i].label) / 2, currentY + h + 12);
-      } else {
-        // Aucune image trouvée
-        const bodyTextColor = rgbToArray(bodyPalette.text);
-        applyColor(bodyTextColor);
-        doc.setFontSize(10);
-        doc.setFont('helvetica', 'normal');
-        doc.text(`${photos[i].label} (image non disponible)`, x, currentY + 14);
+        photoIndex++;
       }
-    } catch (err) {
-      console.warn('Erreur chargement photo:', err, photos[i].src);
-      const bodyTextColor = rgbToArray(bodyPalette.text);
-      applyColor(bodyTextColor);
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'normal');
-      doc.text(`${photos[i].label} (erreur: ${err instanceof Error ? err.message : 'inconnue'})`, x, currentY + 14);
+      
+      // Mettre à jour y pour la prochaine section
+      y = currentPageStartY + sectionHeightPhotos + 8;
     }
   }
 
-  // ========== FOOTER ==========
-  const footerBase = pageHeight - 60;
-  const footerY = Math.max(footerBase, y + sectionHeightPhotos + 10);
+  // ========== FOOTER sur toutes les pages ==========
   const footerLines = getFooterLines(templateConfig);
-  
-  // Contact Retripa à gauche - Zone 1 (Header) - utilise subtitleColor (#d1d5db gris clair)
-  // Mais sur fond blanc, utiliser une couleur plus foncée pour la lisibilité
   const footerTextColor = rgbToArray(headerPalette.subtitle);
-  // Si subtitleColor est trop clair pour fond blanc, utiliser body textColor
   const footerIsLight = footerTextColor[0] > 200 && footerTextColor[1] > 200 && footerTextColor[2] > 200;
   const footerColorToUse = footerIsLight ? rgbToArray(bodyPalette.text) : footerTextColor;
-  applyColor(footerColorToUse);
-  doc.setFontSize(9);
-  doc.setFont('helvetica', 'normal');
-  
-  if (footerLines.length > 0) {
-    footerLines.forEach((line, idx) => {
-      doc.text(line, margin, footerY + idx * 11);
-    });
-  }
-
-  // Logos de certification à droite (SGS, etc.) - placeholder
-  // Note: Ces logos devraient être dans le template ou configurés séparément
+  const footerBase = pageHeight - 60;
   const certLogoSize = 20;
   const certX = pageWidth - margin - certLogoSize * 3 - 20;
   
-  // Placeholder pour logos de certification (SGS, etc.)
-  // Si vous avez des logos de certification dans le template, ajoutez-les ici
+  // Charger le logo footer une seule fois si disponible
+  let footerLogoImg: string | null = null;
   if (templateConfig?.footerLogo) {
     try {
-      const img = await resolveTemplateImage(templateConfig.footerLogo);
-      if (img) {
-        // Afficher le logo 3 fois (comme dans l'exemple)
-        for (let i = 0; i < 3; i++) {
-          doc.addImage(img, 'PNG', certX + i * (certLogoSize + 10), footerY, certLogoSize, certLogoSize);
-        }
-      }
+      footerLogoImg = await resolveTemplateImage(templateConfig.footerLogo);
     } catch (err) {
       console.warn('Erreur chargement logo footer:', err);
     }
   }
+  
+  // Ajouter le footer sur toutes les pages
+  const totalPages = doc.getNumberOfPages();
+  for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+    doc.setPage(pageNum);
+    const footerY = footerBase;
+    
+    applyColor(footerColorToUse);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    
+    if (footerLines.length > 0) {
+      footerLines.forEach((line, idx) => {
+        doc.text(line, margin, footerY + idx * 11);
+      });
+    }
+    
+    // Logos de certification à droite
+    if (footerLogoImg) {
+      try {
+        for (let i = 0; i < 3; i++) {
+          doc.addImage(footerLogoImg, 'PNG', certX + i * (certLogoSize + 10), footerY, certLogoSize, certLogoSize);
+        }
+      } catch (err) {
+        console.warn('Erreur ajout logo footer:', err);
+      }
+    }
+  }
+  
+  // Retourner à la dernière page
+  doc.setPage(totalPages);
 
   return doc;
 };
