@@ -875,6 +875,9 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
     doc.setFillColor(rgb[0], rgb[1], rgb[2]);
   };
 
+  // Définition des couleurs de titre pour réutilisation
+  const bodyTitleColor = rgbToArray(bodyPalette.title);
+
   // ========== HEADER ==========
   // Zone 1 - En-tête avec TOUTES les propriétés de la zone header
   const headerBg = rgbToArray(headerPalette.background);
@@ -1009,15 +1012,15 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
   const codeEntree = data.lot_id || data.lot_internal_code || '—';
   const descEntree = data.lot_quality_grade || data.lot_filiere || '—';
 
-  // Ligne 2 : matières déclassée
-  const codeDecl = data.declassed_material_code || '—';
-  const descDecl = data.declassed_material || '—';
-
   // % déclassé / % bon
   const ratioNum = parseFloat((data.motive_ratio || '').toString().replace('%', '').trim());
   const isValidRatio = !isNaN(ratioNum);
   const pctDeclasse = isValidRatio ? `${Math.max(0, Math.min(100, ratioNum))}%` : '—';
   const pctBon = isValidRatio ? `${Math.max(0, Math.min(100, 100 - ratioNum))}%` : '—';
+
+  // Ligne 2 : matières déclassée (SEULEMENT la matière, rien d'autre)
+  const codeDecl = data.declassed_material_code || '—';
+  const descDecl = data.declassed_material || '—';
 
   // Calcul hauteur dynamique avec wrapping
   const lineH = 14;
@@ -1066,6 +1069,109 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
 
   y += sectionHeightMat + 8;
 
+  // ========== SECTION DÉCLASSEMENT MATIÈRES (Zone 2: Motif & preuves) ==========
+  y += 10;
+  
+  // Collecter les données de la zone 2 qui sont renseignées
+  const motifData: Array<{ label: string; value: string }> = [];
+  
+  if (data.motive_principal && String(data.motive_principal).trim() !== '' && data.motive_principal !== 'À compléter') {
+    motifData.push({ label: 'Motif principal', value: String(data.motive_principal).trim() });
+  }
+  
+  if (data.incident_number && String(data.incident_number).trim() !== '') {
+    motifData.push({ label: 'N° incident interne', value: String(data.incident_number).trim() });
+  }
+  
+  if (data.controller_name && String(data.controller_name).trim() !== '') {
+    motifData.push({ label: 'Contrôleur', value: String(data.controller_name).trim() });
+  }
+  
+  if (data.controller_signature && String(data.controller_signature).trim() !== '') {
+    motifData.push({ label: 'Signature (SwissID)', value: String(data.controller_signature).trim() });
+  }
+  
+  if (data.motive_ratio && String(data.motive_ratio).trim() !== '') {
+    let ratioValue = String(data.motive_ratio).trim();
+    // S'assurer que le symbole % est présent
+    if (!ratioValue.includes('%')) {
+      ratioValue = `${ratioValue}%`;
+    }
+    // Ajouter "en : [matière déclassée]" après le pourcentage
+    const matiereDeclassee = data.declassed_material && String(data.declassed_material).trim() !== ''
+      ? String(data.declassed_material).trim()
+      : '';
+    const valueWithMatiere = matiereDeclassee 
+      ? `${ratioValue} en : ${matiereDeclassee}`
+      : ratioValue;
+    motifData.push({ label: '% déclassé', value: valueWithMatiere });
+  }
+  
+  if (data.sorting_time_minutes && String(data.sorting_time_minutes).trim() !== '') {
+    motifData.push({ label: 'Temps de tri', value: `${String(data.sorting_time_minutes).trim()} min` });
+  }
+  
+  if (data.machines_used && Array.isArray(data.machines_used) && data.machines_used.length > 0) {
+    const machinesStr = data.machines_used.filter((m: any) => m && String(m).trim() !== '').join(', ');
+    if (machinesStr) {
+      motifData.push({ label: 'Machines utilisées', value: machinesStr });
+    }
+  }
+  
+  if (data.motive_description && String(data.motive_description).trim() !== '') {
+    motifData.push({ label: 'Description détaillée', value: String(data.motive_description).trim() });
+  }
+  
+  // Afficher la section seulement si au moins un champ est renseigné
+  if (motifData.length > 0) {
+    const motifColX = [
+      margin + sectionPadding,
+      margin + sectionPadding + 200
+    ];
+    const motifLineH = 14;
+    const motifTitleH = 20;
+    
+    // Calculer la hauteur dynamique avec wrapping pour les valeurs
+    let motifSectionHeight = sectionPadding * 2 + motifTitleH;
+    motifData.forEach((item) => {
+      const wrapped = doc.splitTextToSize(item.value, safeWidth - motifColX[1] - sectionPadding);
+      motifSectionHeight += Math.max(motifLineH, wrapped.length * motifLineH) + 2;
+    });
+    
+    // Fond et cadre pour section Déclassement matières
+    applyFillColor(highlightBg);
+    doc.setDrawColor(highlightTextColor[0], highlightTextColor[1], highlightTextColor[2]);
+    doc.setLineWidth(0.6);
+    doc.roundedRect(margin, y, safeWidth, motifSectionHeight, 6, 6, 'FD');
+    
+    // Titre "Déclassement matières" - en bleu
+    applyColor(bodyTitleColor);
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Déclassement matières', margin + sectionPadding, y + 18);
+    
+    // Tableau des données (avec espace après le titre)
+    applyColor(highlightTextColor);
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'normal');
+    let motifY = y + motifTitleH + 12; // Augmenté de 8 à 12 pour plus d'espace
+    
+    motifData.forEach((item) => {
+      // Label en gras
+      doc.setFont('helvetica', 'bold');
+      doc.text(item.label + ' :', motifColX[0], motifY);
+      
+      // Valeur en normal (avec wrapping)
+      doc.setFont('helvetica', 'normal');
+      const wrapped = doc.splitTextToSize(item.value, safeWidth - motifColX[1] - sectionPadding);
+      doc.text(wrapped, motifColX[1], motifY);
+      
+      motifY += Math.max(motifLineH, wrapped.length * motifLineH) + 4;
+    });
+    
+    y += motifSectionHeight + 8;
+  }
+
   // ========== SECTION PHOTOS ==========
   y += 10;
   const photos = (data.photos_avant || data.photos_apres || data.photos || []).map((p: any, idx: number) => ({
@@ -1087,7 +1193,6 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
   doc.roundedRect(margin, y, safeWidth, sectionHeightPhotos, 6, 6, 'FD');
 
   // Titre "Photos" - en bleu
-  const bodyTitleColor = rgbToArray(bodyPalette.title);
   applyColor(bodyTitleColor);
   doc.setFontSize(14);
   doc.setFont('helvetica', 'bold');
