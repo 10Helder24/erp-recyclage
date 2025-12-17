@@ -358,15 +358,20 @@ const DeclassementPage = () => {
   const handleSaveDraft = async () => {
     // ENVOI PAR EMAIL - Cette fonction génère le PDF et l'envoie par email
     // Appelée par le bouton "Enregistrer et envoyer à la disposition"
-    // Générer le PDF et l'envoyer directement par email sans sauvegarder en base
-    const payload = await buildPayload(true);
-    if (!payload) {
-      toast.error('Erreur lors de la préparation des données');
-      return;
-    }
-    
+    // Les photos HEIC sont converties en JPEG avant la génération du PDF et l'envoi
     setLoading(true);
+    let loadingToast = toast.loading('Conversion des photos HEIC en cours...');
+    
     try {
+      // Générer le PDF et l'envoyer directement par email sans sauvegarder en base
+      // buildPayload va convertir les HEIC en JPEG via filesToBase64
+      const payload = await buildPayload(true, false); // false = qualité maximale pour l'envoi
+      if (!payload) {
+        toast.dismiss(loadingToast);
+        toast.error('Erreur lors de la préparation des données');
+        setLoading(false);
+        return;
+      }
       // Validation minimale : au moins nom client ou matière
       const hasClientName = payload.lot_origin_client_name && payload.lot_origin_client_name.trim() !== '';
       const hasMaterial = (payload.lot_id && payload.lot_id.trim() !== '') || 
@@ -379,6 +384,7 @@ const DeclassementPage = () => {
       }
       
       if (!templateConfig) {
+        toast.dismiss(loadingToast);
         toast.error('Template PDF non disponible');
         setLoading(false);
         return;
@@ -392,17 +398,27 @@ const DeclassementPage = () => {
         photos_count: payload.photos_avant?.length || payload.photos_apres?.length || payload.photos?.length || 0
       });
       
-      // Générer le PDF
+      // Mettre à jour le toast pour indiquer la génération du PDF
+      toast.dismiss(loadingToast);
+      loadingToast = toast.loading('Génération du PDF...');
+      
+      // Générer le PDF (les photos HEIC ont déjà été converties en JPEG dans buildPayload)
       const doc = await buildTemplatePdf(templateConfig, payload);
       if (!doc) {
+        toast.dismiss(loadingToast);
         toast.error('Erreur: PDF non généré');
         setLoading(false);
         return;
       }
       
+      // Mettre à jour le toast pour indiquer l'envoi par email
+      toast.dismiss(loadingToast);
+      loadingToast = toast.loading('Envoi par email...');
+      
       // Obtenir le base64 compressé
       const pdfBase64 = doc.output('datauristring').split(',')[1] || '';
       if (!pdfBase64 || pdfBase64.length < 100) {
+        toast.dismiss(loadingToast);
         toast.error('Erreur: PDF généré mais base64 vide ou trop court');
         setLoading(false);
         return;
@@ -414,10 +430,13 @@ const DeclassementPage = () => {
       console.log(`[PDF Génération] Taille PDF: ${pdfSizeMB.toFixed(2)} MB`);
       
       if (pdfSizeMB > 33) {
+        toast.dismiss(loadingToast);
         toast.error(`PDF volumineux (${pdfSizeMB.toFixed(2)} MB). Compression supplémentaire nécessaire.`);
+        setLoading(false);
+        return;
       }
       
-      // Envoyer le PDF directement par email
+      // Envoyer le PDF directement par email (les photos HEIC ont été converties en JPEG)
       const pdfResponse = await Api.sendDowngradePdf({
         pdf_base64: pdfBase64,
         pdf_filename: `declassement_${Date.now()}.pdf`,
@@ -426,6 +445,9 @@ const DeclassementPage = () => {
         declassed_material: payload.declassed_material || '',
         motive_principal: payload.motive_principal || ''
       });
+      
+      // Fermer le toast de chargement
+      toast.dismiss(loadingToast);
       
       if (pdfResponse.email_sent) {
         toast.success('PDF généré et envoyé par email avec succès');
@@ -436,6 +458,7 @@ const DeclassementPage = () => {
       }
     } catch (error: any) {
       console.error('Erreur génération/envoi PDF:', error);
+      toast.dismiss(loadingToast);
       toast.error(error?.message || 'Erreur lors de la génération/envoi du PDF');
     } finally {
       setLoading(false);
