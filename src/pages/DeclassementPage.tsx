@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { jsPDF } from 'jspdf';
 import { Plus, RefreshCw, Send, FileDown, Upload, Eye, Save } from 'lucide-react';
+import heic2any from 'heic2any';
 import { Api, type PdfTemplateConfig, type Material, type Customer } from '../lib/api';
 import { usePdfTemplate } from '../hooks/usePdfTemplate';
 import { openPdfPreview } from '../utils/pdfPreview';
@@ -193,65 +194,98 @@ const DeclassementPage = () => {
     setMotif((p) => ({ ...p, photos: current }));
   };
 
-  const filesToBase64 = async (files: FileWithPreview[]) => {
+  const filesToBase64 = async (files: FileWithPreview[], isPreview = false) => {
     const convert = async (file: File): Promise<string> => {
-      return new Promise((resolve, reject) => {
-        // Détecter le type de fichier Samsung (HEIC, HEIF, etc.)
-        const fileType = file.type.toLowerCase();
-        const fileName = file.name.toLowerCase();
-        const isSamsungFormat = fileType.includes('heic') || fileType.includes('heif') || 
-                                fileName.endsWith('.heic') || fileName.endsWith('.heif');
-        
-        console.log('[Samsung] Conversion fichier:', {
-          name: file.name,
-          type: file.type,
-          size: file.size,
-          isSamsungFormat
-        });
-        
-        const reader = new FileReader();
-        
-        reader.onload = () => {
-          const result = String(reader.result);
-          // Si c'est un format Samsung non supporté, essayer de forcer JPEG
-          if (isSamsungFormat && !result.includes('image/jpeg')) {
-            console.warn('[Samsung] Format HEIC/HEIF détecté, conversion forcée en JPEG');
-            // Le navigateur devrait automatiquement convertir, mais on force JPEG
-            const base64Match = result.match(/base64,(.+)$/);
-            if (base64Match) {
-              resolve(`data:image/jpeg;base64,${base64Match[1]}`);
-            } else {
-              resolve(result);
-            }
-          } else {
-            resolve(result);
+      // Détecter le type de fichier Samsung (HEIC, HEIF, etc.)
+      const fileType = file.type.toLowerCase();
+      const fileName = file.name.toLowerCase();
+      const isHeicFormat = fileType.includes('heic') || fileType.includes('heif') || 
+                          fileName.endsWith('.heic') || fileName.endsWith('.heif') ||
+                          (fileType === '' && (fileName.endsWith('.heic') || fileName.endsWith('.heif')));
+      
+      // Pour les formats HEIC/HEIF, utiliser heic2any pour convertir en JPEG
+      if (isHeicFormat) {
+        try {
+          // Qualité réduite pour la prévisualisation (plus rapide)
+          const quality = isPreview ? 0.7 : 0.9;
+          
+          // Convertir HEIC en JPEG avec heic2any
+          const convertedBlob = await heic2any({
+            blob: file,
+            toType: 'image/jpeg',
+            quality
+          });
+          
+          // heic2any peut retourner un tableau ou un seul blob
+          const jpegBlob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
+          
+          if (!jpegBlob) {
+            throw new Error('Conversion HEIC échouée: aucun blob retourné');
           }
-        };
-        
-        reader.onerror = (err) => {
-          console.error('[Samsung] Erreur lecture fichier:', err);
-          reject(reader.error || new Error('Erreur lecture fichier'));
-        };
-        
-        // Lire le fichier comme data URL
-        reader.readAsDataURL(file);
-      });
+          
+          // Convertir le blob JPEG en data URL
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const result = String(reader.result);
+              resolve(result);
+            };
+            reader.onerror = () => {
+              reject(reader.error || new Error('Erreur lecture fichier converti'));
+            };
+            reader.readAsDataURL(jpegBlob);
+          });
+        } catch (heicErr: any) {
+          console.error('[Samsung] Erreur conversion HEIC avec heic2any:', heicErr);
+          // Fallback: essayer de lire comme image normale
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const result = String(reader.result);
+              const base64Match = result.match(/base64,(.+)$/);
+              if (base64Match) {
+                resolve(`data:image/jpeg;base64,${base64Match[1]}`);
+              } else {
+                resolve(result);
+              }
+            };
+            reader.onerror = () => {
+              reject(reader.error || new Error('Erreur lecture fichier'));
+            };
+            reader.readAsDataURL(file);
+          });
+        }
+      } else {
+        // Format normal (JPEG, PNG, etc.), lecture standard
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            resolve(String(reader.result));
+          };
+          reader.onerror = () => {
+            reject(reader.error || new Error('Erreur lecture fichier'));
+          };
+          reader.readAsDataURL(file);
+        });
+      }
     };
     
-    const out: string[] = [];
-    for (const f of files) {
+    // Convertir tous les fichiers en parallèle pour être plus rapide
+    const conversionPromises = files.map(async (f) => {
       try {
-        const converted = await convert(f);
-        out.push(converted);
+        return await convert(f);
       } catch (err) {
         console.error('[Samsung] Erreur conversion fichier:', f.name, err);
-        // Essayer quand même avec une conversion de base
-        const reader = new FileReader();
-        reader.onload = () => out.push(String(reader.result));
-        reader.readAsDataURL(f);
+        if (!isPreview) {
+          toast.error(`Erreur conversion ${f.name}: ${err instanceof Error ? err.message : 'inconnue'}`);
+        }
+        return null; // Retourner null pour les fichiers qui échouent
       }
-    }
-    return out;
+    });
+    
+    const results = await Promise.all(conversionPromises);
+    // Filtrer les null (fichiers qui ont échoué)
+    return results.filter((r): r is string => r !== null);
   };
 
   const buildDraftPayload = async (): Promise<any> => {
@@ -282,7 +316,7 @@ const DeclassementPage = () => {
     return payload;
   };
 
-  const buildPayload = async (isDraft = false) => {
+  const buildPayload = async (isDraft = false, isPreview = false) => {
     // Mode toujours permissif : permettre la génération PDF même avec des champs vides
     // Seuls nom client, matière et photos sont vraiment importants mais même ceux-ci peuvent être optionnels
     // pour permettre la génération d'un PDF minimal
@@ -306,8 +340,9 @@ const DeclassementPage = () => {
       payload.motive_principal = 'À compléter';
     }
     // Photos : convertir en base64 si présentes, sinon tableau vide
+    // Utiliser isPreview pour optimiser la conversion (qualité réduite, plus rapide)
     if (motif.photos.length > 0) {
-      const photos = await filesToBase64(motif.photos);
+      const photos = await filesToBase64(motif.photos, isPreview);
       payload.photos_avant = photos;
       payload.photos_apres = photos;
       if (legal.proof_photos) {
@@ -321,6 +356,8 @@ const DeclassementPage = () => {
   };
 
   const handleSaveDraft = async () => {
+    // ENVOI PAR EMAIL - Cette fonction génère le PDF et l'envoie par email
+    // Appelée par le bouton "Enregistrer et envoyer à la disposition"
     // Générer le PDF et l'envoyer directement par email sans sauvegarder en base
     const payload = await buildPayload(true);
     if (!payload) {
@@ -487,19 +524,47 @@ const DeclassementPage = () => {
   };
 
   const handlePreview = async () => {
+    // PRÉVISUALISATION UNIQUEMENT - Ne pas envoyer d'email
+    // Cette fonction sert uniquement à vérifier que le PDF se génère correctement
+    // sans erreurs avant l'envoi final
     // Utiliser les mêmes validations permissives que l'enregistrement
-    const payload = await buildPayload(true);
-    if (!payload) return;
-    if (templateLoading) {
-      toast.error('Template PDF en cours de chargement...');
-      return;
-    }
+    // Passer isPreview=true pour optimiser la conversion (plus rapide)
+    setLoading(true);
+    let loadingToast = toast.loading('Conversion des photos HEIC en cours...');
+    
     try {
+      const payload = await buildPayload(true, true);
+      if (!payload) {
+        toast.dismiss(loadingToast);
+        setLoading(false);
+        return;
+      }
+      if (templateLoading) {
+        toast.dismiss(loadingToast);
+        toast.error('Template PDF en cours de chargement...');
+        setLoading(false);
+        return;
+      }
+      
+      // Mettre à jour le toast pour indiquer la génération du PDF
+      toast.dismiss(loadingToast);
+      loadingToast = toast.loading('Génération du PDF...');
+      
+      // Générer le PDF uniquement pour prévisualisation (pas d'envoi email)
       const doc = await buildTemplatePdf(templateConfig, payload);
+      
+      // Fermer le toast de chargement
+      toast.dismiss(loadingToast);
+      
+      // Afficher le PDF dans une nouvelle fenêtre/onglet (pas d'envoi)
       openPdfPreview({ doc, filename: 'declassement.pdf' });
+      toast.success('Prévisualisation générée (aucun email envoyé)');
     } catch (error: any) {
       console.error(error);
+      toast.dismiss(loadingToast);
       toast.error(error?.message || 'Erreur lors de la prévisualisation');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -987,13 +1052,53 @@ const compressImageBase64 = async (base64Data: string, maxWidth = 1400, quality 
   }
   
   return new Promise((resolve) => {
+    // Vérifier si c'est vraiment du JPEG valide avant de charger
+    if (!normalizedBase64.startsWith('data:image/')) {
+      console.warn('[Samsung] Format non reconnu, forcer JPEG');
+      normalizedBase64 = `data:image/jpeg;base64,${base64Only}`;
+    }
+    
     const img = new window.Image();
     img.crossOrigin = 'anonymous'; // Important pour certains navigateurs Android
     
     // Timeout de sécurité (10 secondes pour Samsung)
     const timeout = setTimeout(() => {
-      console.warn('[Samsung] Timeout compression image, utilisation originale');
-      resolve(normalizedBase64);
+      console.warn('[Samsung] Timeout compression image, tentative conversion directe');
+      // Essayer une conversion directe via Blob si timeout
+      try {
+        const base64Only = normalizedBase64.replace(/^data:[^;]+;base64,/, '');
+        const binaryString = atob(base64Only);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: 'image/jpeg' });
+        const blobUrl = URL.createObjectURL(blob);
+        const img2 = new window.Image();
+        img2.onload = () => {
+          URL.revokeObjectURL(blobUrl);
+          const canvas = document.createElement('canvas');
+          canvas.width = img2.width;
+          canvas.height = img2.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img2, 0, 0);
+            const result = canvas.toDataURL('image/jpeg', quality);
+            if (result && result.length > 100) {
+              resolve(result);
+              return;
+            }
+          }
+          resolve(normalizedBase64);
+        };
+        img2.onerror = () => {
+          URL.revokeObjectURL(blobUrl);
+          resolve(normalizedBase64);
+        };
+        img2.src = blobUrl;
+      } catch (err) {
+        resolve(normalizedBase64);
+      }
     }, 10000);
     
     img.onload = () => {
@@ -1522,19 +1627,82 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
                   // Forcer JPEG pour compatibilité Samsung
                   imgData = `data:image/jpeg;base64,${withoutPrefix}`;
                 } else {
-                  imgData = await resolveTemplateImage(normalizedSrc);
+                  const resolved = await resolveTemplateImage(normalizedSrc);
+                  imgData = resolved || null;
                 }
               } else {
-                imgData = await resolveTemplateImage(normalizedSrc);
+                const resolved = await resolveTemplateImage(normalizedSrc);
+                imgData = resolved || null;
               }
               
               if (imgData) {
                 console.log(`[Samsung] Compression photo ${photoIndex + 1}...`);
                 imgData = await compressImageBase64(imgData, 1200, 0.65);
                 
-                // Vérifier que l'image est valide avant d'ajouter au PDF
+                // Vérifier que l'image est valide et en JPEG avant d'ajouter au PDF
                 if (!imgData || !imgData.startsWith('data:image/')) {
                   throw new Error('Format d\'image invalide après compression');
+                }
+                
+                // FORCER JPEG - s'assurer que c'est bien du JPEG valide
+                if (!imgData.startsWith('data:image/jpeg')) {
+                  console.warn(`[Samsung] Photo ${photoIndex + 1} n'est pas en JPEG, conversion forcée...`);
+                  const base64Match = imgData.match(/base64,(.+)$/);
+                  if (base64Match) {
+                    // Essayer de charger dans un canvas pour forcer la conversion
+                    const convertedJpeg = await new Promise<string>((resolveConvert) => {
+                      const imgTest = new window.Image();
+                      imgTest.crossOrigin = 'anonymous';
+                      const timeout = setTimeout(() => {
+                        // Timeout: forcer le type JPEG
+                        const base64Only = base64Match[1];
+                        resolveConvert(`data:image/jpeg;base64,${base64Only}`);
+                      }, 2000);
+                      
+                      imgTest.onload = () => {
+                        clearTimeout(timeout);
+                        try {
+                          const canvas = document.createElement('canvas');
+                          canvas.width = imgTest.width;
+                          canvas.height = imgTest.height;
+                          const ctx = canvas.getContext('2d');
+                          if (ctx) {
+                            ctx.drawImage(imgTest, 0, 0);
+                            const jpegResult = canvas.toDataURL('image/jpeg', 0.9);
+                            if (jpegResult && jpegResult.startsWith('data:image/jpeg')) {
+                              resolveConvert(jpegResult);
+                            } else {
+                              resolveConvert(`data:image/jpeg;base64,${base64Match[1]}`);
+                            }
+                          } else {
+                            resolveConvert(`data:image/jpeg;base64,${base64Match[1]}`);
+                          }
+                        } catch (err) {
+                          resolveConvert(`data:image/jpeg;base64,${base64Match[1]}`);
+                        }
+                      };
+                      
+                      imgTest.onerror = () => {
+                        clearTimeout(timeout);
+                        console.warn(`[Samsung] Impossible de charger photo ${photoIndex + 1} pour conversion`);
+                        resolveConvert(`data:image/jpeg;base64,${base64Match[1]}`);
+                      };
+                      
+                      if (imgData) {
+                        imgTest.src = imgData;
+                      } else {
+                        clearTimeout(timeout);
+                        resolveConvert(`data:image/jpeg;base64,${base64Match[1]}`);
+                      }
+                    });
+                    
+                    imgData = convertedJpeg;
+                  }
+                }
+                
+                // Vérifier que c'est maintenant du JPEG
+                if (!imgData.startsWith('data:image/jpeg')) {
+                  throw new Error('Impossible de convertir en JPEG');
                 }
                 
                 const imgProps = (doc as any).getImageProperties(imgData);
@@ -1554,8 +1722,66 @@ const buildTemplatePdf = async (templateConfig: PdfTemplateConfig | null, data: 
                 const centerX = x + (photoWidth - w) / 2;
                 const imageFormat = 'JPEG'; // Toujours JPEG pour compatibilité
                 
-                // Ajouter l'image au PDF
-                doc.addImage(imgData, imageFormat, centerX, currentY, w, h);
+                // Ajouter l'image au PDF - s'assurer que c'est bien du JPEG
+                try {
+                  doc.addImage(imgData, imageFormat, centerX, currentY, w, h);
+                } catch (addImgErr: any) {
+                  console.error(`[Samsung] Erreur addImage pour photo ${photoIndex + 1}:`, addImgErr);
+                  // Si erreur, essayer une dernière conversion via canvas
+                  const finalJpeg = await new Promise<string>((resolveFinal) => {
+                    const imgFinal = new window.Image();
+                    imgFinal.crossOrigin = 'anonymous';
+                    const timeout = setTimeout(() => {
+                      resolveFinal(imgData || 'data:image/jpeg;base64,'); // Timeout: utiliser l'original
+                    }, 3000);
+                    
+                    imgFinal.onload = () => {
+                      clearTimeout(timeout);
+                      try {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = imgFinal.width;
+                        canvas.height = imgFinal.height;
+                        const ctx = canvas.getContext('2d');
+                        if (ctx) {
+                          ctx.drawImage(imgFinal, 0, 0);
+                          const result = canvas.toDataURL('image/jpeg', 0.8);
+                          if (result && result.startsWith('data:image/jpeg')) {
+                            resolveFinal(result);
+                          } else {
+                            resolveFinal(imgData || 'data:image/jpeg;base64,');
+                          }
+                        } else {
+                          resolveFinal(imgData || 'data:image/jpeg;base64,');
+                        }
+                      } catch (err) {
+                        resolveFinal(imgData || 'data:image/jpeg;base64,');
+                      }
+                    };
+                    
+                    imgFinal.onerror = () => {
+                      clearTimeout(timeout);
+                      resolveFinal(imgData || 'data:image/jpeg;base64,');
+                    };
+                    
+                    if (imgData) {
+                      imgFinal.src = imgData;
+                    } else {
+                      clearTimeout(timeout);
+                      resolveFinal('data:image/jpeg;base64,');
+                    }
+                  });
+                  
+                  // Réessayer avec l'image convertie
+                  if (finalJpeg && finalJpeg.startsWith('data:image/jpeg')) {
+                    try {
+                      doc.addImage(finalJpeg, 'JPEG', centerX, currentY, w, h);
+                    } catch (finalErr: any) {
+                      throw new Error(`Format non supporté (HEIC/HEIF?): ${finalErr?.message || 'inconnu'}`);
+                    }
+                  } else {
+                    throw new Error('Impossible de convertir l\'image en JPEG');
+                  }
+                }
                 
                 console.log(`[Samsung] Photo ${photoIndex + 1} ajoutée avec succès`);
                 

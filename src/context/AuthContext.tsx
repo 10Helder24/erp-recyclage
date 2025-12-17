@@ -43,8 +43,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         if (mounted) {
           setUser(currentUser);
         }
-      } catch (error) {
-        console.error('Auth bootstrap failed', error);
+      } catch (error: any) {
+        // Gérer silencieusement les sessions expirées (c'est normal)
+        const isSessionExpired = error?.message?.includes('Session expirée') || 
+                                 error?.message?.includes('Session expired') ||
+                                 error?.message?.includes('Authentification requise');
+        
+        if (!isSessionExpired) {
+          // Logger seulement les erreurs non liées à l'expiration de session
+          console.error('Auth bootstrap failed', error);
+        }
+        
+        // Nettoyer le token expiré
         if (typeof window !== 'undefined') {
           window.localStorage.removeItem('erp_auth_token');
         }
@@ -121,8 +131,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     try {
       const { user: currentUser } = await Api.fetchCurrentUser();
       setUser(currentUser);
-    } catch (error) {
-      console.error('Erreur lors du rafraîchissement de l\'utilisateur:', error);
+    } catch (error: any) {
+      // Gérer silencieusement les sessions expirées
+      const isSessionExpired = error?.message?.includes('Session expirée') || 
+                               error?.message?.includes('Session expired') ||
+                               error?.message?.includes('Authentification requise');
+      
+      if (!isSessionExpired) {
+        console.error('Erreur lors du rafraîchissement de l\'utilisateur:', error);
+      } else {
+        // Nettoyer le token expiré
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem('erp_auth_token');
+        }
+        Api.setAuthToken(null);
+        setUser(null);
+        setToken(null);
+      }
     }
   }, [token]);
 
