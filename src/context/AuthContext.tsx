@@ -49,19 +49,32 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                                  error?.message?.includes('Session expired') ||
                                  error?.message?.includes('Authentification requise');
         
-        if (!isSessionExpired) {
-          // Logger seulement les erreurs non liées à l'expiration de session
+        // Gérer silencieusement les erreurs de connexion serveur (serveur non démarré)
+        const isServerError = error?.message?.includes('serveur backend') ||
+                             error?.message?.includes('serveur est démarré') ||
+                             error?.message?.includes('serveur est en cours') ||
+                             error?.message?.includes('Connexion en cours') ||
+                             error?.message?.includes('en démarrage') ||
+                             error?.message?.includes('ECONNREFUSED') ||
+                             error?.message?.includes('NetworkError') ||
+                             error?.message?.includes('ERR_CONNECTION_REFUSED') ||
+                             (error?.message?.includes('HTTP 500') && error?.message?.includes('n\'est pas démarré'));
+        
+        if (!isSessionExpired && !isServerError) {
+          // Logger seulement les erreurs non liées à l'expiration de session ou au serveur
           console.error('Auth bootstrap failed', error);
         }
         
-        // Nettoyer le token expiré
-        if (typeof window !== 'undefined') {
+        // Nettoyer le token expiré seulement si ce n'est pas une erreur de serveur
+        if (!isServerError && typeof window !== 'undefined') {
           window.localStorage.removeItem('erp_auth_token');
         }
         Api.setAuthToken(null);
         if (mounted) {
           setUser(null);
-          setToken(null);
+          if (!isServerError) {
+            setToken(null);
+          }
         }
       } finally {
         if (mounted) {

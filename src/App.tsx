@@ -1,4 +1,5 @@
-import { useMemo, useState, useEffect, useCallback } from 'react';
+import { useMemo, useState, useEffect } from 'react';
+import { useGeolocation } from './context/GeolocationContext';
 import { ChevronDown, Menu, Loader2 } from 'lucide-react';
 
 import DestructionPage from './pages/DestructionPage';
@@ -121,14 +122,12 @@ const App = () => {
   const { t } = useI18n();
   const { pendingCount } = useOffline();
   const { checkForUpdate } = useServiceWorkerUpdate(); // Vérifie automatiquement les mises à jour
+  const { stopGeolocation } = useGeolocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeNav, setActiveNav] = useState<NavId>('dashboard');
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     rhPlus: true
   });
-  const [showGeoPrompt, setShowGeoPrompt] = useState(false);
-  const [geoWatchId, setGeoWatchId] = useState<number | null>(null);
-  const [geoError, setGeoError] = useState<string | null>(null);
 
   // Fonction helper pour traduire les labels de navigation
   const getNavLabel = (id: string): string => {
@@ -231,85 +230,8 @@ const App = () => {
     }));
   };
 
-  useEffect(() => {
-    if (user) {
-      // Ne pas déclencher automatiquement la géoloc : attendre un geste utilisateur (bouton)
-      const storedConsent = typeof window !== 'undefined' ? window.localStorage.getItem('geoConsent') : null;
-      if (storedConsent === 'granted') {
-        // On affiche le prompt/bouton mais on ne déclenche pas la requête pour éviter le warning
-        setShowGeoPrompt(true);
-      } else {
-        setShowGeoPrompt(true);
-      }
-    } else {
-      setShowGeoPrompt(false);
-      if (geoWatchId !== null && typeof navigator !== 'undefined') {
-        navigator.geolocation.clearWatch(geoWatchId);
-      }
-      setGeoWatchId(null);
-    }
-  }, [user]);
+  // La localisation est maintenant gérée par GeolocationContext et déclenchée depuis LoginPage
 
-  useEffect(() => {
-    return () => {
-      if (geoWatchId !== null && typeof navigator !== 'undefined') {
-        navigator.geolocation.clearWatch(geoWatchId);
-      }
-    };
-  }, [geoWatchId]);
-
-  const handleGeolocationSuccess = useCallback((position: GeolocationPosition) => {
-    const coords: [number, number] = [position.coords.latitude, position.coords.longitude];
-    Api.updateCurrentLocation({ latitude: coords[0], longitude: coords[1] })
-      .then(() => {
-        window.localStorage.setItem('geoConsent', 'granted');
-      })
-      .catch((error) => {
-        if (error instanceof Error) {
-          try {
-            const parsed = JSON.parse(error.message);
-            if (parsed?.message?.toLowerCase().includes('employé introuvable')) {
-              console.info('Géolocalisation ignorée : aucun employé associé');
-              return;
-            }
-          } catch {
-            // ignore JSON parse errors
-          }
-          if (error.message.toLowerCase().includes('employé introuvable')) {
-            console.info('Géolocalisation ignorée : aucun employé associé');
-            return;
-          }
-        }
-        console.error(error);
-      });
-  }, []);
-
-  const handleEnableGeolocation = useCallback((skipPrompt?: boolean) => {
-    if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      setGeoError('Géolocalisation non supportée par ce navigateur.');
-      return;
-    }
-    setGeoError(null);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        handleGeolocationSuccess(pos);
-        const id = navigator.geolocation.watchPosition(handleGeolocationSuccess, (err) => {
-          console.warn(err);
-          setGeoError("Impossible de suivre la position : " + err.message);
-        }, { enableHighAccuracy: true });
-        setGeoWatchId(id);
-        setShowGeoPrompt(false);
-        if (!skipPrompt) {
-          window.localStorage.setItem('geoConsent', 'granted');
-        }
-      },
-      (err) => {
-        console.warn(err);
-        setGeoError("Permission refusée ou indisponible : " + err.message);
-      },
-      { enableHighAccuracy: true }
-    );
-  }, [handleGeolocationSuccess]);
 
   const canDisplayLink = (link: NavLink) => {
     const isAdmin = hasRole('admin');
@@ -624,24 +546,6 @@ const App = () => {
           Déconnexion
         </button>
       </div>
-      {showGeoPrompt && (
-        <div className="geo-banner geo-banner--floating">
-          <div className="geo-banner__content">
-            <p>
-              Activer le suivi de position ?
-              {geoError ? <span className="geo-error"> {geoError}</span> : null}
-            </p>
-            <div className="geo-banner__actions">
-              <button className="btn btn-primary" onClick={() => handleEnableGeolocation()}>
-                Activer
-              </button>
-              <button className="btn btn-outline" onClick={() => setShowGeoPrompt(false)}>
-                Plus tard
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <main className="main-content">{activePage}</main>
     </div>

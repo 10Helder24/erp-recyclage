@@ -131,23 +131,45 @@ export const MobileOperatorPage = () => {
   }, [selectedIntervention]);
 
   const setupGeolocation = () => {
+    const updateLocationFromCoords = (latitude: number, longitude: number) => {
+      setCurrentLocation({
+        lat: latitude,
+        lng: longitude
+      });
+      // Mettre à jour automatiquement la géolocalisation de l'intervention en cours
+      if (selectedIntervention && selectedIntervention.status === 'pending') {
+        updateGeolocation(selectedIntervention.id, 'current');
+      }
+    };
+
+    // Fallback automatique vers localisation IP si GPS échoue
+    const fallbackToIpLocation = async () => {
+      try {
+        const ipLocation = await Api.fetchLocationByIp();
+        if (ipLocation.latitude && ipLocation.longitude) {
+          console.info('Utilisation de la localisation IP (GPS non disponible)');
+          updateLocationFromCoords(ipLocation.latitude, ipLocation.longitude);
+        }
+      } catch (error) {
+        console.warn('Erreur localisation IP:', error);
+      }
+    };
+
     if ('geolocation' in navigator) {
       navigator.geolocation.watchPosition(
         (position) => {
-          setCurrentLocation({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude
-          });
-          // Mettre à jour automatiquement la géolocalisation de l'intervention en cours
-          if (selectedIntervention && selectedIntervention.status === 'pending') {
-            updateGeolocation(selectedIntervention.id, 'current');
-          }
+          updateLocationFromCoords(position.coords.latitude, position.coords.longitude);
         },
         (error) => {
-          console.error('Erreur géolocalisation:', error);
+          console.warn('Erreur géolocalisation GPS, utilisation de la localisation IP:', error);
+          fallbackToIpLocation();
         },
         { enableHighAccuracy: true, maximumAge: 10000 }
       );
+    } else {
+      // Si géolocalisation non supportée, utiliser directement IP
+      console.info('Géolocalisation non supportée, utilisation de la localisation IP');
+      fallbackToIpLocation();
     }
   };
 

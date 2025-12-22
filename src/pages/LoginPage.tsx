@@ -5,12 +5,14 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../hooks/useAuth';
 import { Api } from '../lib/api';
 import { useI18n } from '../context/I18nContext';
+import { useGeolocation } from '../context/GeolocationContext';
 
 type ViewMode = 'login' | 'request' | 'reset';
 
 const LoginPage = () => {
   const { login } = useAuth();
   const { t } = useI18n();
+  const { startGeolocation } = useGeolocation();
   const queryToken = useMemo(() => new URLSearchParams(window.location.search).get('resetToken') || '', []);
   const [mode, setMode] = useState<ViewMode>(queryToken ? 'reset' : 'login');
   const [email, setEmail] = useState('');
@@ -25,13 +27,25 @@ const LoginPage = () => {
     try {
       await login(email, password);
       toast.success(t('login.success'));
+      // Démarrer la localisation après connexion réussie
+      startGeolocation();
     } catch (error) {
-      // Ne logger que si ce n'est pas une erreur d'authentification normale
+      // Ne logger que si ce n'est pas une erreur d'authentification normale ou de serveur
       const errorMessage = error instanceof Error ? error.message : t('login.error');
-      if (!errorMessage.includes('Identifiants invalides')) {
+      const isServerError = errorMessage.includes('serveur backend') || 
+                           errorMessage.includes('serveur est démarré') ||
+                           errorMessage.includes('ECONNREFUSED');
+      
+      if (!errorMessage.includes('Identifiants invalides') && !isServerError) {
         console.error('Erreur de connexion:', error);
       }
-      toast.error(errorMessage);
+      
+      // Afficher un message d'erreur plus clair pour les erreurs de serveur
+      if (isServerError) {
+        toast.error('Le serveur backend n\'est pas démarré. Veuillez démarrer le serveur et réessayer.');
+      } else {
+        toast.error(errorMessage);
+      }
     } finally {
       setSubmitting(false);
     }

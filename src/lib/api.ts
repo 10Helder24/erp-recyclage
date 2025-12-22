@@ -1070,6 +1070,19 @@ export const Api = {
     const query = params.toString();
     return request<MapUserLocation[]>(`/map/user-locations${query ? `?${query}` : ''}`);
   },
+  // Localisation via IP (fallback si GPS non disponible)
+  fetchLocationByIp: () =>
+    request<{
+      ip: string;
+      city: string | null;
+      region: string | null;
+      country: string | null;
+      timezone: string | null;
+      latitude: number | null;
+      longitude: number | null;
+      source: string;
+    }>('/api/location/ip'),
+
   updateCurrentLocation: (payload: { latitude: number; longitude: number }) =>
     request<{ message: string; updated: boolean }>('/map/user-locations', {
       method: 'POST',

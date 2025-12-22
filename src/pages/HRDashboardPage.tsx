@@ -42,14 +42,19 @@ const HRDashboardPage: React.FC = () => {
       if (apps.length > 0 || c.length > 0) {
         const employeeId = c[0]?.employee_id || apps[0]?.id;
         if (employeeId) {
-          const [d, inc, ecoScores] = await Promise.all([
-            Api.fetchDriverDuty(employeeId),
-            Api.fetchDriverIncidents(employeeId),
-            Api.fetchEcoDriving(employeeId)
-          ]);
-          setDuties(d);
-          setIncidents(inc);
-          setEco(ecoScores);
+          try {
+            const [d, inc, ecoScores] = await Promise.all([
+              Api.fetchDriverDuty(employeeId).catch(() => []),
+              Api.fetchDriverIncidents(employeeId).catch(() => []),
+              Api.fetchEcoDriving(employeeId).catch(() => [])
+            ]);
+            setDuties(d);
+            setIncidents(inc);
+            setEco(ecoScores);
+          } catch (err) {
+            // Ignorer les erreurs pour les endpoints optionnels
+            console.warn('Erreur chargement données chauffeur:', err);
+          }
         }
       }
       setStatus('idle');

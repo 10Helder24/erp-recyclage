@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { jsPDF } from 'jspdf';
 import { Plus, RefreshCw, Send, FileDown, Upload, Eye, Save } from 'lucide-react';
+// @ts-ignore - heic2any n'a pas de types TypeScript officiels
 import heic2any from 'heic2any';
 import { Api, type PdfTemplateConfig, type Material, type Customer } from '../lib/api';
 import { usePdfTemplate } from '../hooks/usePdfTemplate';
@@ -173,6 +174,14 @@ const DeclassementPage = () => {
     if (!files) return;
     const incoming = Array.from(files) as FileWithPreview[];
     let current = [...motif.photos];
+    
+    // Nettoyer les anciennes ObjectURL pour libérer la mémoire
+    current.forEach((f) => {
+      if (f.preview && f.preview.startsWith('blob:')) {
+        URL.revokeObjectURL(f.preview);
+      }
+    });
+    
     const sizeNow = current.reduce((s, f) => s + f.size, 0);
     let running = sizeNow;
     const accepted: FileWithPreview[] = [];
@@ -193,6 +202,17 @@ const DeclassementPage = () => {
     current = [...current, ...accepted];
     setMotif((p) => ({ ...p, photos: current }));
   };
+  
+  // Nettoyer les ObjectURL lors du démontage du composant
+  useEffect(() => {
+    return () => {
+      motif.photos.forEach((f) => {
+        if (f.preview && f.preview.startsWith('blob:')) {
+          URL.revokeObjectURL(f.preview);
+        }
+      });
+    };
+  }, []);
 
   const filesToBase64 = async (files: FileWithPreview[], isPreview = false) => {
     const convert = async (file: File): Promise<string> => {
@@ -228,6 +248,10 @@ const DeclassementPage = () => {
             const reader = new FileReader();
             reader.onload = () => {
               const result = String(reader.result);
+              // Libérer le blob de la mémoire après lecture
+              if (jpegBlob instanceof Blob) {
+                // Le blob sera automatiquement libéré par le garbage collector
+              }
               resolve(result);
             };
             reader.onerror = () => {
@@ -270,22 +294,35 @@ const DeclassementPage = () => {
       }
     };
     
-    // Convertir tous les fichiers en parallèle pour être plus rapide
-    const conversionPromises = files.map(async (f) => {
-      try {
-        return await convert(f);
-      } catch (err) {
-        console.error('[Samsung] Erreur conversion fichier:', f.name, err);
-        if (!isPreview) {
-          toast.error(`Erreur conversion ${f.name}: ${err instanceof Error ? err.message : 'inconnue'}`);
-        }
-        return null; // Retourner null pour les fichiers qui échouent
-      }
-    });
+    // Convertir les fichiers par batch pour éviter la surcharge mémoire
+    // Traiter 2 fichiers à la fois au lieu de tous en parallèle
+    const BATCH_SIZE = 2;
+    const results: string[] = [];
     
-    const results = await Promise.all(conversionPromises);
-    // Filtrer les null (fichiers qui ont échoué)
-    return results.filter((r): r is string => r !== null);
+    for (let i = 0; i < files.length; i += BATCH_SIZE) {
+      const batch = files.slice(i, i + BATCH_SIZE);
+      const batchPromises = batch.map(async (f) => {
+        try {
+          return await convert(f);
+        } catch (err) {
+          console.error('[Samsung] Erreur conversion fichier:', f.name, err);
+          if (!isPreview) {
+            toast.error(`Erreur conversion ${f.name}: ${err instanceof Error ? err.message : 'inconnue'}`);
+          }
+          return null;
+        }
+      });
+      
+      const batchResults = await Promise.all(batchPromises);
+      results.push(...batchResults.filter((r): r is string => r !== null));
+      
+      // Petite pause entre les batches pour permettre au garbage collector de fonctionner
+      if (i + BATCH_SIZE < files.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    
+    return results;
   };
 
   const buildDraftPayload = async (): Promise<any> => {

@@ -6,6 +6,7 @@ import { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { I18nProvider } from './context/I18nContext';
+import { GeolocationProvider } from './context/GeolocationContext';
 
 // Correctif pour les avertissements "non-passive event listener"
 // Intercepte addEventListener pour marquer automatiquement les événements de scroll/touch comme passifs
@@ -36,56 +37,68 @@ if (typeof window !== 'undefined') {
 }
 
 // Enregistrer le Service Worker pour le mode offline avec gestion des mises à jour
+// Ne pas bloquer le démarrage de l'application si le Service Worker échoue
 if ('serviceWorker' in navigator && typeof window !== 'undefined') {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker
-      .register('/sw.js', { updateViaCache: 'none' }) // Ne jamais utiliser le cache pour le SW
-      .then((registration) => {
-        console.log('Service Worker enregistré:', registration.scope);
+  // Attendre que le DOM soit prêt avant d'enregistrer le Service Worker
+  if (document.readyState === 'loading') {
+    window.addEventListener('load', registerServiceWorker);
+  } else {
+    // Le DOM est déjà chargé, enregistrer immédiatement
+    registerServiceWorker();
+  }
+}
 
-        // Vérifier les mises à jour toutes les heures
-        setInterval(() => {
-          registration.update();
-        }, 60 * 60 * 1000);
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  
+  navigator.serviceWorker
+    .register('/sw.js', { updateViaCache: 'none' })
+    .then((registration) => {
+      console.log('Service Worker enregistré:', registration.scope);
 
-        // Écouter les mises à jour disponibles
-        registration.addEventListener('updatefound', () => {
-          const newWorker = registration.installing;
-          if (!newWorker) return;
+      // Vérifier les mises à jour toutes les heures
+      setInterval(() => {
+        registration.update().catch((err) => console.error('SW update error (interval)', err));
+      }, 60 * 60 * 1000);
 
-          console.log('[SW] Nouvelle version détectée');
+      // Écouter les mises à jour disponibles
+      registration.addEventListener('updatefound', () => {
+        const newWorker = registration.installing;
+        if (!newWorker) return;
 
-          newWorker.addEventListener('statechange', () => {
-            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              // Nouvelle version disponible
-              console.log('[SW] Nouvelle version disponible');
-              
-              // Afficher une notification à l'utilisateur
-              if (window.confirm('Une nouvelle version de l\'application est disponible. Voulez-vous la charger maintenant ?')) {
-                // Envoyer un message au nouveau worker pour forcer l'activation
-                newWorker.postMessage({ type: 'SKIP_WAITING' });
-                // Recharger la page
-                window.location.reload();
-              }
+        console.log('[SW] Nouvelle version détectée');
+
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            // Nouvelle version disponible
+            console.log('[SW] Nouvelle version disponible');
+            
+            // Afficher une notification à l'utilisateur
+            if (window.confirm('Une nouvelle version de l\'application est disponible. Voulez-vous la charger maintenant ?')) {
+              // Envoyer un message au nouveau worker pour forcer l'activation
+              newWorker.postMessage({ type: 'SKIP_WAITING' });
+              // Recharger la page
+              window.location.reload();
             }
-          });
-        });
-
-        // Écouter les messages du Service Worker
-        navigator.serviceWorker.addEventListener('message', (event) => {
-          if (event.data && event.data.type === 'FORCE_RELOAD') {
-            console.log('[SW] Rechargement forcé demandé');
-            window.location.reload();
           }
         });
-
-        // Vérifier immédiatement s'il y a une mise à jour
-        registration.update();
-      })
-      .catch((error) => {
-        console.error('Erreur enregistrement Service Worker:', error);
       });
-  });
+
+      // Écouter les messages du Service Worker
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'FORCE_RELOAD') {
+          console.log('[SW] Rechargement forcé demandé');
+          window.location.reload();
+        }
+      });
+
+      // Vérifier immédiatement s'il y a une mise à jour (ne pas bloquer si ça échoue)
+      registration.update().catch((err) => console.error('SW update error (initial)', err));
+    })
+    .catch((error) => {
+      // Ne pas bloquer l'application si le Service Worker échoue
+      console.warn('Service Worker non disponible (mode offline désactivé):', error);
+    });
 
   // Vérifier les mises à jour au focus de la fenêtre
   window.addEventListener('focus', () => {
@@ -145,10 +158,12 @@ ReactDOM.createRoot(rootElement).render(
     <ErrorBoundary>
       <ThemeProvider>
         <AuthProvider>
-          <I18nProvider>
-            <App />
-            <Toaster position="top-right" />
-          </I18nProvider>
+          <GeolocationProvider>
+            <I18nProvider>
+              <App />
+              <Toaster position="top-right" />
+            </I18nProvider>
+          </GeolocationProvider>
         </AuthProvider>
       </ThemeProvider>
     </ErrorBoundary>

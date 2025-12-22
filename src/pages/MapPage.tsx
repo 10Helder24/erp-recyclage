@@ -425,40 +425,31 @@ export const MapPage = () => {
     doc.save(`arrets_${selectedDate}.pdf`);
   }, [routes, selectedDate]);
 
+  // La localisation est maintenant gérée par GeolocationContext et déclenchée depuis LoginPage
+  // On récupère juste la position actuelle pour l'afficher sur la carte (sans la mettre à jour)
   useEffect(() => {
-    if (!navigator.geolocation) {
-      console.warn('Géolocalisation non supportée par ce navigateur');
-      return;
+    // Récupérer la position actuelle une seule fois pour centrer la carte
+    // La mise à jour continue est gérée par GeolocationContext
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setUserPosition([pos.coords.latitude, pos.coords.longitude]);
+        },
+        () => {
+          // En cas d'erreur, essayer IP pour centrer la carte
+          Api.fetchLocationByIp()
+            .then((ipLocation) => {
+              if (ipLocation.latitude && ipLocation.longitude) {
+                setUserPosition([ipLocation.latitude, ipLocation.longitude]);
+              }
+            })
+            .catch(() => {
+              // Ignorer les erreurs, utiliser la position par défaut
+            });
+        },
+        { enableHighAccuracy: false, timeout: 5000 }
+      );
     }
-    const success = (pos: GeolocationPosition) => {
-      const coords: [number, number] = [pos.coords.latitude, pos.coords.longitude];
-      setUserPosition(coords);
-      Api.updateCurrentLocation({
-        latitude: coords[0],
-        longitude: coords[1]
-      })
-        .then((response: any) => {
-          // Si la réponse indique que la position n'a pas été mise à jour (utilisateur non-employé)
-          // on ne fait rien, c'est normal pour les admins/managers
-          if (response?.updated === false) {
-            // Position non mise à jour car utilisateur non-employé - c'est normal
-            return;
-          }
-        })
-        .catch((error) => {
-          // Ne logger que les erreurs autres que "utilisateur non-employé"
-          const errorMessage = error.message || error.toString();
-          if (!errorMessage.includes('non-employé') && !errorMessage.includes('Position non mise à jour')) {
-            console.error('Erreur mise à jour position:', error);
-          }
-        });
-    };
-    const error = (err: GeolocationPositionError) => {
-      console.warn('Erreur géolocalisation', err);
-    };
-    navigator.geolocation.getCurrentPosition(success, error, { enableHighAccuracy: true });
-    const watchId = navigator.geolocation.watchPosition(success, error, { enableHighAccuracy: true });
-    return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
   const mapCenter = useMemo<[number, number]>(() => centerOverride || userPosition || DEFAULT_POSITION, [centerOverride, userPosition]);

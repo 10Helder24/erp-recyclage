@@ -68,6 +68,12 @@ const run = async <T = any>(text: string, params: unknown[] = []): Promise<T[]> 
   return result.rows;
 };
 
+// Fonction helper pour générer un UUID déterministe à partir d'un email
+const generateDeterministicUuid = (email: string): string => {
+  const hash = crypto.createHash('md5').update(email.toLowerCase()).digest('hex');
+  return `${hash.substring(0, 8)}-${hash.substring(8, 12)}-${hash.substring(12, 16)}-${hash.substring(16, 20)}-${hash.substring(20, 32)}`;
+};
+
 const MAX_CUSTOMER_DOCUMENT_SIZE = Number(process.env.MAX_CUSTOMER_DOC_SIZE_MB ?? 10) * 1024 * 1024; // 10 Mo par défaut
 
 type EmployeeRow = {
@@ -1120,8 +1126,12 @@ const requireAuth =
         return res.status(403).json({ message: 'Accès refusé' });
       }
       next();
-    } catch (error) {
-      console.error('Auth error', error);
+    } catch (error: any) {
+      // Ne logger que les erreurs non liées à l'expiration de token (c'est normal)
+      const isTokenExpired = error?.name === 'TokenExpiredError' || error?.message?.includes('expired');
+      if (!isTokenExpired) {
+        console.error('Auth error', error);
+      }
       return res.status(401).json({ message: 'Session expirée' });
     }
   };
@@ -1761,6 +1771,18 @@ const ensureSchema = async () => {
       last_update timestamptz not null default now()
     )
   `);
+  
+  // Ajouter une colonne user_email pour permettre les utilisateurs non-employés (migration)
+  // Note: Cette colonne est optionnelle et n'est utilisée que pour filtrer les non-employés
+  try {
+    await run(`alter table user_locations add column if not exists user_email text`);
+    await run(`create unique index if not exists user_locations_user_email_idx on user_locations(user_email) where user_email is not null`);
+  } catch (error: any) {
+    // Ignorer les erreurs si la colonne existe déjà ou si l'index existe déjà
+    if (error?.code !== '42P16' && error?.code !== '42710' && error?.code !== '42P07') {
+      console.warn('[Schema] Erreur lors de l\'ajout de la colonne user_email:', error.message);
+    }
+  }
   await run('create index if not exists user_locations_last_update_idx on user_locations(last_update desc)');
 
   // Table pour l'historique des positions (pour le rejeu)
@@ -7813,7 +7835,37 @@ app.get(
       conditions.push(`lower(e.manager_name) = lower($${params.length + 1})`);
       params.push(manager.trim());
     }
-    const whereClause = conditions.length ? `where ${conditions.join(' and ')}` : '';
+    // Construire la clause WHERE
+    // Si la colonne user_email existe, on filtre pour ne garder que les employés (user_email is null)
+    // Sinon, on récupère tous les enregistrements (car tous sont des employés avant l'ajout de user_email)
+    const whereConditions: string[] = [];
+    
+    // Vérifier si la colonne user_email existe
+    try {
+      const [columnCheck] = await run<{ exists: boolean }>(
+        `SELECT EXISTS (
+          SELECT 1 
+          FROM information_schema.columns 
+          WHERE table_name = 'user_locations' 
+          AND column_name = 'user_email'
+        ) as exists`
+      );
+      
+      if (columnCheck?.exists) {
+        whereConditions.push('ul.user_email is null');
+      }
+    } catch (error) {
+      // Si la vérification échoue, on continue sans filtre user_email
+      console.warn('[Location] Impossible de vérifier l\'existence de la colonne user_email:', error);
+    }
+    
+    if (conditions.length > 0) {
+      whereConditions.push(...conditions);
+    }
+    
+    const whereClause = whereConditions.length > 0 ? `where ${whereConditions.join(' and ')}` : '';
+    
+    // Récupérer uniquement les positions des employés (pas les utilisateurs non-employés)
     const rows = await run<
       {
         employee_id: string;
@@ -7846,6 +7898,7 @@ app.get(
       `,
       params
     );
+    
     res.json(
       rows.map((row) => ({
         employee_id: row.employee_id,
@@ -7876,15 +7929,19 @@ app.post(
     if (typeof latitude !== 'number' || typeof longitude !== 'number') {
       return res.status(400).json({ message: 'Coordonnées invalides' });
     }
-    // Chercher l'employé par email
+    const now = new Date();
+    
+    // Chercher l'employé par email (seuls les employés peuvent apparaître sur la carte)
     const [employee] = await run<{ id: string }>('select id from employees where lower(email) = lower($1)', [email]);
     if (!employee) {
-      // Si l'utilisateur n'est pas un employé, on retourne un succès silencieux
-      // pour éviter les erreurs répétées dans la console pour les admins/managers
-      // mais on ne met pas à jour la position car il n'y a pas d'employé associé
+      // Si l'utilisateur n'est pas un employé, on ne sauvegarde pas sa position
+      // C'est normal pour les admins/managers qui ne sont pas des employés
+      console.log(`[Location] ⚠️ Utilisateur ${email} n'est pas un employé, position non sauvegardée`);
       return res.json({ message: 'Position non mise à jour (utilisateur non-employé)', updated: false });
     }
-    const now = new Date();
+    
+    console.log(`[Location] ✅ Mise à jour position pour employé ${employee.id} (${email}): ${latitude}, ${longitude}`);
+    
     // Mettre à jour la position actuelle pour les employés
     await run(
       `
@@ -14511,6 +14568,57 @@ const start = async () => {
 
       const [user] = await run<UserRow>('select * from users where id = $1', [userId]);
       res.json(mapUserRow(user));
+    })
+  );
+
+  // Endpoint pour la localisation via IP (fallback si GPS non disponible) - Gratuit avec ip-api.com
+  app.get(
+    '/api/location/ip',
+    requireAuth(),
+    asyncHandler(async (req, res) => {
+      try {
+        // Obtenir l'IP du client (peut être derrière un proxy)
+        const clientIp = req.headers['x-forwarded-for']?.toString().split(',')[0] || 
+                        req.headers['x-real-ip']?.toString() || 
+                        req.socket.remoteAddress || 
+                        req.ip;
+        
+        // Utiliser ip-api.com (gratuit, pas de token requis, jusqu'à 45 requêtes/minute)
+        const ipApiResponse = await fetch(`http://ip-api.com/json/${clientIp}?fields=status,message,country,regionName,city,lat,lon,timezone,query`, {
+          signal: AbortSignal.timeout(5000)
+        });
+        
+        if (!ipApiResponse.ok) {
+          return res.status(500).json({ message: 'Impossible d\'obtenir la localisation via IP' });
+        }
+
+        const ipApiData = await ipApiResponse.json();
+        if (ipApiData.status === 'fail') {
+          return res.status(500).json({ message: ipApiData.message || 'Erreur de localisation IP' });
+        }
+
+        // Parser les coordonnées depuis ip-api.com
+        const [latitude, longitude] = ipApiData.lat && ipApiData.lon 
+          ? [parseFloat(ipApiData.lat), parseFloat(ipApiData.lon)]
+          : [null, null];
+
+        res.json({
+          ip: ipApiData.query || clientIp,
+          city: ipApiData.city || null,
+          region: ipApiData.regionName || null,
+          country: ipApiData.country || null,
+          timezone: ipApiData.timezone || null,
+          latitude,
+          longitude,
+          source: 'ip-api.com'
+        });
+      } catch (error: any) {
+        console.error('Erreur localisation IP:', error);
+        res.status(500).json({ 
+          message: 'Erreur lors de la récupération de la localisation via IP',
+          error: error.message 
+        });
+      }
     })
   );
 

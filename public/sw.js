@@ -59,18 +59,68 @@ self.addEventListener('message', (event) => {
   }
 });
 
+// Limite de taille pour le cache (50 MB max)
+const MAX_CACHE_SIZE = 50 * 1024 * 1024; // 50 MB
+
+// Fonction pour nettoyer le cache si trop volumineux
+async function cleanCacheIfNeeded() {
+  const cache = await caches.open(CACHE_NAME);
+  const keys = await cache.keys();
+  let totalSize = 0;
+  const entries = [];
+  
+  for (const key of keys) {
+    const response = await cache.match(key);
+    if (response) {
+      const blob = await response.blob();
+      const size = blob.size;
+      totalSize += size;
+      entries.push({ key: key, size: size });
+    }
+  }
+  
+  // Si le cache dépasse la limite, supprimer les plus anciennes entrées
+  if (totalSize > MAX_CACHE_SIZE) {
+    entries.sort((a, b) => a.size - b.size); // Supprimer les plus petites d'abord
+    let sizeToRemove = totalSize - MAX_CACHE_SIZE;
+    for (const entry of entries) {
+      if (sizeToRemove <= 0) break;
+      await cache.delete(entry.key);
+      sizeToRemove -= entry.size;
+    }
+  }
+}
+
 // Interception des requêtes
 self.addEventListener('fetch', (event) => {
-  // Stratégie Network First pour les API
+  // Ne pas mettre en cache les requêtes API volumineuses (PDFs, images)
   if (event.request.url.includes('/api/')) {
+    const isLargeRequest = event.request.url.includes('/pdf') || 
+                           event.request.url.includes('/download') ||
+                           event.request.url.includes('base64');
+    
+    if (isLargeRequest) {
+      // Pour les requêtes volumineuses, ne pas utiliser le cache
+      event.respondWith(fetch(event.request));
+      return;
+    }
+    
+    // Stratégie Network First pour les API normales
     event.respondWith(
       fetch(event.request)
         .then((response) => {
-          // Si la requête réussit, mettre en cache
-          const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseClone);
-          });
+          // Ne mettre en cache que les petites réponses (< 1 MB)
+          if (response.headers.get('content-length')) {
+            const size = parseInt(response.headers.get('content-length') || '0', 10);
+            if (size < 1024 * 1024) { // < 1 MB
+              const responseClone = response.clone();
+              caches.open(CACHE_NAME).then((cache) => {
+                cache.put(event.request, responseClone).then(() => {
+                  cleanCacheIfNeeded();
+                });
+              });
+            }
+          }
           return response;
         })
         .catch(() => {
@@ -91,15 +141,28 @@ self.addEventListener('fetch', (event) => {
     );
   } else {
     // Stratégie Network First avec fallback cache pour les assets
-    // Cela permet de toujours récupérer la dernière version
+    // Ne mettre en cache que les petits assets (< 5 MB)
     event.respondWith(
       fetch(event.request)
         .then((response) => {
-          // Si la requête réussit, mettre à jour le cache
-          const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseClone);
-          });
+          const contentType = response.headers.get('content-type') || '';
+          const isImage = contentType.startsWith('image/');
+          const isLargeAsset = contentType.includes('pdf') || 
+                              contentType.includes('video') ||
+                              contentType.includes('application/octet-stream');
+          
+          // Ne pas mettre en cache les gros fichiers
+          if (!isLargeAsset && (isImage || response.headers.get('content-length'))) {
+            const size = parseInt(response.headers.get('content-length') || '0', 10);
+            if (size < 5 * 1024 * 1024) { // < 5 MB
+              const responseClone = response.clone();
+              caches.open(CACHE_NAME).then((cache) => {
+                cache.put(event.request, responseClone).then(() => {
+                  cleanCacheIfNeeded();
+                });
+              });
+            }
+          }
           return response;
         })
         .catch(() => {

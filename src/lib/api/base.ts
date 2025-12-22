@@ -64,10 +64,21 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
           const errorData = await response.json();
           errorMessage = errorData.message || errorData.detail || JSON.stringify(errorData);
         } else {
-          errorMessage = await response.text() || `Erreur HTTP ${response.status}`;
+          const text = await response.text();
+          // Si la réponse est du HTML (probablement une page d'erreur), c'est probablement une erreur de connexion
+          if (text.includes('<!DOCTYPE') || text.includes('<html') || text.includes('ECONNREFUSED')) {
+            errorMessage = `Le serveur backend n'est pas démarré ou inaccessible (HTTP ${response.status})`;
+          } else {
+            errorMessage = text || `Erreur HTTP ${response.status}`;
+          }
         }
       } catch (parseError) {
-        errorMessage = `Erreur HTTP ${response.status}: ${response.statusText}`;
+        // Si on ne peut pas parser la réponse, c'est probablement une erreur de connexion
+        if (response.status === 500) {
+          errorMessage = `Le serveur backend rencontre une erreur (HTTP 500). Vérifiez que le serveur est démarré correctement.`;
+        } else {
+          errorMessage = `Erreur HTTP ${response.status}: ${response.statusText}`;
+        }
       }
       throw new Error(errorMessage);
     }
@@ -79,8 +90,24 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     return (await response.text()) as unknown as T;
   } catch (error: any) {
     // Si c'est une erreur réseau (connexion refusée, timeout, etc.)
-    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+    if (error.name === 'TypeError' && (error.message.includes('fetch') || error.message.includes('Failed to fetch'))) {
+      // Pendant le démarrage, le serveur peut ne pas être encore prêt - c'est normal
+      const isStartup = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (isStartup) {
+        // Ne pas afficher d'erreur pendant le démarrage, le serveur va démarrer
+        throw new Error(`Connexion en cours... (serveur backend en démarrage)`);
+      }
       throw new Error(`Impossible de se connecter au serveur. Vérifiez que le serveur backend est démarré (${API_URL})`);
+    }
+    // Si c'est une erreur de connexion refusée (ECONNREFUSED)
+    if (error.message?.includes('ECONNREFUSED') || error.message?.includes('NetworkError')) {
+      // Pendant le démarrage, le serveur peut ne pas être encore prêt - c'est normal
+      const isStartup = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (isStartup) {
+        // Ne pas afficher d'erreur pendant le démarrage, le serveur va démarrer
+        throw new Error(`Connexion en cours... (serveur backend en démarrage)`);
+      }
+      throw new Error(`Le serveur backend n'est pas démarré. Vérifiez que le serveur est en cours d'exécution sur ${API_URL}`);
     }
     // Relever les erreurs hors ligne déjà gérées plus haut
     throw error;

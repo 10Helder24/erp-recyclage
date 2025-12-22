@@ -36,6 +36,11 @@ export const AdvancedPreferencesPage = () => {
   const [dashboardWidgets, setDashboardWidgets] = useState<string[]>(['kpis', 'recent', 'alerts', 'calendar']);
   const [saving, setSaving] = useState(false);
 
+  // Protection contre les erreurs de rendu
+  if (!user) {
+    return null;
+  }
+
   useEffect(() => {
     loadPreferences();
   }, []);
@@ -167,22 +172,22 @@ export const AdvancedPreferencesPage = () => {
 
       {activeTab === 'shortcuts' && (
         <div className="unified-modal" style={{ maxWidth: '800px', margin: '2rem auto' }}>
-          <h2 style={{ marginBottom: '1.5rem' }}>Raccourcis Clavier</h2>
+          <h2 style={{ marginBottom: '1.5rem', color: 'var(--text-primary)' }}>Raccourcis Clavier</h2>
           <div className="table-container">
             <table>
               <thead>
                 <tr>
-                  <th>Action</th>
-                  <th>Raccourci</th>
-                  <th>Actions</th>
+                  <th style={{ color: 'var(--text-secondary)' }}>Action</th>
+                  <th style={{ color: 'var(--text-secondary)' }}>Raccourci</th>
+                  <th style={{ color: 'var(--text-secondary)' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {shortcuts.map((shortcut) => (
                   <tr key={shortcut.id}>
-                    <td>{shortcut.action}</td>
+                    <td style={{ color: 'var(--text-primary)' }}>{shortcut.action}</td>
                     <td>
-                      <code style={{ padding: '0.25rem 0.5rem', backgroundColor: 'var(--bg-tertiary)', borderRadius: '4px' }}>
+                      <code style={{ padding: '0.25rem 0.5rem', backgroundColor: 'var(--bg-tertiary)', borderRadius: '4px', color: 'var(--text-primary)' }}>
                         {formatShortcut(shortcut)}
                       </code>
                     </td>
@@ -197,13 +202,14 @@ export const AdvancedPreferencesPage = () => {
             </table>
           </div>
           <div style={{ marginTop: '1.5rem', padding: '1rem', backgroundColor: 'var(--bg-secondary)', borderRadius: '8px' }}>
-            <h3 style={{ marginTop: 0, marginBottom: '1rem' }}>Ajouter un Raccourci</h3>
+            <h3 style={{ marginTop: 0, marginBottom: '1rem', color: 'var(--text-primary)' }}>Ajouter un Raccourci</h3>
             <div className="unified-form" style={{ display: 'grid', gap: '1rem', gridTemplateColumns: '1fr 1fr auto' }}>
               <input
                 type="text"
                 placeholder="Action (ex: Nouveau client)"
                 value={newShortcut.action || ''}
                 onChange={(e) => setNewShortcut({ ...newShortcut, action: e.target.value })}
+                style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '0.5rem 0.75rem', borderRadius: '0.375rem' }}
               />
               <input
                 type="text"
@@ -211,9 +217,10 @@ export const AdvancedPreferencesPage = () => {
                 value={newShortcut.key || ''}
                 onChange={(e) => setNewShortcut({ ...newShortcut, key: e.target.value.toLowerCase() })}
                 maxLength={1}
+                style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '0.5rem 0.75rem', borderRadius: '0.375rem' }}
               />
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.875rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.875rem', color: 'var(--text-primary)' }}>
                   <input
                     type="checkbox"
                     checked={newShortcut.ctrl || false}
@@ -221,7 +228,7 @@ export const AdvancedPreferencesPage = () => {
                   />
                   Ctrl
                 </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.875rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.875rem', color: 'var(--text-primary)' }}>
                   <input
                     type="checkbox"
                     checked={newShortcut.shift || false}
@@ -229,7 +236,7 @@ export const AdvancedPreferencesPage = () => {
                   />
                   Shift
                 </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.875rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.875rem', color: 'var(--text-primary)' }}>
                   <input
                     type="checkbox"
                     checked={newShortcut.alt || false}

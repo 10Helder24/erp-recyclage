@@ -56,13 +56,13 @@
   font-size: clamp(1.5rem, 3vw, 2rem);
   margin: 0 0 8px 0;
   font-weight: 700;
-  color: #111827;
+  color: var(--text-primary, #111827);
   line-height: 1.2;
 }
 
 .page-subtitle {
   font-size: 0.9375rem;
-  color: #6b7280;
+  color: var(--text-secondary, #6b7280);
   margin: 0;
   line-height: 1.5;
 }
@@ -71,13 +71,13 @@
   font-size: clamp(1.5rem, 3vw, 2rem);
   margin: 0 0 8px 0;
   font-weight: 700;
-  color: #111827;
+  color: var(--text-primary, #111827);
   line-height: 1.2;
 }
 
 .page-header p {
   font-size: 0.9375rem;
-  color: #6b7280;
+  color: var(--text-secondary, #6b7280);
   margin: 0;
   line-height: 1.5;
 }
@@ -97,8 +97,8 @@
 
 .destruction-card,
 .page-card {
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
+  background: var(--bg-primary, #ffffff);
+  border: 1px solid var(--border-color, #e5e7eb);
   border-radius: 12px;
   padding: 24px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
@@ -161,8 +161,8 @@
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  background: #ffffff;
-  border: 1.5px solid #e5e7eb;
+  background: var(--bg-primary, #ffffff);
+  border: 1.5px solid var(--border-color, #e5e7eb);
   border-radius: 10px;
   margin-bottom: 20px;
   transition: all 0.2s ease;
@@ -182,24 +182,24 @@
   background: transparent;
   outline: none;
   font-size: 0.9375rem;
-  color: #111827;
+  color: var(--text-primary, #111827);
 }
 
 .search-bar input::placeholder,
 .map-input input::placeholder {
-  color: #9ca3af;
+  color: var(--text-tertiary, #9ca3af);
 }
 
 .search-bar svg,
 .map-input svg {
-  color: #6b7280;
+  color: var(--text-secondary, #6b7280);
   flex-shrink: 0;
 }
 
 /* Tableaux unifiés */
 .table-container {
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
+  background: var(--bg-primary, #ffffff);
+  border: 1px solid var(--border-color, #e5e7eb);
   border-radius: 12px;
   overflow: hidden;
   margin-top: 20px;
@@ -211,7 +211,7 @@
 }
 
 .table-container table thead {
-  background: #f9fafb;
+  background: var(--bg-secondary, #f9fafb);
 }
 
 .table-container table thead th {
@@ -219,19 +219,19 @@
   text-align: left;
   font-size: 0.875rem;
   font-weight: 600;
-  color: #6b7280;
+  color: var(--text-secondary, #6b7280);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  border-bottom: 2px solid #e5e7eb;
+  border-bottom: 2px solid var(--border-color, #e5e7eb);
 }
 
 .table-container table tbody tr {
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
   transition: background 0.15s ease;
 }
 
 .table-container table tbody tr:hover {
-  background: #f9fafb;
+  background: var(--bg-secondary, #f9fafb);
 }
 
 .table-container table tbody tr:last-child {
@@ -241,7 +241,7 @@
 .table-container table tbody td {
   padding: 14px 16px;
   font-size: 0.9rem;
-  color: #111827;
+  color: var(--text-primary, #111827);
 }
 
 /* Boutons unifiés */
@@ -495,7 +495,7 @@
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  background: #ffffff;
+  background: var(--bg-primary, #ffffff);
 }
 
 /* Sections de formulaire unifiées */
@@ -521,11 +521,11 @@
   margin: 0 0 16px 0;
   font-size: 0.8125rem;
   font-weight: 600;
-  color: #6b7280;
+  color: var(--text-secondary, #6b7280);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   padding-bottom: 8px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
 }
 
 /* Groupes de champs unifiés */
@@ -565,7 +565,7 @@
 .materials-form .form-field label {
   font-size: 0.875rem;
   font-weight: 500;
-  color: #374151;
+  color: var(--text-primary, #374151);
   margin: 0;
   line-height: 1.4;
 }
@@ -602,13 +602,13 @@
 .materials-form .form-field textarea {
   width: 100%;
   padding: 10px 14px;
-  border: 1.5px solid #d1d5db;
+  border: 1.5px solid var(--border-color, #d1d5db);
   border-radius: 8px;
   font-size: 0.9375rem;
-  background: #ffffff;
+  background: var(--bg-primary, #ffffff);
   transition: all 0.15s ease;
   font-family: inherit;
-  color: #111827;
+  color: var(--text-primary, #111827);
   line-height: 1.5;
 }
 
@@ -656,7 +656,7 @@
 .compliance-modal .form-group input::placeholder,
 .compliance-modal .form-group textarea::placeholder,
 .materials-form .form-field input::placeholder {
-  color: #9ca3af;
+  color: var(--text-tertiary, #9ca3af);
 }
 
 /* Textarea unifié */
@@ -2586,56 +2586,6 @@ main.main-content:has(.cdt-page) {
   font-size: 0.85rem;
 }
 
-.geo-banner {
-  padding: 12px 16px;
-  background: rgba(14, 165, 233, 0.12);
-  border: 1px solid rgba(14, 165, 233, 0.5);
-  border-radius: 16px;
-}
-
-.geo-banner p {
-  margin: 0;
-  font-size: 0.95rem;
-  color: #0f172a;
-}
-
-.geo-error {
-  color: #dc2626;
-  margin-left: 8px;
-}
-
-.geo-banner--floating {
-  position: fixed;
-  top: 78px;
-  right: 32px;
-  z-index: 20;
-  max-width: 280px;
-  box-shadow: var(--shadow-soft);
-}
-
-.geo-banner__content {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.geo-banner__actions {
-  display: flex;
-  gap: 8px;
-}
-
-@media (max-width: 640px) {
-  .geo-banner--floating {
-    top: 70px;
-    right: 16px;
-    left: 16px;
-    max-width: none;
-  }
-
-  .geo-banner__actions {
-    flex-direction: column;
-  }
-}
 
 .request-card-info {
   display: flex;
@@ -11759,7 +11709,8 @@ main.main-content:has(.cdt-page) {
 .dark-theme .security-alerts-settings-page,
 .dark-theme .reports-page,
 .dark-theme .global-search-page,
-.dark-theme .bi-page {
+.dark-theme .bi-page,
+.dark-theme .payroll-contracts-page {
   background-color: var(--bg-secondary);
   color: var(--text-primary);
 }
@@ -11791,7 +11742,23 @@ main.main-content:has(.cdt-page) {
 
 .dark-theme .unified-form input,
 .dark-theme .unified-form select,
-.dark-theme .unified-form textarea {
+.dark-theme .unified-form textarea,
+.dark-theme .form-group input,
+.dark-theme .form-field input,
+.dark-theme .destruction-input,
+.dark-theme .destruction-field input,
+.dark-theme .destruction-field select,
+.dark-theme .destruction-field textarea,
+.dark-theme .modal-panel input,
+.dark-theme .modal-panel select,
+.dark-theme .modal-panel textarea,
+.dark-theme input[type="text"],
+.dark-theme input[type="email"],
+.dark-theme input[type="number"],
+.dark-theme input[type="date"],
+.dark-theme input[type="time"],
+.dark-theme select,
+.dark-theme textarea {
   background-color: var(--bg-secondary);
   border-color: var(--border-color);
   color: var(--text-primary);
@@ -11799,9 +11766,37 @@ main.main-content:has(.cdt-page) {
 
 .dark-theme .unified-form input:focus,
 .dark-theme .unified-form select:focus,
-.dark-theme .unified-form textarea:focus {
+.dark-theme .unified-form textarea:focus,
+.dark-theme .form-group input:focus,
+.dark-theme .form-field input:focus,
+.dark-theme .destruction-input:focus,
+.dark-theme .destruction-field input:focus,
+.dark-theme .destruction-field select:focus,
+.dark-theme .destruction-field textarea:focus,
+.dark-theme .modal-panel input:focus,
+.dark-theme .modal-panel select:focus,
+.dark-theme .modal-panel textarea:focus,
+.dark-theme input[type="text"]:focus,
+.dark-theme input[type="email"]:focus,
+.dark-theme input[type="number"]:focus,
+.dark-theme input[type="date"]:focus,
+.dark-theme input[type="time"]:focus,
+.dark-theme select:focus,
+.dark-theme textarea:focus {
   border-color: var(--accent-color);
   background-color: var(--bg-primary);
+}
+
+.dark-theme input::placeholder,
+.dark-theme textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+.dark-theme .form-group label,
+.dark-theme .form-field label,
+.dark-theme .destruction-field label,
+.dark-theme label {
+  color: var(--text-primary);
 }
 
 .dark-theme .btn-primary {
